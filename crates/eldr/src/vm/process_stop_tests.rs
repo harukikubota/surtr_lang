@@ -1285,3 +1285,69 @@ fn started_normal_handler_saves_once_after_timed_caller_cancellation() {
     );
     assert_eq!(vm.raw_ready_future_value(completion), Some(&timeout));
 }
+
+#[test]
+fn file_out_stop_flush_failure_is_joined_before_success_or_error_delivery() {
+    for stop_error in [false, true] {
+        let (mut vm, pid) = worker_vm();
+        let path = std::env::temp_dir().join(format!(
+            "surtr-process-stop-flush-{}-{stop_error}.log",
+            std::process::id()
+        ));
+        let (bindings, out) = handler_bindings::tests::bound_file(&mut vm, &path);
+        vm.process_runtime
+            .processes
+            .get_mut(&pid.id)
+            .unwrap()
+            .handler_bindings = Some(bindings);
+        vm.active_file_sinks.0[&out.id].sink.fail_flush.set(true);
+        let original = vm.process_error("UserStopFailure", "original stop failure");
+        let body = if stop_error {
+            builtin(
+                "__genserver_call_stop_error",
+                vec![
+                    Value::Pid(pid.clone()),
+                    Value::Error(Box::new(original.clone())),
+                ],
+            )
+        } else {
+            builtin(
+                "__genserver_call_stop_normal",
+                vec![Value::Pid(pid.clone()), Value::Int(int(8))],
+            )
+        };
+        let outcome = start_synthetic_execution(&mut vm, pid.clone(), body).unwrap();
+        let BuiltinOutcome::Wait { future_id, .. } = &outcome else {
+            panic!()
+        };
+        let future = *future_id;
+        let result = vm.drive_builtin_outcome(outcome);
+        if stop_error {
+            let error = decode_vm_result(result.unwrap(), "test", "stop")
+                .unwrap()
+                .unwrap_err();
+            assert_eq!(error.kind, original.kind);
+            assert_eq!(error.message, original.message);
+            assert_eq!(error.location, original.location);
+            assert!(error.cause.unwrap().payload.iter().any(
+                |value| matches!(value, Value::Str(detail) if detail.contains("flush failed"))
+            ));
+        } else {
+            assert_eq!(
+                result.unwrap_err().kind(),
+                crate::error::RuntimeErrorKind::ProcessLifecycleFailed
+            );
+            assert!(
+                vm.process_runtime.raw_ready_future_value(future).is_none(),
+                "success must not publish before cleanup failure"
+            );
+        }
+        assert!(vm.process_runtime.processes.is_empty());
+        assert_eq!(
+            vm.unique_live_supervisor_child_count("DynamicSupervisor"),
+            0
+        );
+        assert!(vm.active_file_sinks.0.is_empty());
+        std::fs::remove_file(path).unwrap();
+    }
+}

@@ -363,19 +363,6 @@
   - [今回の全条件交互比較](optimize/runtime/checkpoint/oi039_2026_10_12_capacity_compare.jsonl)・[集計](optimize/runtime/checkpoint/oi039_2026_10_12_capacity_compare.summary.json)とkernelの所有条件別原本も保持し、実VMのentry変更・保存枝・解放境界でrequested/live/RSSを直接照合する。
   - shared処理合計、通常の完了区間、準備・初回確保、解放を分け、requested / live / RSSを別指標として測る。速度閾値をcorrectness testへ加えない。
 
-### OI-040 FileOutHandlerの資源寿命と初期化
-
-- 状態: 現行mainで既存契約不一致を実行再現。製品修復は未実施。
-- 正本: `docs/dev/ProcessRuntime_spec.md` 第3.19節のinit時open、lifecycle保持、shutdown時flush/close。
-- 背景: [2026-10-13の再現](optimize/runtime/file-out/file_out_handler_lifecycle_reproduction_2026_10_13.md)。main `72154707`を再ビルドし、存在しない親pathでもinit内のhandler参照とgetterが成功する一方、最初のwriteでopen Errorを返すことを確認した。write間でpathnameをrename・置換すると2回目のwriteが置換後のfileへ届き、descriptorを保持していない。
-- 現行 `process_context_handler` はhandler PIDの解決のみで、`out_handler_write` はwriteごとにopen/dropする。両関数は元の測定基準 `ee13e448` とbyte一致し、今回のRegex共有化による新規デグレではない。
-- 未確定点: canonical化のcwd・新規leaf・symlink、dependency取得の時点、shutdownと保存leaseによる物理close、VM clone、rollbackを跨ぐ配送保証、flush失敗の配送先。
-- 次の作業: [修復仕様案](optimize/runtime/file-out/file_out_handler_lifecycle_repair_spec.md)のcanonical path / sink identity、initエラー配送、複数dependencyのmailbox順、shutdownと取消時の所有、checkpoint / VM cloneとhost descriptorの関係を確定し、回帰テストから修復する。外部file I/Oはrollbackしない。
-- 制限: canonical正規化、mailbox順、flush/close、取消・REPL rollbackは実行検証していない。Astraへ相談し、複数所有者のうち1producerの取消で共有sinkを早期closeしない条件も残した。
-- ID: 別worktreeのBuilder調査で使用するOI-039を避けた。元の4c18の未コミットOI-038はmainのHashMap RSSのOI-038とは別内容であり、本項へ整理する。
-- 受け入れ条件: init時open失敗をwriteまで先送りせず、同じlifecycle中はdescriptorを保持する。canonical pathが同じdependencyの順序と、最後のactive owner・保存owner・shutdownの資源所有を[修復仕様案](optimize/runtime/file-out/file_out_handler_lifecycle_repair_spec.md)で確定する。通常再開でwrite/結果を重複させず、外部I/Oをrollbackしない。
-- テスト方針: Eldrでopen/write/flush/close・部分init失敗・共有owner・checkpoint/cloneを直接検証し、公開CLIでpathname差替え、REPLで失敗chunkと外部bytesの扱いを確認する。確定後にlevel4全体gateと独立レビューを行う。
-
 ## 更新ルール
 
 - 解決済み事項は本ファイルに残さず削除する。必要な履歴は正本仕様・関連 spec・コミット履歴で追跡する。

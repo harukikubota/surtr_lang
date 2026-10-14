@@ -350,9 +350,9 @@ fn collection_mutations_detach_and_two_checkpoints_restore_deep_values_and_order
     assert_generation(&second.process_runtime, 4, 1);
     assert_generation(&first.process_runtime, 4, 0);
     assert_generation(&vm.process_runtime, 4, 2);
-    vm.rollback_to_checkpoint(second);
+    vm.rollback_to_checkpoint(second).unwrap();
     assert_generation(&vm.process_runtime, 4, 1);
-    vm.rollback_to_checkpoint(first);
+    vm.rollback_to_checkpoint(first).unwrap();
     assert_generation(&vm.process_runtime, 4, 0);
 }
 
@@ -840,7 +840,7 @@ fn checkpoint_collections_profile() {
             .unwrap()
             .push(started.elapsed().as_nanos() as u64);
         let started = Instant::now();
-        live.rollback_to_checkpoint(black_box(saved));
+        live.rollback_to_checkpoint(black_box(saved)).unwrap();
         measurements
             .get_mut("rollback")
             .unwrap()

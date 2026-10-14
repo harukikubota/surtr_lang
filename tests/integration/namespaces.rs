@@ -29,11 +29,11 @@ fn compile_case(case: &crate::common::ModuleFixtureCase) -> Result<(), String> {
     support::compile_module_fixture_case(case).map(|_| ())
 }
 
-fn run_inline_module(
+fn compile_inline_module(
     entry_source: &str,
     module_path: &str,
     module_source: String,
-) -> Result<(Vec<String>, Vec<String>), String> {
+) -> Result<sindr::ir::Bytecode, String> {
     let module_sources = support::collect_module_sources(&[vec![ModuleInput {
         file_name: format!("{module_path}.srt"),
         source: module_source,
@@ -41,7 +41,15 @@ fn run_inline_module(
     }]])?;
     let compile_sources =
         support::compose_script_sources("entry.srt", entry_source, module_sources);
-    let bytecode = support::compile_script_sources(&compile_sources)?;
+    support::compile_script_sources(&compile_sources)
+}
+
+fn run_inline_module(
+    entry_source: &str,
+    module_path: &str,
+    module_source: String,
+) -> Result<(Vec<String>, Vec<String>), String> {
+    let bytecode = compile_inline_module(entry_source, module_path, module_source)?;
     let mut vm = eldr::VM::new(bytecode)
         .with_output_capture()
         .with_error_capture();
@@ -175,6 +183,75 @@ print(inspect(Logger::log("two\n")))"#,
     );
 
     let _ = std::fs::remove_dir_all(temp);
+}
+
+fn file_out_boot_module(path: &std::path::Path) -> String {
+    format!(
+        r#"defagent Logger {{
+  meta {{
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+    handlers {{ out: OutHandler = StdOut }}
+  }}
+  @init def init() -> Result<Int> {{ print(if(File::exists("{0}"), "user init with open dependency", "user init without dependency")); Ok(0) }}
+  @get def read(state: Int) -> Result<Int> {{ Ok(state) }}
+}}
+supervisor_init {{
+  Logger {{ handlers {{ out: FileOutHandler(path: "{}") }} }}
+}}
+"#,
+        path.display()
+    )
+}
+
+#[test]
+fn file_out_dependency_is_created_before_init_without_a_write() {
+    let temp = unique_temp_dir("file_out_preopen");
+    let path = temp.join("not_written.log");
+    let (stdout, stderr) = run_inline_module(
+        "print(\"after boot\")",
+        "Logger",
+        file_out_boot_module(&path),
+    )
+    .expect("valid dependency should boot");
+    assert_eq!(stdout, ["user init with open dependency", "after boot"]);
+    assert!(stderr.is_empty());
+    assert!(
+        path.is_file(),
+        "handler dependency must open even with no write"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), Vec::<u8>::new());
+    std::fs::remove_dir_all(temp).unwrap();
+}
+
+#[test]
+fn file_out_invalid_parent_fails_dependency_acquisition_before_user_init() {
+    let temp = unique_temp_dir("file_out_invalid_parent");
+    let path = temp.join("missing_parent/not_written.log");
+    let bytecode = compile_inline_module(
+        "print(\"after boot\")",
+        "Logger",
+        file_out_boot_module(&path),
+    )
+    .expect("the dependency declaration is valid");
+    let mut vm = eldr::VM::new(bytecode)
+        .with_output_capture()
+        .with_error_capture();
+    let error = vm
+        .run()
+        .expect_err("dependency acquisition must fail before init and the first write");
+    assert!(
+        error.to_string().contains("FileOutHandlerOpenFailed"),
+        "{error}"
+    );
+    assert!(error.to_string().contains("Logger"), "{error}");
+    assert!(
+        vm.output.as_ref().unwrap().is_empty(),
+        "user init must not start"
+    );
+    assert!(!path.exists());
+    std::fs::remove_dir_all(temp).unwrap();
 }
 
 #[test]

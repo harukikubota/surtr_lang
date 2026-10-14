@@ -4,6 +4,7 @@ use crate::builtin::{BuiltinContinuation, BuiltinOutcome};
 #[derive(Debug, Clone)]
 pub(super) struct DetachedTask {
     pub(super) owner_pid: Option<u64>,
+    handler_bindings: Option<BindingContextId>,
     pub(super) state: DetachedTaskState,
     pub(super) completion: DetachedCompletion,
     started: bool,
@@ -55,14 +56,27 @@ pub(crate) enum RuntimeContinuation {
         location: Location,
         stack_trace: Vec<RuntimeStackFrame>,
         wrapper: Option<u32>,
+        after: Option<Box<RuntimeContinuation>>,
+    },
+    HandlerCleanupCause {
+        original: Value,
+        after: Option<Box<RuntimeContinuation>>,
+    },
+    ResolveTaskCall {
+        completion: FutureId,
     },
     Identity,
+    FileWrite {
+        request: u64,
+    },
     ProcessAwait {
         future_id: FutureId,
     },
     TaskCall {
         completion: FutureId,
         previous_trace: Option<RuntimeStackFrame>,
+        handler_bindings: Option<BindingContextId>,
+        previous_bindings: Option<BindingContextId>,
     },
     StartedTask {
         task_id: u64,
@@ -72,11 +86,7 @@ pub(crate) enum RuntimeContinuation {
     SingletonAwait {
         process_name: String,
     },
-    Spawn {
-        process_name: String,
-        supervisor: Option<String>,
-        after: Option<Box<RuntimeContinuation>>,
-    },
+    Spawn(Box<SpawnInit>),
     Broadcast {
         members: VecDeque<PidHandle>,
         message: Callable,
@@ -104,6 +114,7 @@ pub(crate) enum RuntimeContinuation {
 
 #[derive(Debug, Clone)]
 pub(crate) struct SingletonInit {
+    handler_bindings: Option<BindingContextId>,
     process_name: String,
     spec: RuntimeProcessSpec,
     deadline: u64,
@@ -141,6 +152,21 @@ impl SingletonInit {
     }
 
     fn resume(
+        self,
+        vm: &mut VM,
+        result: Result<Value, RuntimeError>,
+    ) -> Result<BuiltinOutcome, RuntimeError> {
+        let bindings = self.handler_bindings;
+        match self.resume_inner(vm, result) {
+            Ok(outcome) => Ok(outcome),
+            Err(error) => Err(merge_handler_cleanup(
+                error,
+                vm.release_handler_context(bindings),
+            )),
+        }
+    }
+
+    fn resume_inner(
         mut self,
         vm: &mut VM,
         result: Result<Value, RuntimeError>,
@@ -219,6 +245,11 @@ impl SingletonInit {
         };
         let pid = vm.allocate_process_state(self.process_name.clone(), state)?;
         vm.process_runtime
+            .processes
+            .get_mut(&pid)
+            .expect("new singleton")
+            .handler_bindings = self.handler_bindings;
+        vm.process_runtime
             .singleton_by_name
             .insert(self.process_name.clone(), pid);
         Ok(BuiltinOutcome::Complete(Value::Pid(
@@ -250,42 +281,101 @@ impl RuntimeContinuation {
             location,
             stack_trace,
             wrapper,
+            after,
         } = self
         {
-            let Value::Error(mut error) = result? else {
-                return Err(RuntimeError::new("Error constructor did not return Error"));
-            };
-            if error.kind != kind {
-                return Err(RuntimeError::new(
-                    "Error constructor returned a different declaration",
-                ));
-            }
-            error.location = location;
-            error.stack_trace = stack_trace;
-            let value = Value::Error(error);
-            let value = if let Some(tag) = wrapper {
-                let fields = if tag == 1 {
-                    vec![value]
-                } else {
-                    let entry =
-                        vm.bytecode.type_registry.lookup(tag).ok_or_else(|| {
+            let constructed = (|| {
+                let Value::Error(mut error) = result? else {
+                    return Err(RuntimeError::new("Error constructor did not return Error"));
+                };
+                if error.kind != kind {
+                    return Err(RuntimeError::new(
+                        "Error constructor returned a different declaration",
+                    ));
+                }
+                error.location = location;
+                error.stack_trace = stack_trace;
+                let value = Value::Error(error);
+                let value = if let Some(tag) = wrapper {
+                    let fields = if tag == 1 {
+                        vec![value]
+                    } else {
+                        let entry = vm.bytecode.type_registry.lookup(tag).ok_or_else(|| {
                             RuntimeError::new("missing MatchResult wrapper metadata")
                         })?;
-                    if sindr::builtin::match_result_variant_meta(&entry.name)
-                        != Some(sindr::builtin::MATCH_RESULT_ERR_VARIANT)
-                    {
-                        return Err(RuntimeError::new("noncanonical Error wrapper"));
-                    }
-                    vec![
-                        Value::Int(sindr::builtin::MATCH_RESULT_ERR_VARIANT.discriminant.into()),
-                        value,
-                    ]
+                        if sindr::builtin::match_result_variant_meta(&entry.name)
+                            != Some(sindr::builtin::MATCH_RESULT_ERR_VARIANT)
+                        {
+                            return Err(RuntimeError::new("noncanonical Error wrapper"));
+                        }
+                        vec![
+                            Value::Int(
+                                sindr::builtin::MATCH_RESULT_ERR_VARIANT.discriminant.into(),
+                            ),
+                            value,
+                        ]
+                    };
+                    Value::Tagged { tag, fields }
+                } else {
+                    value
                 };
-                Value::Tagged { tag, fields }
-            } else {
-                value
+                Ok(value)
+            })();
+            return match after {
+                Some(after) => after.resume(vm, constructed),
+                None => constructed.map(BuiltinOutcome::Complete),
             };
+        }
+
+        if let Self::HandlerCleanupCause {
+            mut original,
+            after,
+        } = self
+        {
+            let Value::Tagged { tag: 1, fields } = &mut original else {
+                return Err(RuntimeError::new("handler cleanup has no original Err"));
+            };
+            let [Value::Error(error)] = fields.as_mut_slice() else {
+                return Err(RuntimeError::new("handler cleanup Err has no Error"));
+            };
+            let cause = match result {
+                Ok(Value::Error(cause)) => cause,
+                other => {
+                    let secondary = match other {
+                        Err(error) => error,
+                        Ok(_) => {
+                            RuntimeError::new("handler cleanup constructor did not return Error")
+                        }
+                    };
+                    let mut failure = RuntimeError::new(error.visible_message());
+                    failure.context.call_site = Some(error.location.clone());
+                    failure.context.stack_trace = error.stack_trace.clone();
+                    failure
+                        .context
+                        .details
+                        .push(format!("original Error kind={}", error.kind));
+                    failure.context.details.push(format!(
+                        "handler cleanup Error constructor failed: {secondary}"
+                    ));
+                    return match after {
+                        Some(after) => after.resume(vm, Err(failure)),
+                        None => Err(failure),
+                    };
+                }
+            };
+            error.append_cause_tail(*cause);
+            return match after {
+                Some(after) => after.resume(vm, Ok(original)),
+                None => Ok(BuiltinOutcome::Complete(original)),
+            };
+        }
+        if let Self::ResolveTaskCall { completion } = self {
+            let value = result?;
+            vm.process_runtime.resolve_future(completion, value.clone());
             return Ok(BuiltinOutcome::Complete(value));
+        }
+        if let Self::FileWrite { request } = self {
+            return vm.resume_file_write(request, result);
         }
         if let Self::ProcessAwait { future_id } = self {
             vm.forget_internal_future(future_id);
@@ -294,12 +384,25 @@ impl RuntimeContinuation {
         if let Self::TaskCall {
             completion,
             previous_trace,
+            handler_bindings,
+            previous_bindings,
         } = self
         {
+            vm.current_handler_bindings = previous_bindings;
             vm.current_frame_mut()?.trace_frame = previous_trace;
-            let value = result?;
-            vm.process_runtime.resolve_future(completion, value.clone());
-            return Ok(BuiltinOutcome::Complete(value));
+            let cleanup = vm.release_handler_context(handler_bindings);
+            return match result {
+                Ok(value) => vm.finish_handler_result(
+                    value,
+                    cleanup,
+                    Some(Box::new(Self::ResolveTaskCall { completion })),
+                ),
+                Err(error) => Err(merge_handler_cleanup(error, cleanup)),
+            };
+        }
+
+        if let Self::Spawn(init) = self {
+            return init.resume(vm, result);
         }
         if let Self::Singleton(init) = self {
             return init.resume(vm, result);
@@ -313,9 +416,7 @@ impl RuntimeContinuation {
                 Self::Refill { workers_id, .. } => {
                     vm.process_runtime.refilling_worker_sets.remove(&workers_id);
                 }
-                Self::Spawn {
-                    after: Some(after), ..
-                } => return after.resume(vm, Err(error)),
+
                 _ => {}
             }
             return Err(error);
@@ -326,6 +427,9 @@ impl RuntimeContinuation {
             Self::Singleton(_) => unreachable!(),
             Self::SingletonAwait { .. } => unreachable!(),
             Self::ProcessAwait { .. } => unreachable!(),
+            Self::FileWrite { .. }
+            | Self::HandlerCleanupCause { .. }
+            | Self::ResolveTaskCall { .. } => unreachable!(),
             Self::Identity => Ok(BuiltinOutcome::Complete(value)),
             Self::StartedTask { task_id, value } => {
                 if !vm.task_reached_startup_boundary(task_id) {
@@ -334,35 +438,7 @@ impl RuntimeContinuation {
                     Ok(BuiltinOutcome::Complete(value))
                 }
             }
-            Self::Spawn {
-                process_name,
-                supervisor,
-                after,
-            } => {
-                let result = match decode_vm_result(value, "__process_spawn", "init")? {
-                    Ok(state) => {
-                        let pid = match supervisor {
-                            Some(supervisor) => vm.allocate_supervised_worker(
-                                process_name.clone(),
-                                Some(state),
-                                supervisor,
-                            )?,
-                            None => vm.allocate_process_instance(
-                                process_name.clone(),
-                                Some(state),
-                                None,
-                                None,
-                            )?,
-                        };
-                        ok_vm_result(Value::Pid(vm.process_handle(pid)?))
-                    }
-                    Err(error) => err_vm_result(error),
-                };
-                match after {
-                    Some(after) => after.resume(vm, Ok(result)),
-                    None => Ok(BuiltinOutcome::Complete(result)),
-                }
-            }
+            Self::Spawn(_) => unreachable!(),
             Self::Broadcast {
                 mut members,
                 message,
@@ -416,12 +492,12 @@ impl RuntimeContinuation {
                         members,
                         receiving: true,
                     };
-                    return Ok(Self::Spawn {
+                    return vm.start_worker_spawn(
                         process_name,
-                        supervisor: Some(supervisor),
-                        after: Some(Box::new(next)),
-                    }
-                    .callback(init, Vec::new()));
+                        Some(supervisor),
+                        init,
+                        Some(Box::new(next)),
+                    );
                 }
                 let id = vm.process_runtime.next_workers_id;
                 vm.process_runtime.next_workers_id += 1;
@@ -470,15 +546,15 @@ impl RuntimeContinuation {
                     vm.process_runtime.refilling_worker_sets.remove(&workers_id);
                     return Ok(BuiltinOutcome::Complete(ok_vm_result(Value::Unit)));
                 }
-                Ok(Self::Spawn {
-                    process_name: state.worker_process.clone(),
-                    supervisor: Some(state.supervisor_name.clone()),
-                    after: Some(Box::new(Self::Refill {
+                vm.start_worker_spawn(
+                    state.worker_process.clone(),
+                    Some(state.supervisor_name.clone()),
+                    state.init_callable.clone(),
+                    Some(Box::new(Self::Refill {
                         workers_id,
                         receiving: true,
                     })),
-                }
-                .callback(state.init_callable.clone(), Vec::new()))
+                )
             }
             Self::AwaitTask { trace, unit } => {
                 if unit {
@@ -613,6 +689,7 @@ impl VM {
                 origin.1.clone(),
             );
         };
+        let bindings = entry.handler_bindings;
         let id = self.process_runtime.next_execution_id;
         self.process_runtime.next_execution_id = id
             .checked_add(1)
@@ -625,7 +702,8 @@ impl VM {
             .get_mut(&future)
             .ok_or_else(|| RuntimeError::new("process execution result future disappeared"))?
             .creation_context = Some(origin.clone());
-        let mut context = self.prepare_callable_context(body, Vec::new())?;
+        let mut context = self
+            .with_handler_context(bindings, |vm| vm.prepare_callable_context(body, Vec::new()))?;
         context.current_process_execution = Some(id);
         self.process_runtime.executions.insert(
             id,
@@ -713,12 +791,23 @@ impl VM {
         state: DetachedTaskState,
         completion: DetachedCompletion,
     ) -> u64 {
+        let bindings = match &state {
+            DetachedTaskState::Runnable(context)
+            | DetachedTaskState::Waiting {
+                context: Some(context),
+                ..
+            } => context.current_handler_bindings,
+            DetachedTaskState::Waiting { context: None, .. } => self.current_handler_bindings,
+        };
+        self.retain_handler_context(bindings)
+            .expect("registered task has live handler bindings");
         let id = self.process_runtime.next_detached_task_id;
         self.process_runtime.next_detached_task_id += 1;
         self.process_runtime.detached_tasks.insert(
             id,
             DetachedTask {
                 owner_pid,
+                handler_bindings: bindings,
                 state,
                 completion,
                 started: false,
@@ -736,9 +825,25 @@ impl VM {
         owner_pid: Option<u64>,
         completion: DetachedCompletion,
     ) -> Result<u64, RuntimeError> {
-        let mut context = self.prepare_callable_context(callable, args)?;
-        context.current_process_execution = None;
-        Ok(self.register_runtime_task(owner_pid, DetachedTaskState::Runnable(context), completion))
+        let bindings = self.derive_task_handlers(&callable, &args)?;
+        let prepared =
+            self.with_handler_context(bindings, |vm| vm.prepare_callable_context(callable, args));
+        let id = match prepared {
+            Ok(mut context) => {
+                context.current_process_execution = None;
+                Ok(self.register_runtime_task(
+                    owner_pid,
+                    DetachedTaskState::Runnable(context),
+                    completion,
+                ))
+            }
+            Err(error) => Err(error),
+        };
+        let cleanup = self.release_handler_context(bindings);
+        match id {
+            Ok(id) => cleanup.map(|()| id),
+            Err(error) => Err(merge_handler_cleanup(error, cleanup)),
+        }
     }
 
     fn start_timed_callback(
@@ -814,7 +919,12 @@ impl VM {
             self.current_frame_mut()?.trace_frame = Some(trace);
         }
         if mode == TaskMode::Call && timeout_ms.is_none() {
+            let previous_bindings = self.current_handler_bindings;
+            let handler_bindings = self.derive_task_handlers(&callable, &[])?;
+            self.current_handler_bindings = handler_bindings;
             return Ok(RuntimeContinuation::TaskCall {
+                handler_bindings,
+                previous_bindings,
                 completion: completion
                     .ok_or_else(|| RuntimeError::new("task completion future is missing"))?,
                 previous_trace: previous,
@@ -953,6 +1063,10 @@ impl VM {
                             task.cancelling = true;
                         }
                         DetachedTaskState::Waiting { context: None, .. } => {
+                            let cleanup = self.release_handler_context(task.handler_bindings);
+                            if let Err(error) = cleanup {
+                                self.defer_completion_cleanup(&task.completion, error)?;
+                            }
                             self.publish_completed_cleanup(&task.completion);
                             continue;
                         }
@@ -978,7 +1092,19 @@ impl VM {
                         let value = self.ready_future_value(future_id).ok_or_else(|| {
                             RuntimeError::new("scheduled waiting task has no ready future")
                         })?;
-                        self.complete_runtime_task(task.completion, value)?;
+                        let cleanup = self.release_handler_context(task.handler_bindings.take());
+                        let outcome = self.finish_handler_result(value, cleanup, None)?;
+                        match outcome {
+                            BuiltinOutcome::Complete(value) => {
+                                self.complete_runtime_task(task.completion, value)?
+                            }
+                            outcome => {
+                                task.state = DetachedTaskState::Runnable(
+                                    Self::standalone_builtin_context(outcome),
+                                );
+                                self.process_runtime.detached_tasks.insert(id, task);
+                            }
+                        }
                         continue;
                     }
                 };
@@ -1010,6 +1136,7 @@ impl VM {
                             if record.stage == ProcessExecutionStage::Callback
                                 && record.result_future == future_id
                             {
+                                self.release_handler_context(task.handler_bindings)?;
                                 continue;
                             }
                         }
@@ -1056,6 +1183,7 @@ impl VM {
                                         && record.result_future == future_id
                                 })
                             {
+                                self.release_handler_context(task.handler_bindings)?;
                                 continue;
                             }
                         }
@@ -1065,14 +1193,56 @@ impl VM {
                         }
                     }
                     ProcessRunOutcome::Halted(value) => {
-                        self.complete_runtime_task(task.completion, value)?;
+                        let cleanup = self.release_handler_context(task.handler_bindings.take());
+                        let outcome = self.finish_handler_result(value, cleanup, None)?;
+                        match outcome {
+                            BuiltinOutcome::Complete(value) => {
+                                self.complete_runtime_task(task.completion, value)?
+                            }
+                            outcome => {
+                                task.state = DetachedTaskState::Runnable(
+                                    Self::standalone_builtin_context(outcome),
+                                );
+                                self.process_runtime.detached_tasks.insert(id, task);
+                            }
+                        }
                         continue;
                     }
-                    ProcessRunOutcome::Failed(_) if task.cancelling => {
+                    ProcessRunOutcome::Failed(error) if task.cancelling => {
+                        let mut cleanup = self.release_handler_context(task.handler_bindings);
                         if let DetachedCompletion::Process { execution_id, .. } = task.completion {
-                            self.finish_process_execution(execution_id)?;
+                            if let Err(failure) = self.finish_process_execution(execution_id) {
+                                cleanup = Err(match cleanup {
+                                    Err(original) => merge_handler_cleanup(original, Err(failure)),
+                                    Ok(()) => failure,
+                                });
+                            }
                         }
                         self.publish_completed_cleanup(&task.completion);
+                        if cleanup.is_err()
+                            || error.kind()
+                                == crate::error::RuntimeErrorKind::ProcessLifecycleFailed
+                            || error.context.details.iter().any(|detail| {
+                                detail.starts_with("handler cleanup:")
+                                    || detail.starts_with("cancellation cleanup:")
+                                    || detail.starts_with("FileOutHandlerWriteFailed(")
+                            })
+                        {
+                            let secondary = match cleanup {
+                                Err(cleanup) => merge_handler_cleanup(cleanup, Err(error)),
+                                Ok(()) => error,
+                            };
+                            if secondary
+                                .context
+                                .details
+                                .iter()
+                                .any(|detail| detail.starts_with("file_out_cleanup_path="))
+                            {
+                                self.defer_completion_cleanup(&task.completion, secondary)?;
+                            } else {
+                                return Err(secondary);
+                            }
+                        }
                         continue;
                     }
                     ProcessRunOutcome::Failed(error) => {
@@ -1103,6 +1273,10 @@ impl VM {
                                 self.drive_ready_detached_tasks()?;
                             }
                         }
+                        let error = merge_handler_cleanup(
+                            error,
+                            self.release_handler_context(task.handler_bindings),
+                        );
                         return Err(match task.init_context {
                             Some((name, policy, trigger)) => {
                                 Self::with_vm_init_process_context(error, &name, policy, trigger)
@@ -1253,8 +1427,82 @@ impl VM {
                     task.cancelling = true;
                     self.process_runtime.detached_tasks.insert(id, task);
                 }
-                DetachedTaskState::Waiting { context: None, .. } => {}
+                DetachedTaskState::Waiting { context: None, .. } => {
+                    task.state = DetachedTaskState::Runnable(Self::standalone_builtin_context(
+                        BuiltinOutcome::Complete(Value::Unit),
+                    ));
+                    task.cancelling = true;
+                    self.process_runtime.detached_tasks.insert(id, task);
+                }
             }
+        }
+    }
+
+    fn deliver_future_outcome(
+        &mut self,
+        id: FutureId,
+        outcome: BuiltinOutcome,
+    ) -> Result<(), RuntimeError> {
+        match outcome {
+            BuiltinOutcome::Complete(value) => {
+                self.complete_runtime_task(DetachedCompletion::Future(Some(id)), value)?;
+            }
+            outcome => {
+                let future = self
+                    .process_runtime
+                    .futures
+                    .get_mut(&id)
+                    .ok_or_else(|| RuntimeError::new("handler cleanup delivery lost future"))?;
+                future.error_generation_pending = true;
+                let context = Self::standalone_builtin_context(outcome);
+                self.register_runtime_task(
+                    None,
+                    DetachedTaskState::Runnable(context),
+                    DetachedCompletion::ErrorFuture(id),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn defer_completion_cleanup(
+        &mut self,
+        completion: &DetachedCompletion,
+        error: RuntimeError,
+    ) -> Result<(), RuntimeError> {
+        let id = match completion {
+            DetachedCompletion::Future(Some(id)) | DetachedCompletion::ErrorFuture(id) => *id,
+            _ => return Err(error),
+        };
+        if let Some(value) = self.process_runtime.raw_ready_future_value(id).cloned() {
+            let outcome = self.finish_handler_result(value, Err(error), None)?;
+            let future = self
+                .process_runtime
+                .futures
+                .get_mut(&id)
+                .ok_or_else(|| RuntimeError::new("cleanup completion future disappeared"))?;
+            future.state = FutureState::Running;
+            self.deliver_future_outcome(id, outcome)
+        } else if self
+            .process_runtime
+            .futures
+            .get(&id)
+            .is_some_and(|future| future.error_generation_pending)
+        {
+            let state = Rc::make_mut(
+                self.process_runtime
+                    .handlers
+                    .as_mut()
+                    .ok_or_else(|| RuntimeError::new("handler cleanup has no registry"))?,
+            );
+            let error = match state.deferred_cleanup.take(&id) {
+                Some(previous) => merge_handler_cleanup(previous, Err(error)),
+                None => error,
+            };
+            state.deferred_cleanup.insert(id, error);
+            Ok(())
+        } else {
+            Err(error)
         }
     }
 
@@ -1278,15 +1526,34 @@ impl VM {
                 if !callback && record.stage == ProcessExecutionStage::Callback {
                     return Ok(());
                 }
-                self.process_runtime
-                    .resolve_future(record.result_future, value);
-                self.finish_process_execution(execution_id)?;
+                let future = record.result_future;
+                let stopping_error = self.process_runtime.processes.get(&record.pid.id).and_then(
+                    |entry| match &entry.stop_reason {
+                        Some(ProcessStopReason::Error(error)) => Some(error.clone()),
+                        _ => None,
+                    },
+                );
+                let cleanup = self.finish_process_execution(execution_id);
+                let value = if cleanup.is_err() && !matches!(&value, Value::Tagged { tag: 1, .. }) {
+                    stopping_error.map(err_vm_result).unwrap_or(value)
+                } else {
+                    value
+                };
+                let outcome = self.finish_handler_result(value, cleanup, None)?;
+                self.deliver_future_outcome(future, outcome)?;
             }
             DetachedCompletion::ErrorFuture(id) => {
                 if let Some(future) = self.process_runtime.futures.get_mut(&id) {
                     future.error_generation_pending = false;
                 }
-                self.complete_runtime_task(DetachedCompletion::Future(Some(id)), value)?;
+                let cleanup = self
+                    .process_runtime
+                    .handlers
+                    .as_mut()
+                    .and_then(|state| Rc::make_mut(state).deferred_cleanup.take(&id));
+                let outcome =
+                    self.finish_handler_result(value, cleanup.map_or(Ok(()), Err), None)?;
+                self.deliver_future_outcome(id, outcome)?;
             }
             DetachedCompletion::Future(Some(id)) => {
                 self.process_runtime.resolve_future(id, value);
@@ -1401,7 +1668,22 @@ impl VM {
         let limits = &self.bytecode.runtime_boot_plan.runtime_limits;
         let timeout_ms = timeout_ms.unwrap_or(limits.default_init_timeout_ms);
         let retry_ms = limits.pending_initial_retry_ms;
+        let bindings = self
+            .acquire_process_handlers(&process_name)
+            .map_err(|error| {
+                Self::with_vm_init_process_context(
+                    error,
+                    &process_name,
+                    if runtime_spec_is_standby(&spec) {
+                        "Standby"
+                    } else {
+                        "Eager"
+                    },
+                    "boot",
+                )
+            })?;
         let outcome = RuntimeContinuation::Singleton(Box::new(SingletonInit {
+            handler_bindings: bindings,
             process_name: process_name.clone(),
             spec,
             deadline: self
@@ -1415,7 +1697,16 @@ impl VM {
             callback_future: None,
         }))
         .pending();
-        let mut context = self.prepare_builtin_context(outcome)?;
+        let mut context =
+            match self.with_handler_context(bindings, |vm| vm.prepare_builtin_context(outcome)) {
+                Ok(context) => context,
+                Err(error) => {
+                    return Err(merge_handler_cleanup(
+                        error,
+                        self.release_handler_context(bindings),
+                    ))
+                }
+            };
         context.current_process_execution = None;
         let future_id = self.process_runtime.allocate_future(None, None, false);
         self.process_runtime.singleton_inits.insert(
@@ -1499,12 +1790,7 @@ impl VM {
             .get(&process_name)
             .filter(|spec| spec.instance == RuntimeProcessInstance::Worker)
             .map(|_| "DynamicSupervisor".to_string());
-        Ok(RuntimeContinuation::Spawn {
-            process_name,
-            supervisor,
-            after: None,
-        }
-        .callback(init, Vec::new()))
+        self.start_worker_spawn(process_name, supervisor, init, None)
     }
 
     pub(crate) fn start_supervisor_spawn(
@@ -1520,12 +1806,7 @@ impl VM {
                     "__supervisor_spawn could not infer worker process from init callable",
                 )
             })?;
-        Ok(RuntimeContinuation::Spawn {
-            process_name,
-            supervisor: Some(supervisor),
-            after: None,
-        }
-        .callback(init, Vec::new()))
+        self.start_worker_spawn(process_name, Some(supervisor), init, None)
     }
 
     pub(crate) fn start_supervisor_workers(
@@ -1726,6 +2007,8 @@ mod tests {
                     .unwrap();
                 let mut context = VM::standalone_builtin_context(BuiltinOutcome::Resume(
                     BuiltinContinuation::Runtime(RuntimeContinuation::TaskCall {
+                        handler_bindings: None,
+                        previous_bindings: None,
                         completion: future,
                         previous_trace: None,
                     }),
@@ -2045,5 +2328,338 @@ mod tests {
             Some(now + 100)
         );
         assert!(vm.ready_future_value(id).is_none());
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SpawnInit {
+    process_name: String,
+    supervisor: Option<String>,
+    after: Option<Box<RuntimeContinuation>>,
+    handler_bindings: Option<BindingContextId>,
+    previous_bindings: Option<BindingContextId>,
+}
+
+impl SpawnInit {
+    fn resume(
+        self,
+        vm: &mut VM,
+        result: Result<Value, RuntimeError>,
+    ) -> Result<BuiltinOutcome, RuntimeError> {
+        vm.current_handler_bindings = self.previous_bindings;
+        let mut transferred = false;
+        let completed = (|| match decode_vm_result(result?, "__process_spawn", "init")? {
+            Ok(state) => {
+                let pid = match self.supervisor {
+                    Some(supervisor) => vm.allocate_supervised_worker(
+                        self.process_name.clone(),
+                        Some(state),
+                        supervisor,
+                    )?,
+                    None => vm.allocate_process_instance(
+                        self.process_name.clone(),
+                        Some(state),
+                        None,
+                        None,
+                    )?,
+                };
+                vm.process_runtime
+                    .processes
+                    .get_mut(&pid)
+                    .expect("new worker")
+                    .handler_bindings = self.handler_bindings;
+                transferred = true;
+                Ok(ok_vm_result(Value::Pid(vm.process_handle(pid)?)))
+            }
+            Err(error) => Ok(err_vm_result(error)),
+        })();
+        let cleanup = if transferred {
+            Ok(())
+        } else {
+            vm.release_handler_context(self.handler_bindings)
+        };
+        match completed {
+            Ok(value) => vm.finish_handler_result(value, cleanup, self.after),
+            Err(error) => {
+                let error = merge_handler_cleanup(error, cleanup);
+                match self.after {
+                    Some(after) => after.resume(vm, Err(error)),
+                    None => Err(error),
+                }
+            }
+        }
+    }
+}
+
+impl VM {
+    fn start_worker_spawn(
+        &mut self,
+        process_name: String,
+        supervisor: Option<String>,
+        init: Callable,
+        after: Option<Box<RuntimeContinuation>>,
+    ) -> Result<BuiltinOutcome, RuntimeError> {
+        let handler_bindings = match self.acquire_handler_dependencies(&process_name) {
+            Ok(bindings) => bindings,
+            Err(handler_bindings::AcquisitionError::Metadata(error)) => return Err(error),
+            Err(handler_bindings::AcquisitionError::Open { path, detail }) => {
+                let outcome = self.language_error_outcome(
+                    "FileOutHandlerOpenFailed",
+                    vec![Value::Str(path), Value::Str(detail)],
+                    Some(1),
+                )?;
+                return match after {
+                    Some(after) => Self::after_error_construction(outcome, *after),
+                    None => Ok(outcome),
+                };
+            }
+        };
+        let previous_bindings = self.current_handler_bindings;
+        self.current_handler_bindings = handler_bindings;
+        Ok(RuntimeContinuation::Spawn(Box::new(SpawnInit {
+            process_name,
+            supervisor,
+            after,
+            handler_bindings,
+            previous_bindings,
+        }))
+        .callback(init, Vec::new()))
+    }
+}
+
+#[cfg(test)]
+mod file_cleanup_delivery_tests {
+    use super::super::tests::{
+        base_bytecode, function_entry, install_process_error_definitions, test_runtime_process_spec,
+    };
+    use super::*;
+    #[test]
+    fn waiting_without_context_keeps_timeout_error_and_secondary_flush_cause() {
+        for raw_ready in [false, true] {
+            let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+            install_process_error_definitions(&mut vm);
+            let path = std::env::temp_dir().join(format!(
+                "surtr-waiting-none-flush-{}.log",
+                std::process::id()
+            ));
+            let (owner, out) = handler_bindings::tests::bound_file(&mut vm, &path);
+            vm.current_handler_bindings = Some(owner);
+            let input = vm.process_runtime.allocate_future(None, None, false);
+            let completion = vm.process_runtime.allocate_future(None, None, false);
+            vm.stamp_future_context(completion).unwrap();
+            vm.register_runtime_task(
+                None,
+                DetachedTaskState::Waiting {
+                    future_id: input,
+                    context: None,
+                },
+                DetachedCompletion::Future(Some(completion)),
+            );
+            vm.current_handler_bindings = None;
+            vm.release_handler_context(Some(owner)).unwrap();
+            vm.active_file_sinks.0[&out.id].sink.fail_flush.set(true);
+            if raw_ready {
+                let original = vm.process_error("FutureDeadlineExceeded", "original timeout");
+                vm.process_runtime
+                    .resolve_future(completion, err_vm_result(original));
+            } else {
+                vm.schedule_future_error(
+                    completion,
+                    "FutureDeadlineExceeded",
+                    vec![Value::Int(int(completion))],
+                );
+            }
+            for _ in 0..40 {
+                if !vm.has_runnable_detached_tasks() {
+                    break;
+                }
+                vm.drive_ready_detached_tasks().unwrap();
+            }
+            let value = vm
+                .ready_future_value(completion)
+                .expect("timeout waits for all cleanup constructors");
+            let error = decode_vm_result(value, "test", "timeout")
+                .unwrap()
+                .unwrap_err();
+            assert_eq!(
+                error.kind,
+                compiler_global_error_kind("FutureDeadlineExceeded")
+            );
+            assert!(error.cause.unwrap().payload.iter().any(
+                |value| matches!(value, Value::Str(detail) if detail.contains("flush failed"))
+            ));
+            assert!(vm.process_runtime.detached_tasks.is_empty());
+            assert!(vm.active_file_sinks.0.is_empty());
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+    #[test]
+    fn worker_open_failure_uses_result_and_does_not_enter_user_init() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::Halt,
+            Opcode::RuntimeContractViolation {
+                message: "unexpected user init".into(),
+            },
+            Opcode::Return,
+        ]);
+        bytecode.functions = vec![function_entry(0, 1, 0, 0, Some("Worker::init"))];
+        bytecode.runtime_process_specs.entries = vec![test_runtime_process_spec(
+            0,
+            "Worker",
+            RuntimeProcessKind::Agent,
+            RuntimeProcessInstance::Worker,
+            false,
+            0,
+            0,
+            None,
+        )];
+        let mut vm = VM::new(bytecode);
+        install_process_error_definitions(&mut vm);
+        let directory =
+            std::env::temp_dir().join(format!("surtr-worker-open-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        vm.process_runtime.handler_contexts.insert(
+            "Worker".into(),
+            BTreeMap::from([(
+                "out".into(),
+                RuntimeHandlerTarget {
+                    name: "FileOutHandler".into(),
+                    named_args: vec![sindr::ir::RuntimeHandlerArg {
+                        name: "path".into(),
+                        value: directory.join("missing/file.log").display().to_string(),
+                    }],
+                },
+            )]),
+        );
+        let callable = vm.callable_for_function(0);
+        let result = vm.process_spawn("Worker".into(), callable).unwrap();
+        assert_eq!(
+            decode_vm_result(result, "test", "spawn")
+                .unwrap()
+                .unwrap_err()
+                .kind,
+            compiler_global_error_kind("FileOutHandlerOpenFailed")
+        );
+        assert!(vm.process_runtime.processes.is_empty());
+        assert!(vm.active_file_sinks.0.is_empty());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn error_constructor_failure_runs_after_cleanup_and_retains_original_diagnostic() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        let location = Location {
+            file: "original.srt".into(),
+            func: "init".into(),
+            line: 1,
+            column: 1,
+            span_start: 0,
+            span_end: 1,
+        };
+        vm.process_runtime.refilling_worker_sets.insert(7);
+        let continuation = RuntimeContinuation::ErrorConstruction {
+            kind: "ExpectedError".into(),
+            location: location.clone(),
+            stack_trace: Vec::new(),
+            wrapper: Some(1),
+            after: Some(Box::new(RuntimeContinuation::Refill {
+                workers_id: 7,
+                receiving: true,
+            })),
+        };
+        assert!(continuation
+            .resume(&mut vm, Err(RuntimeError::new("constructor failed")))
+            .is_err());
+        assert!(!vm.process_runtime.refilling_worker_sets.contains(&7));
+        let original = RichError::new("UserInitError", "original failure", location.clone(), None);
+        let continuation = RuntimeContinuation::HandlerCleanupCause {
+            original: err_vm_result(original),
+            after: None,
+        };
+        let error = continuation
+            .resume(
+                &mut vm,
+                Err(RuntimeError::new("secondary constructor failed")),
+            )
+            .unwrap_err();
+        assert_eq!(error.message, "original failure");
+        assert_eq!(error.context.call_site, Some(location));
+        assert!(error
+            .context
+            .details
+            .iter()
+            .any(|detail| detail.contains("UserInitError")));
+        assert!(error
+            .context
+            .details
+            .iter()
+            .any(|detail| detail.contains("secondary constructor failed")));
+    }
+}
+
+#[cfg(test)]
+mod started_file_write_failure_tests {
+    use super::super::tests::{base_bytecode, install_process_error_definitions};
+    use super::*;
+    #[test]
+    fn started_task_timeout_joins_write_failure_when_last_owner_flush_succeeds() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        install_process_error_definitions(&mut vm);
+        let path = std::env::temp_dir().join(format!(
+            "surtr-started-task-write-error-{}.log",
+            std::process::id()
+        ));
+        let (owner, out) = handler_bindings::tests::bound_file(&mut vm, &path);
+        let accepted = vm.out_handler_write(&out, "failed request".into()).unwrap();
+        let BuiltinOutcome::Resume(BuiltinContinuation::Runtime(RuntimeContinuation::FileWrite {
+            request,
+        })) = accepted
+        else {
+            panic!()
+        };
+        let started = vm.resume_file_write(request, Ok(Value::Unit)).unwrap();
+        let mut context = VM::standalone_builtin_context(started);
+        context.current_handler_bindings = Some(owner);
+        let completion = vm.process_runtime.allocate_future(None, None, false);
+        vm.stamp_future_context(completion).unwrap();
+        vm.register_runtime_task(
+            None,
+            DetachedTaskState::Runnable(context),
+            DetachedCompletion::Future(Some(completion)),
+        );
+        vm.release_handler_context(Some(owner)).unwrap();
+        vm.active_file_sinks.0[&out.id].sink.fail_write.set(true);
+        vm.schedule_future_error(
+            completion,
+            "FutureDeadlineExceeded",
+            vec![Value::Int(int(completion))],
+        );
+        for _ in 0..40 {
+            if !vm.has_runnable_detached_tasks() {
+                break;
+            }
+            vm.drive_ready_detached_tasks().unwrap();
+        }
+        let error = decode_vm_result(
+            vm.ready_future_value(completion)
+                .expect("timeout result after all cleanup"),
+            "test",
+            "timeout",
+        )
+        .unwrap()
+        .unwrap_err();
+        assert_eq!(
+            error.kind,
+            compiler_global_error_kind("FutureDeadlineExceeded")
+        );
+        let cause = error.cause.expect("write failure is secondary to timeout");
+        assert_eq!(
+            cause.kind,
+            compiler_global_error_kind("FileOutHandlerWriteFailed")
+        );
+        assert!(cause.payload.iter().any(|value| matches!(value, Value::Str(detail) if detail.contains("injected FileOut write failure"))));
+        assert!(vm.process_runtime.detached_tasks.is_empty());
+        assert!(vm.active_file_sinks.0.is_empty());
+        assert_eq!(std::fs::read(&path).unwrap(), Vec::<u8>::new());
+        std::fs::remove_file(path).unwrap();
     }
 }

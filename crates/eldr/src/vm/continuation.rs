@@ -97,6 +97,7 @@ impl VM {
             pending_invocation: Some(Ok(Invocation::Builtin(outcome))),
             cancellation: None,
             current_process_execution: None,
+            current_handler_bindings: None,
             pc: 0,
             target: ExecutionTarget::FrameDepth(1),
         }
@@ -522,15 +523,23 @@ impl VM {
         }
     }
 
+    fn cancelled_result<T>(&mut self, result: Result<T, RuntimeError>) -> Result<T, RuntimeError> {
+        let Some(original) = &mut self.cancellation else {
+            return result;
+        };
+        if let Err(secondary) = result {
+            original.retain_secondary_failure(&secondary, "cancellation cleanup");
+        }
+        Err(original.clone())
+    }
+
     pub(super) fn deliver_continuation(
         &mut self,
         result: Result<Value, RuntimeError>,
     ) -> Result<(), RuntimeError> {
-        let result = match &self.cancellation {
-            Some(error) => Err(error.clone()),
-            None => result,
-        }
-        .map_err(|error| self.enrich_continuation_error(error));
+        let result = self
+            .cancelled_result(result)
+            .map_err(|error| self.enrich_continuation_error(error));
         let frame = self
             .continuations
             .pop()
@@ -542,10 +551,7 @@ impl VM {
         match frame.destination {
             ReturnDestination::Builtin(continuation) => {
                 let resumed = continuation.resume(self, result).map(Invocation::Builtin);
-                self.pending_invocation = Some(match &self.cancellation {
-                    Some(error) => Err(error.clone()),
-                    None => resumed,
-                });
+                self.pending_invocation = Some(self.cancelled_result(resumed));
             }
             ReturnDestination::Stack {
                 tail,
@@ -566,5 +572,48 @@ impl VM {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod cancellation_error_tests {
+    use super::*;
+    #[test]
+    fn cancellation_preserves_primary_kind_and_message_with_secondary_lifecycle_error() {
+        for primary in [
+            RuntimeError::new("primary"),
+            RuntimeError::task_timeout("primary"),
+        ] {
+            let expected = primary.kind();
+            let mut vm = VM::new(super::super::tests::base_bytecode(vec![Opcode::Halt]));
+            vm.cancellation = Some(primary);
+            let mut secondary = RuntimeError::process_lifecycle_failed("flush failed");
+            secondary
+                .context
+                .details
+                .push("file_out_cleanup_path=/example.log".into());
+            let error = vm.cancelled_result::<Value>(Err(secondary)).unwrap_err();
+            assert_eq!(error.kind(), expected);
+            assert_eq!(error.message, "primary");
+            assert!(error
+                .context
+                .details
+                .iter()
+                .any(|detail| detail.contains("flush failed")));
+            assert!(error
+                .context
+                .details
+                .iter()
+                .any(|detail| detail == "file_out_cleanup_path=/example.log"));
+            assert_eq!(
+                error
+                    .context
+                    .details
+                    .iter()
+                    .filter(|detail| detail.starts_with("__surtr_runtime_error_kind="))
+                    .count(),
+                usize::from(expected != crate::error::RuntimeErrorKind::Generic)
+            );
+        }
     }
 }

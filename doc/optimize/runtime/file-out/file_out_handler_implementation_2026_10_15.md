@@ -14,7 +14,7 @@ canonical alias・comma/equalsを含むpath・init前失敗・部分失敗・ret
 
 ## 進捗
 
-Scarの受入テストは、Unitを返すescaping/nested closureが型検査を通る一方、handler PIDのcaptureが0件でctx getterを呼出し側へ残すことをRedで確認した。PIDそのものを返す初稿は既存の依存返却禁止で拒否され、受入のRedには数えない。現在、正規化と直接検証を進めている。資源・queueはまだ未実装。
+Scarの受入テストは、Unitを返すescaping/nested closureが型検査を通る一方、handler PIDのcaptureが0件でctx getterを呼出し側へ残すことをRedで確認した。PIDそのものを返す初稿は既存の依存返却禁止で拒否され、受入のRedには数えない。第一段階の正規化と直接検証を完了した。資源・queueの結果は第二段階に記録する。
 
 ### 第一段階の結果
 
@@ -23,3 +23,19 @@ Scarの正規化を実装し、2件で外側Bindと両closureのUID一致、同s
 最終CI 2,588件 / 70 binaries・標準1,124件すべて成功。Scar全件は2例目の追加前に395件、最終capture対象2件とfixture bucket 1件も成功した。途中CIはfixture修正中に一回中断し、次のCIはstdout captureの改行期待だけが1件不一致となった。期待値を既存event join方式に合わせた最終CIが全Greenであり、不一致を製品修正やテスト除外で隠していない。[検証記録](handler_capture_validation_2026_10_15.json)。
 
 独立レビューは最外Bind、inner→outer伝搬、named Def境界、Pattern/Facet/MonadFail/DoAlternative/lazy shellの走査、既存captureとarity/localへの接続を確認し、修正必須の指摘なし。Pattern/Facet/MonadFailのctx捕捉は専用実行例ではなくsource監査である。descriptor保持・owner・FIFO・復帰は次段階であり、FileOut全体を完了とは扱わない。
+
+### 第二段階の結果
+
+構造化targetと登録PIDの個体一致でhandlerを解決し、表示名の逆parse・hashによるPID生成・writeごとのopenを削除した。user init前に全dependencyを取得し、Standbyの待機・retryへ同じcontextを持ち越す。Worker / Workers / refillの共通起動も依存取得を先に実行する。singletonのopen失敗はProcessInitFailedへ、Workerのopen失敗は既存FileOutHandlerOpenFailedのResultへ配送する。
+
+init・process・Task・未完了writeの論理所有と、VM active lease・checkpoint saved leaseを分けた。Taskは起動元と捕捉したhandler PIDを検証し、ExecutionContextのないFuture待機でも所有を保持する。捕捉値は借用で走査し、ListのStringなどのpayloadを複製せず、Generatorは評価しない。handler registryが存在しない通常経路では追加tableを確保しない。plain PID / closureはactive ownerに数えず、閉じたbindingを再openしない。
+
+FileOutはFIFOに受付し、開始の印を付ける再開とOS writeを行う再開を分ける。未開始取消は要求を除去する。開始の印が付いた要求は取消時も一度writeしてから元の取消を返す。write後はqueueから除去してからError constructorを駆動し、constructorによる再入で同じ要求を書き直さない。保存した論理進行へのrollbackは外部bytesを巻き戻さず、rollbackを跨ぐexactly-onceは保証しない。
+
+process最後の解放・flushと副次原因の生成をfuture配送前に行う。言語Errにflush失敗が重なれば元Errorのkind・message・locationを保ち、既存FileOutHandlerWriteFailed constructorで副次causeを作る。timeout Errorの生成中は副次cleanupを保存し、ErrorFutureの完成からcause生成へ進む。secondary constructor自体が失敗・取消・不正戻り値なら、元Errorの診断を保持したRuntimeErrorで停止する。成功を先に配送したり、constructor失敗を隠して継続したりしない。StopのWorker集合・refill・停止identity整理はflush失敗時も完了させる。shutdown / rollbackも元RuntimeErrorへcleanup診断を添える。
+
+受入ではinit前2件とFIFO受付1件を意図したRed→Greenで確認した。canonical alias、comma/equals path、rename、部分取得失敗、VM clone、saved leaseの破棄と復帰、rollback後の外部bytesとID非再利用、FIFO、未開始取消、開始済み取消、write/flush失敗、Taskのnested Generator/List/HashMap捕捉、Stop(Error)・通常Stop、WaitingNone timeout（Error生成中とraw-readyの両方）、Error constructor失敗を直接検証した。Eldr / Sindr対象558件、通常namespace / script bucket 19件、最終CI 2,614件 / 70 binaries、標準1,124件がすべて成功。failed / skipped / pending / filtered等は標準summaryで0。[検証記録](file_out_runtime_validation_2026_10_15.json)。
+
+Workerのhandler defaultは現行構文では引数を取らず、Workerをsupervisor_initへ置くことも拒否される。この境界を広げず、Worker FileOutの資源失敗はRuntimeHandlerTarget直下で固定した。上記2つのsource準備拒否とtest helperのcompile失敗は受入のRedへ数えない。Standby retry中にpathnameをrenameしても同じdescriptorを維持し、Ready時にprocessへ移譲するケースと、Workers 2件・refillが同じsinkを共有し最後のownerでflushするケースを、正当なruntime metadataを使った専用テストで確認した。FileOut Workerのsource構文は拡張していない。
+
+独立先行レビューの指摘により、WorkerのResult配送、元言語Errの副次cause、Stopのcleanup完了、constructor失敗時のafter処理、process最終解放の配送順、WaitingNone timeoutの副次原因を修正した。開始済みTask取消のwrite失敗cause、取消の元kind維持、複数sinkのflush診断、bare process alias、空pathのopenエラーもRedで固定して修正した。最終製品差分の独立レビューは修正必須の指摘なし。最終検証原本も独立照合し、15 source SHA・新旧6 log SHA・件数と標準summaryの一致を確認した。OI-040を解決済みとして台帳から除去した。FileOutの性能倍率はこの検証だけから主張しない。

@@ -72,6 +72,6 @@ fn rollback_truncates_appended_boot_plan_entries_and_preserves_prefix() {
         .runtime_boot_plan
         .handler_overrides
         .push(handler_override());
-    vm.rollback_to_checkpoint(saved);
+    vm.rollback_to_checkpoint(saved).unwrap();
     assert_eq!(vm.bytecode.runtime_boot_plan, original_plan);
 }

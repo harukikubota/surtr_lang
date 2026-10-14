@@ -680,6 +680,7 @@ fn suspended_process_vm(process_count: u64) -> (VM, usize) {
         vm.process_runtime.processes.insert(
             pid,
             ProcessInstance {
+                handler_bindings: None,
                 pid,
                 spec_id: 0,
                 identity: PidHandle::new(pid, "Worker".into(), PidKind::Worker),
@@ -753,7 +754,7 @@ fn process_checkpoint_copies_only_mutated_entry_and_restores_future() {
     );
     assert_eq!(vm.ready_future_value(future), Some(Value::Int(int(17))));
     assert_eq!(vm.process_runtime.run_queue.front(), Some(&1));
-    vm.rollback_to_checkpoint(saved);
+    vm.rollback_to_checkpoint(saved).unwrap();
     assert!(vm.ready_future_value(future).is_none());
     assert!(vm.process_runtime.run_queue.is_empty());
     assert_eq!(
@@ -805,7 +806,7 @@ fn process_checkpoint_stop_copies_only_owned_detached_task() {
         1,
         "stopping one owner must not copy another owner's suspended task"
     );
-    vm.rollback_to_checkpoint(saved);
+    vm.rollback_to_checkpoint(saved).unwrap();
     vm.drain_background_tasks().unwrap();
     for future in futures {
         assert_eq!(vm.ready_future_value(future), Some(expected.clone()));
@@ -853,7 +854,7 @@ fn flat_map_checkpoint_restores_independent_partial_builder_and_cursor() {
     );
     let advanced_pushes = flat_map_metrics().builder_pushes;
     assert!(advanced_pushes > saved_pushes && advanced_pushes < 4096);
-    vm.rollback_to_checkpoint(saved);
+    vm.rollback_to_checkpoint(saved).unwrap();
     assert!(vm.ready_future_value(future).is_none());
     vm.drain_background_tasks().unwrap();
     assert_eq!(vm.ready_future_value(future), Some(expected));
@@ -1085,7 +1086,7 @@ fn builder_probe_repeat(
     }
 
     let (_, mut rollback) = builder_probe_phase(timed, "rollback", repeat, position, || {
-        vm.rollback_to_checkpoint(advanced)
+        vm.rollback_to_checkpoint(advanced).unwrap()
     });
     rollback.position_after = restored_position;
     builder_probe_sample_assertions(&rollback, 0, 0);
@@ -1285,7 +1286,7 @@ fn flat_map_checkpoint_during_shared_finish_restores_cursor_without_recopies() {
     assert_eq!(flat_map_metrics().builder_copied_items, 0);
     assert_eq!(flat_map_metrics().builder_finish_steps, 256);
     assert!(vm.ready_future_value(future).is_none());
-    vm.rollback_to_checkpoint(saved);
+    vm.rollback_to_checkpoint(saved).unwrap();
     reset_flat_map_metrics();
     vm.drain_background_tasks().unwrap();
     assert_eq!(flat_map_metrics().callback_calls, 0);

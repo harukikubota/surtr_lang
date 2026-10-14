@@ -2,10 +2,14 @@ mod test_runner;
 use test_runner::VmTestRunner;
 pub use test_runner::{VmTestCase, VmTestDeclaration, VmTestPolicy, VmTestScope, VmTestScopeKind};
 mod checkpoint_value;
+mod handler_bindings;
 mod operand_stack;
 mod process_continuation;
 mod runtime_table;
 use checkpoint_value::CheckpointValue;
+use handler_bindings::{
+    ActiveFileSinks, BindingContextId, HandlerIds, HandlerState, HandlerTarget, SavedFileSinks,
+};
 use operand_stack::OperandStack;
 pub(crate) use process_continuation::RuntimeContinuation;
 use process_continuation::{DetachedTask, SingletonFlight};
@@ -251,6 +255,7 @@ struct CallFrame {
 
 #[derive(Debug, Clone)]
 struct VmCheckpoint {
+    saved_file_sinks: SavedFileSinks,
     stack: OperandStack,
     frames: Vec<CallFrame>,
     tail_call_breadcrumbs: VecDeque<RuntimeStackFrame>,
@@ -258,6 +263,7 @@ struct VmCheckpoint {
     pending_invocation: Option<Result<Invocation, RuntimeError>>,
     cancellation: Option<RuntimeError>,
     current_process_execution: Option<u64>,
+    current_handler_bindings: Option<BindingContextId>,
     pc: usize,
     exit_code: i32,
     last_result: Option<Value>,
@@ -579,6 +585,7 @@ struct ProcessRuntime {
     next_correlation_id: CorrelationId,
     next_detached_task_id: u64,
     spec_registry: Rc<ProcessSpecRegistry>,
+    handlers: Option<Rc<HandlerState>>,
     handler_contexts: CheckpointValue<BTreeMap<String, BTreeMap<String, RuntimeHandlerTarget>>>,
     singleton_by_name: CheckpointValue<BTreeMap<String, u64>>,
     singleton_inits: CheckpointValue<BTreeMap<String, SingletonFlight>>,
@@ -653,6 +660,7 @@ impl WorkerStrategyState {
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct ProcessInstance {
+    handler_bindings: Option<BindingContextId>,
     pid: u64,
     spec_id: u32,
     identity: PidHandle,
@@ -750,6 +758,7 @@ struct ExecutionContext {
     pending_invocation: Option<Result<Invocation, RuntimeError>>,
     cancellation: Option<RuntimeError>,
     current_process_execution: Option<u64>,
+    current_handler_bindings: Option<BindingContextId>,
     pc: usize,
     target: ExecutionTarget,
 }
@@ -761,47 +770,6 @@ type ProcessExecutionContext = ExecutionContext;
 enum ExecutionTarget {
     TopLevel,
     FrameDepth(usize),
-}
-
-fn handler_target_identity(target: &RuntimeHandlerTarget) -> String {
-    if target.named_args.is_empty() {
-        return target.name.clone();
-    }
-    let args = target
-        .named_args
-        .iter()
-        .map(|arg| format!("{}={}", arg.name, arg.value))
-        .collect::<Vec<_>>()
-        .join(",");
-    format!("{}({})", target.name, args)
-}
-
-fn stable_handler_pid(identity: &str) -> u64 {
-    let mut hash = 0xcbf29ce484222325u64;
-    for byte in identity.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
-}
-
-fn parse_handler_target_identity(identity: &str) -> (&str, Vec<(String, String)>) {
-    let Some(open) = identity.find('(') else {
-        return (identity, Vec::new());
-    };
-    let name = &identity[..open];
-    let args = identity
-        .strip_suffix(')')
-        .map(|s| &s[open + 1..])
-        .unwrap_or("")
-        .split(',')
-        .filter(|item| !item.is_empty())
-        .filter_map(|item| {
-            let (key, value) = item.split_once('=')?;
-            Some((key.to_string(), value.to_string()))
-        })
-        .collect();
-    (name, args)
 }
 
 fn runtime_spec_is_standby(spec: &RuntimeProcessSpec) -> bool {
@@ -1069,6 +1037,7 @@ pub struct VM {
     pending_invocation: Option<Result<Invocation, RuntimeError>>,
     cancellation: Option<RuntimeError>,
     current_process_execution: Option<u64>,
+    current_handler_bindings: Option<BindingContextId>,
     /// Program counter (used by full-program `run`)
     pc: usize,
     /// Source code (for eprint / ariadne)
@@ -1111,6 +1080,8 @@ pub struct VM {
     /// VM-owned process table built from bytecode runtime process specs.
     process_runtime: ProcessRuntime,
     runtime_clock_anchor: Instant,
+    handler_ids: Option<Rc<HandlerIds>>,
+    active_file_sinks: ActiveFileSinks,
 }
 
 impl VM {
@@ -1133,6 +1104,7 @@ impl VM {
             pending_invocation: None,
             cancellation: None,
             current_process_execution: None,
+            current_handler_bindings: None,
             pc: 0,
             source: None,
             source_file: None,
@@ -1157,6 +1129,8 @@ impl VM {
             cwd: env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             process_runtime,
             runtime_clock_anchor: Instant::now(),
+            handler_ids: None,
+            active_file_sinks: ActiveFileSinks::default(),
         };
         vm.apply_runtime_supervisor_overrides();
         vm
@@ -2222,21 +2196,21 @@ impl VM {
         process_name: String,
         slot: String,
     ) -> Result<Value, RuntimeError> {
-        let Some(target) = self
+        let process_name = self
             .process_runtime
-            .handler_targets_for_process(&process_name)
-            .and_then(|slots| slots.get(&slot))
-        else {
-            return Err(RuntimeError::new(format!(
-                "handler slot `{slot}` is not declared for process `{process_name}`"
-            )));
-        };
-        let identity = handler_target_identity(target);
-        Ok(Value::Pid(PidHandle::new(
-            stable_handler_pid(&identity),
-            identity,
-            PidKind::Handler,
-        )))
+            .canonical_process_name(&process_name)
+            .unwrap_or(&process_name)
+            .to_owned();
+        let state = self
+            .process_runtime
+            .handlers
+            .as_deref()
+            .ok_or_else(|| RuntimeError::new("ctx handler lookup has no binding registry"))?;
+        Ok(Value::Pid(state.handler(
+            self.current_handler_bindings,
+            &process_name,
+            &slot,
+        )?))
     }
 
     pub(crate) fn out_handler_write(
@@ -2244,53 +2218,206 @@ impl VM {
         pid: &PidHandle,
         text: String,
     ) -> Result<BuiltinOutcome, RuntimeError> {
-        match parse_handler_target_identity(&pid.process_name) {
-            ("StdOut", _) => {
-                self.emit_stdout_text(text).map_err(|err| {
-                    RuntimeError::new(format!("StdOut handler write failed: {err}"))
-                })?;
-                Ok(BuiltinOutcome::Complete(ok_vm_result(Value::Unit)))
+        let target = self
+            .process_runtime
+            .handlers
+            .as_deref()
+            .ok_or_else(|| RuntimeError::new("unregistered handler PID"))?
+            .target(pid)?;
+        match target {
+            HandlerTarget::StdOut => {
+                self.emit_stdout_text(text)
+                    .map_err(|e| RuntimeError::new(format!("StdOut handler write failed: {e}")))?;
             }
-            ("StdErr", _) => {
-                self.emit_stderr_text(text).map_err(|err| {
-                    RuntimeError::new(format!("StdErr handler write failed: {err}"))
-                })?;
-                Ok(BuiltinOutcome::Complete(ok_vm_result(Value::Unit)))
+            HandlerTarget::StdErr => {
+                self.emit_stderr_text(text)
+                    .map_err(|e| RuntimeError::new(format!("StdErr handler write failed: {e}")))?;
             }
-            ("NullOutHandler", _) => Ok(BuiltinOutcome::Complete(ok_vm_result(Value::Unit))),
-            ("FileOutHandler", args) => {
-                let Some(path) = args
-                    .iter()
-                    .find_map(|(name, value)| (name == "path").then_some(value))
-                else {
-                    return Err(RuntimeError::new(
-                        "FileOutHandler metadata requires named argument path",
-                    ));
-                };
-                use std::fs::OpenOptions;
-                let mut file = match OpenOptions::new().create(true).append(true).open(path) {
-                    Ok(file) => file,
-                    Err(err) => {
-                        return self.language_error_outcome(
-                            "FileOutHandlerOpenFailed",
-                            vec![Value::Str(path.clone()), Value::Str(err.to_string())],
-                            Some(1),
-                        );
-                    }
-                };
-                if let Err(err) = file.write_all(text.as_bytes()) {
-                    return self.language_error_outcome(
+            HandlerTarget::Null => {}
+            HandlerTarget::StdIn => return Err(RuntimeError::new("StdIn is not an OutHandler")),
+            HandlerTarget::File(_) => return self.accept_file_write(pid, text),
+        }
+        Ok(BuiltinOutcome::Complete(ok_vm_result(Value::Unit)))
+    }
+
+    fn acquire_handler_dependencies(
+        &mut self,
+        name: &str,
+    ) -> Result<Option<BindingContextId>, handler_bindings::AcquisitionError> {
+        let targets = self
+            .process_runtime
+            .handler_targets_for_process(name)
+            .cloned()
+            .unwrap_or_default();
+        if targets.is_empty() {
+            return Ok(None);
+        }
+        let name = self
+            .process_runtime
+            .canonical_process_name(name)
+            .unwrap_or(name)
+            .to_owned();
+        let ids = self
+            .handler_ids
+            .get_or_insert_with(|| Rc::new(HandlerIds::default()));
+        let state = self
+            .process_runtime
+            .handlers
+            .get_or_insert_with(|| Rc::new(HandlerState::default()));
+        Rc::make_mut(state).acquire(
+            &name,
+            &targets,
+            &[],
+            &self.cwd,
+            ids,
+            &mut self.active_file_sinks,
+        )
+    }
+
+    fn acquire_process_handlers(
+        &mut self,
+        name: &str,
+    ) -> Result<Option<BindingContextId>, RuntimeError> {
+        self.acquire_handler_dependencies(name).map_err(|error| {
+            RuntimeError::process_init_failed(format!(
+                "process `{name}` dependency acquisition failed: {}",
+                error.detail()
+            ))
+        })
+    }
+
+    fn finish_handler_result(
+        &mut self,
+        value: Value,
+        cleanup: Result<(), RuntimeError>,
+        after: Option<Box<RuntimeContinuation>>,
+    ) -> Result<BuiltinOutcome, RuntimeError> {
+        if let Err(cleanup) = cleanup {
+            if let Value::Tagged { tag: 1, fields } = &value {
+                if let [Value::Error(original)] = fields.as_slice() {
+                    let path = cleanup
+                        .context
+                        .details
+                        .iter()
+                        .find_map(|detail| detail.strip_prefix("file_out_cleanup_path="))
+                        .ok_or_else(|| {
+                            RuntimeError::new("handler cleanup failure has no path context")
+                        })?;
+                    let outcome = self.language_error_outcome_at(
                         "FileOutHandlerWriteFailed",
-                        vec![Value::Str(path.clone()), Value::Str(err.to_string())],
-                        Some(1),
+                        vec![
+                            Value::Str(path.into()),
+                            Value::Str(
+                                std::iter::once(cleanup.message.as_str())
+                                    .chain(
+                                        cleanup
+                                            .context
+                                            .details
+                                            .iter()
+                                            .filter(|detail| {
+                                                !detail.starts_with("__surtr_runtime_error_kind=")
+                                                    && !detail.starts_with("file_out_cleanup_path=")
+                                            })
+                                            .map(String::as_str),
+                                    )
+                                    .collect::<Vec<_>>()
+                                    .join("; "),
+                            ),
+                        ],
+                        None,
+                        original.location.clone(),
+                        original.stack_trace.clone(),
+                    )?;
+                    return Self::after_error_construction(
+                        outcome,
+                        RuntimeContinuation::HandlerCleanupCause {
+                            original: value,
+                            after,
+                        },
                     );
                 }
-                Ok(BuiltinOutcome::Complete(ok_vm_result(Value::Unit)))
             }
-            (other, _) => Err(RuntimeError::new(format!(
-                "unknown OutHandler metadata target {other}"
-            ))),
+            return Err(cleanup);
         }
+        match after {
+            Some(after) => after.resume(self, Ok(value)),
+            None => Ok(BuiltinOutcome::Complete(value)),
+        }
+    }
+
+    fn after_error_construction(
+        outcome: BuiltinOutcome,
+        next: RuntimeContinuation,
+    ) -> Result<BuiltinOutcome, RuntimeError> {
+        let BuiltinOutcome::Call {
+            callable,
+            args,
+            continuation:
+                BuiltinContinuation::Runtime(RuntimeContinuation::ErrorConstruction {
+                    kind,
+                    location,
+                    stack_trace,
+                    wrapper,
+                    ..
+                }),
+        } = outcome
+        else {
+            return Err(RuntimeError::new(
+                "expected validated Error constructor continuation",
+            ));
+        };
+        Ok(BuiltinOutcome::Call {
+            callable,
+            args,
+            continuation: BuiltinContinuation::Runtime(RuntimeContinuation::ErrorConstruction {
+                kind,
+                location,
+                stack_trace,
+                wrapper,
+                after: Some(Box::new(next)),
+            }),
+        })
+    }
+
+    fn retain_handler_context(&mut self, id: Option<BindingContextId>) -> Result<(), RuntimeError> {
+        if id.is_none() {
+            return Ok(());
+        }
+        Rc::make_mut(
+            self.process_runtime
+                .handlers
+                .as_mut()
+                .ok_or_else(|| RuntimeError::new("missing handler registry"))?,
+        )
+        .retain(id)
+    }
+
+    fn release_handler_context(
+        &mut self,
+        id: Option<BindingContextId>,
+    ) -> Result<(), RuntimeError> {
+        if id.is_none() {
+            return Ok(());
+        }
+        Rc::make_mut(
+            self.process_runtime
+                .handlers
+                .as_mut()
+                .ok_or_else(|| RuntimeError::new("missing handler registry"))?,
+        )
+        .release(id, &mut self.active_file_sinks)
+    }
+
+    fn with_handler_context<T>(
+        &mut self,
+        id: Option<BindingContextId>,
+        run: impl FnOnce(&mut Self) -> Result<T, RuntimeError>,
+    ) -> Result<T, RuntimeError> {
+        let previous = self.current_handler_bindings;
+        self.current_handler_bindings = id;
+        let result = run(self);
+        self.current_handler_bindings = previous;
+        result
     }
 
     pub(crate) fn supervisor_adopt(
@@ -3001,9 +3128,10 @@ impl VM {
                 future.owner = None;
             }
         }
+        let cleanup = self.release_handler_context(entry.handler_bindings);
         self.remove_worker_from_sets(pid);
         self.sweep_stopped_identities();
-        Ok(())
+        cleanup
     }
 
     pub(crate) fn workers_size(&self, handle: &WorkersHandle) -> Result<Value, RuntimeError> {
@@ -3288,6 +3416,7 @@ impl VM {
         self.process_runtime.processes.insert(
             pid,
             ProcessInstance {
+                handler_bindings: None,
                 pid,
                 spec_id,
                 identity: PidHandle::new(
@@ -3433,6 +3562,7 @@ impl VM {
                 location,
                 stack_trace,
                 wrapper,
+                after: None,
             }),
         })
     }
@@ -3808,13 +3938,16 @@ impl VM {
 
     /// Execute the loaded bytecode (`run` mode expects `Halt`).
     pub fn run(&mut self) -> Result<(), RuntimeError> {
-        self.boot_runtime()?;
+        if let Err(error) = self.boot_runtime() {
+            let cleanup = self.active_file_sinks.shutdown();
+            return Err(merge_handler_cleanup(error, cleanup));
+        }
         self.last_result = None;
         self.test_runner.reset();
         self.test_events.clear();
         self.test_stdout_cursor = self.current_output_len();
         self.test_stderr_cursor = self.current_error_output_len();
-        let result = (|| match self.run_until_outcome(self.pc, ExecutionTarget::TopLevel) {
+        let mut result = (|| match self.run_until_outcome(self.pc, ExecutionTarget::TopLevel) {
             StepOutcome::Halt(_) => {
                 self.last_result = Some(self.stack.last().cloned().unwrap_or(Value::Unit));
                 Ok(())
@@ -3837,6 +3970,12 @@ impl VM {
             self.batch_shutdown_pending = true;
         } else {
             self.shutdown_file_resources();
+            if let Err(cleanup) = self.active_file_sinks.shutdown() {
+                result = Err(match result {
+                    Err(error) => merge_handler_cleanup(error, Err(cleanup)),
+                    Ok(()) => cleanup,
+                });
+            }
             self.batch_shutdown_pending = false;
         }
         result
@@ -4004,14 +4143,14 @@ impl VM {
         let result = match self.execute_chunk(chunk) {
             Ok(result) => result,
             Err(err) => {
-                self.rollback_to_checkpoint(checkpoint);
-                return Err(err);
+                let cleanup = self.rollback_to_checkpoint(checkpoint);
+                return Err(merge_handler_cleanup(err, cleanup));
             }
         };
 
         if let Err(err) = self.verify_loaded_bytecode() {
-            self.rollback_to_checkpoint(checkpoint);
-            return Err(err);
+            let cleanup = self.rollback_to_checkpoint(checkpoint);
+            return Err(merge_handler_cleanup(err, cleanup));
         }
 
         drop(checkpoint);
@@ -4034,6 +4173,7 @@ impl VM {
             .collect();
 
         VmCheckpoint {
+            saved_file_sinks: self.active_file_sinks.checkpoint(),
             stack: self.stack.clone(),
             frames: self.frames.clone(),
             tail_call_breadcrumbs: self.tail_call_breadcrumbs.clone(),
@@ -4041,6 +4181,7 @@ impl VM {
             pending_invocation: self.pending_invocation.clone(),
             cancellation: self.cancellation.clone(),
             current_process_execution: self.current_process_execution,
+            current_handler_bindings: self.current_handler_bindings,
             pc: self.pc,
             exit_code: self.exit_code,
             last_result: self.last_result.clone(),
@@ -4076,7 +4217,8 @@ impl VM {
         }
     }
 
-    fn rollback_to_checkpoint(&mut self, checkpoint: VmCheckpoint) {
+    fn rollback_to_checkpoint(&mut self, checkpoint: VmCheckpoint) -> Result<(), RuntimeError> {
+        let handler_result = self.active_file_sinks.restore(checkpoint.saved_file_sinks);
         self.stack = checkpoint.stack;
         self.frames = checkpoint.frames;
         self.tail_call_breadcrumbs = checkpoint.tail_call_breadcrumbs;
@@ -4084,6 +4226,7 @@ impl VM {
         self.pending_invocation = checkpoint.pending_invocation;
         self.cancellation = checkpoint.cancellation;
         self.current_process_execution = checkpoint.current_process_execution;
+        self.current_handler_bindings = checkpoint.current_handler_bindings;
         self.pc = checkpoint.pc;
         self.exit_code = checkpoint.exit_code;
         self.last_result = checkpoint.last_result;
@@ -4152,6 +4295,7 @@ impl VM {
             }
             None => self.bytecode.source_map = None,
         }
+        handler_result
     }
 
     fn rollback_open_files(&mut self, restored: HashMap<u64, VmOpenFile>) {
@@ -4258,6 +4402,7 @@ impl VM {
         self.pending_invocation = context.pending_invocation;
         self.cancellation = context.cancellation;
         self.current_process_execution = context.current_process_execution;
+        self.current_handler_bindings = context.current_handler_bindings;
         self.pc = context.pc;
     }
 
@@ -4384,6 +4529,7 @@ impl VM {
             pending_invocation: self.pending_invocation.take(),
             cancellation: self.cancellation.take(),
             current_process_execution: self.current_process_execution.take(),
+            current_handler_bindings: self.current_handler_bindings.take(),
             pc,
             target,
         }
@@ -4406,6 +4552,10 @@ impl VM {
         std::mem::swap(
             &mut self.current_process_execution,
             &mut context.current_process_execution,
+        );
+        std::mem::swap(
+            &mut self.current_handler_bindings,
+            &mut context.current_handler_bindings,
         );
         self.pc = context.pc;
         let outcome = self.step_active_context(target.clone());
@@ -4696,27 +4846,37 @@ impl VM {
     }
 
     pub fn drain_background_tasks(&mut self) -> Result<(), RuntimeError> {
-        while self.has_pending_background_work() {
-            self.drive_ready_runtime_quantum()?;
-            if !self.has_pending_background_work() {
-                break;
+        let result = (|| {
+            while self.has_pending_background_work() {
+                self.drive_ready_runtime_quantum()?;
+                if !self.has_pending_background_work() {
+                    break;
+                }
+                if self.has_runnable_background_work() {
+                    continue;
+                }
+                let Some(next_deadline) = self.process_runtime.next_running_deadline() else {
+                    break;
+                };
+                let sleep_ms = next_deadline.saturating_sub(self.process_runtime.current_tick_ms);
+                if sleep_ms > 0 {
+                    std::thread::sleep(Duration::from_millis(sleep_ms));
+                }
+                self.process_runtime.current_tick_ms = next_deadline;
+                self.runtime_clock_anchor = Instant::now();
+                self.expire_process_deadlines(next_deadline);
             }
-            if self.has_runnable_background_work() {
-                continue;
-            }
-            let Some(next_deadline) = self.process_runtime.next_running_deadline() else {
-                break;
-            };
-            let sleep_ms = next_deadline.saturating_sub(self.process_runtime.current_tick_ms);
-            if sleep_ms > 0 {
-                std::thread::sleep(Duration::from_millis(sleep_ms));
-            }
-            self.process_runtime.current_tick_ms = next_deadline;
-            self.runtime_clock_anchor = Instant::now();
-            self.expire_process_deadlines(next_deadline);
+            Ok(())
+        })();
+        if let Err(error) = result {
+            self.shutdown_file_resources();
+            let cleanup = self.active_file_sinks.shutdown();
+            self.batch_shutdown_pending = false;
+            return Err(merge_handler_cleanup(error, cleanup));
         }
         if !self.has_pending_background_work() && self.batch_shutdown_pending {
             self.shutdown_file_resources();
+            self.active_file_sinks.shutdown()?;
             self.batch_shutdown_pending = false;
         }
         Ok(())
@@ -4755,6 +4915,7 @@ impl VM {
     ) -> Result<ExecutionContext, RuntimeError> {
         let saved = self.take_execution_context(self.pc, ExecutionTarget::TopLevel);
         self.current_process_execution = saved.current_process_execution;
+        self.current_handler_bindings = saved.current_handler_bindings;
         self.frames = saved.frames.clone();
         self.tail_call_breadcrumbs = saved.tail_call_breadcrumbs.clone();
         let site = self.current_frame().ok().and_then(|f| f.call_site);
@@ -7292,6 +7453,7 @@ mod tests {
         ProcessRunOutcome, ProcessStatus, ProcessWaitReason, RuntimeOutputEvent, StepOutcome,
         TaskMode, VmFileError, VmFileMode, VmObservationOptions, VmRuntimeOutputEventSnapshot, VM,
     };
+    use super::{merge_handler_cleanup, RuntimeError, RuntimeHandlerTarget};
     use crate::builtin::BuiltinOutcome;
     use crate::error::RuntimeErrorKind;
     use sindr::ir::{
@@ -7309,8 +7471,10 @@ mod tests {
         Callable, CallableMetadata, CallableTarget, Location, PidHandle, PidKind, RichError,
         RuntimeCallKind, TypeEntry, TypeKind, TypeRegistry, Value,
     };
+    use std::collections::BTreeMap;
     use std::collections::VecDeque;
     use std::fs;
+    use std::path::Path;
     use std::path::PathBuf;
     fn test_source_error_template(kind: &str) -> ErrTemplate {
         ErrTemplate {
@@ -7849,6 +8013,7 @@ mod tests {
             pending_invocation: None,
             cancellation: None,
             current_process_execution: None,
+            current_handler_bindings: None,
             pc,
             target: ExecutionTarget::TopLevel,
         }
@@ -8356,6 +8521,7 @@ mod tests {
             pending_invocation: None,
             cancellation: None,
             current_process_execution: None,
+            current_handler_bindings: None,
             pc: 1,
             target: ExecutionTarget::FrameDepth(1),
         };
@@ -8628,9 +8794,9 @@ mod tests {
             .with_output_capture()
             .with_error_capture();
 
-        vm.out_handler_write(&handler_pid("StdOut"), "stdout-handler".into())
+        write_registered_handler(&mut vm, "StdOut", None, "stdout-handler".into())
             .expect("stdout handler should run");
-        vm.out_handler_write(&handler_pid("StdErr"), "stderr-handler".into())
+        write_registered_handler(&mut vm, "StdErr", None, "stderr-handler".into())
             .expect("stderr handler should run");
 
         assert_eq!(
@@ -9481,6 +9647,48 @@ mod tests {
         id
     }
 
+    fn write_registered_handler(
+        vm: &mut VM,
+        name: &str,
+        path: Option<&Path>,
+        text: String,
+    ) -> Result<BuiltinOutcome, RuntimeError> {
+        let targets = BTreeMap::from([(
+            "out".into(),
+            RuntimeHandlerTarget {
+                name: name.into(),
+                named_args: path
+                    .map(|path| {
+                        vec![sindr::ir::RuntimeHandlerArg {
+                            name: "path".into(),
+                            value: path.display().to_string(),
+                        }]
+                    })
+                    .unwrap_or_default(),
+            },
+        )]);
+        vm.process_runtime
+            .handler_contexts
+            .insert("Probe".into(), targets);
+        let context = vm.acquire_process_handlers("Probe")?;
+        let pid = vm
+            .process_runtime
+            .handlers
+            .as_ref()
+            .unwrap()
+            .handler(context, "Probe", "out")?;
+        let outcome = vm.out_handler_write(&pid, text)?;
+        let result = vm.drive_builtin_outcome(outcome);
+        let cleanup = vm.release_handler_context(context);
+        match result {
+            Ok(value) => {
+                cleanup?;
+                Ok(BuiltinOutcome::Complete(value))
+            }
+            Err(error) => Err(merge_handler_cleanup(error, cleanup)),
+        }
+    }
+
     fn handler_pid(identity: &str) -> PidHandle {
         PidHandle::new(0, identity.to_string(), PidKind::Handler)
     }
@@ -9514,22 +9722,19 @@ mod tests {
             .with_output_capture()
             .with_error_capture();
 
-        let stdout = vm
-            .out_handler_write(&handler_pid("StdOut"), "stdout-handler".into())
+        let stdout = write_registered_handler(&mut vm, "StdOut", None, "stdout-handler".into())
             .expect("stdout handler should run");
         assert_ok_unit_result(stdout);
         assert_eq!(vm.take_stdout(), vec!["stdout-handler".to_string()]);
         assert_eq!(vm.take_stderr(), Vec::<String>::new());
 
-        let stderr = vm
-            .out_handler_write(&handler_pid("StdErr"), "stderr-handler".into())
+        let stderr = write_registered_handler(&mut vm, "StdErr", None, "stderr-handler".into())
             .expect("stderr handler should run");
         assert_ok_unit_result(stderr);
         assert_eq!(vm.take_stdout(), Vec::<String>::new());
         assert_eq!(vm.take_stderr(), vec!["stderr-handler".to_string()]);
 
-        let null = vm
-            .out_handler_write(&handler_pid("NullOutHandler"), "muted".into())
+        let null = write_registered_handler(&mut vm, "NullOutHandler", None, "muted".into())
             .expect("null handler should run");
         assert_ok_unit_result(null);
         assert_eq!(vm.take_stdout(), Vec::<String>::new());
@@ -9541,24 +9746,21 @@ mod tests {
         let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
         vm.enable_repl_host_io_buffering();
 
-        let stdout = vm
-            .out_handler_write(&handler_pid("StdOut"), "stdout-host".into())
+        let stdout = write_registered_handler(&mut vm, "StdOut", None, "stdout-host".into())
             .expect("stdout handler should run");
         assert_ok_unit_result(stdout);
         assert_eq!(vm.take_repl_host_stdout(), vec!["stdout-host".to_string()]);
         assert_eq!(vm.take_repl_host_stderr(), Vec::<String>::new());
         assert_eq!(vm.take_stdout(), Vec::<String>::new());
 
-        let stderr = vm
-            .out_handler_write(&handler_pid("StdErr"), "stderr-host".into())
+        let stderr = write_registered_handler(&mut vm, "StdErr", None, "stderr-host".into())
             .expect("stderr handler should run");
         assert_ok_unit_result(stderr);
         assert_eq!(vm.take_repl_host_stdout(), Vec::<String>::new());
         assert_eq!(vm.take_repl_host_stderr(), vec!["stderr-host".to_string()]);
         assert_eq!(vm.take_stderr(), Vec::<String>::new());
 
-        let null = vm
-            .out_handler_write(&handler_pid("NullOutHandler"), "muted".into())
+        let null = write_registered_handler(&mut vm, "NullOutHandler", None, "muted".into())
             .expect("null handler should run");
         assert_ok_unit_result(null);
         assert_eq!(vm.take_repl_host_stdout(), Vec::<String>::new());
@@ -9571,12 +9773,9 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("temp dir should be created");
         let path = dir.join("process.log");
         let _ = std::fs::remove_file(&path);
-        let file = vm
-            .out_handler_write(
-                &handler_pid(&format!("FileOutHandler(path={})", path.display())),
-                "file-host\n".into(),
-            )
-            .expect("file handler should run");
+        let file =
+            write_registered_handler(&mut vm, "FileOutHandler", Some(&path), "file-host\n".into())
+                .expect("file handler should run");
         assert_ok_unit_result(file);
         assert_eq!(vm.take_repl_host_stdout(), Vec::<String>::new());
         assert_eq!(vm.take_repl_host_stderr(), Vec::<String>::new());
@@ -9596,17 +9795,16 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("temp dir should be created");
         let path = dir.join("process.log");
         let _ = std::fs::remove_file(&path);
-        let identity = format!("FileOutHandler(path={})", path.display());
 
         let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]))
             .with_output_capture()
             .with_error_capture();
-        let first = vm
-            .out_handler_write(&handler_pid(&identity), "one\n".into())
-            .expect("file handler should run");
-        let second = vm
-            .out_handler_write(&handler_pid(&identity), "two\n".into())
-            .expect("file handler should append");
+        let first =
+            write_registered_handler(&mut vm, "FileOutHandler", Some(&path), "one\n".into())
+                .expect("file handler should run");
+        let second =
+            write_registered_handler(&mut vm, "FileOutHandler", Some(&path), "two\n".into())
+                .expect("file handler should append");
 
         assert_ok_unit_result(first);
         assert_ok_unit_result(second);
@@ -9621,33 +9819,38 @@ mod tests {
     }
 
     #[test]
-    fn out_handler_write_reports_invalid_file_and_unknown_targets_as_result_errors() {
-        let missing_path = std::env::temp_dir()
-            .join("surtr-eldr-missing-parent")
-            .join("process.log");
-        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]))
-            .with_output_capture()
-            .with_error_capture();
-        install_process_error_definitions(&mut vm);
-
-        let without_path = vm
-            .out_handler_write(&handler_pid("FileOutHandler"), "ignored".into())
-            .expect_err("missing path is metadata corruption");
-        assert!(without_path.message.contains("requires named argument"));
-
-        let missing_parent = vm
-            .out_handler_write(
-                &handler_pid(&format!("FileOutHandler(path={})", missing_path.display())),
-                "ignored".into(),
-            )
-            .expect("open failure should be a Result error");
-        let missing_parent = vm.drive_builtin_outcome(missing_parent).unwrap();
-        assert_err_result(missing_parent, "FileOutHandlerOpenFailed", "open failed");
-
-        let unknown = vm
-            .out_handler_write(&handler_pid("BogusOutHandler"), "ignored".into())
-            .expect_err("unknown handler is metadata corruption");
-        assert!(unknown.message.contains("unknown OutHandler"));
+    fn out_handler_write_rejects_unregistered_and_forged_identities() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        assert!(vm
+            .out_handler_write(&handler_pid("StdOut"), "ignored".into())
+            .unwrap_err()
+            .message
+            .contains("unregistered"));
+        let targets = BTreeMap::from([(
+            "out".into(),
+            RuntimeHandlerTarget {
+                name: "StdOut".into(),
+                named_args: Vec::new(),
+            },
+        )]);
+        vm.process_runtime
+            .handler_contexts
+            .insert("Probe".into(), targets);
+        let context = vm.acquire_process_handlers("Probe").unwrap();
+        let real = vm
+            .process_runtime
+            .handlers
+            .as_ref()
+            .unwrap()
+            .handler(context, "Probe", "out")
+            .unwrap();
+        let fake = PidHandle::new(real.id, real.process_name.clone(), PidKind::Handler);
+        assert!(vm
+            .out_handler_write(&fake, "ignored".into())
+            .unwrap_err()
+            .message
+            .contains("identity mismatch"));
+        vm.release_handler_context(context).unwrap();
     }
 
     #[test]
@@ -9680,7 +9883,7 @@ mod tests {
             .open_file_resource(&path_text, VmFileMode::Write)
             .expect("file handle should open");
         assert_eq!(vm.open_file_count(), 1);
-        vm.rollback_to_checkpoint(checkpoint);
+        vm.rollback_to_checkpoint(checkpoint).unwrap();
         assert_eq!(
             vm.open_file_count(),
             0,
@@ -10151,7 +10354,7 @@ mod tests {
         assert!(vm.process_runtime.futures.contains_key(&future_id));
         assert!(vm.process_runtime.reply_table.contains_key(&correlation_id));
 
-        vm.rollback_to_checkpoint(checkpoint);
+        vm.rollback_to_checkpoint(checkpoint).unwrap();
         assert!(vm.process_runtime.futures.is_empty());
         assert!(vm.process_runtime.reply_table.is_empty());
         assert!(vm.process_runtime.deadline_queue.is_empty());
@@ -12692,7 +12895,7 @@ mod tests {
         vm.drain_background_tasks().unwrap();
         assert_eq!(vm.open_file_count(), 0);
         assert_eq!(fs::read_to_string(&path).unwrap(), "before-after");
-        vm.rollback_to_checkpoint(checkpoint);
+        vm.rollback_to_checkpoint(checkpoint).unwrap();
         assert_eq!(vm.open_file_count(), 1);
         assert!(vm.ready_future_value(future).is_none());
         vm.write_file_chunk(handle, "resumed-").unwrap();
@@ -13399,4 +13602,14 @@ mod tests {
         );
         assert_eq!(observation.stats.process.future_count, task_count * 2);
     }
+}
+
+fn merge_handler_cleanup(
+    mut original: RuntimeError,
+    cleanup: Result<(), RuntimeError>,
+) -> RuntimeError {
+    if let Err(error) = cleanup {
+        original.retain_secondary_failure(&error, "handler cleanup");
+    }
+    original
 }

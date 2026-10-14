@@ -248,7 +248,7 @@ fn checkpoint_restores_pending_stack_and_future_table_before_redelivery() {
     vm.forget_internal_future(future);
     let added = vm.process_runtime.allocate_future(None, None, false);
 
-    vm.rollback_to_checkpoint(saved);
+    vm.rollback_to_checkpoint(saved).unwrap();
     assert_eq!(vm.stack, vec![Value::PendingFuture(future); 2]);
     assert!(vm.process_runtime.futures.contains_key(&future));
     assert!(!vm.process_runtime.futures.contains_key(&added));

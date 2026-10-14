@@ -190,7 +190,7 @@ fn replacement_preserves_saved_lookup_and_handler_targets_until_rollback() {
         "ChangedOutput"
     );
 
-    vm.rollback_to_checkpoint(saved);
+    vm.rollback_to_checkpoint(saved).unwrap();
     assert_eq!(
         vm.process_runtime
             .spec_for_id(0)
@@ -304,7 +304,7 @@ fn process_metadata_profile() {
             .register_spec_table(black_box(&replacement));
         register_ns.push(started.elapsed().as_nanos() as u64);
         let started = Instant::now();
-        live.rollback_to_checkpoint(black_box(saved));
+        live.rollback_to_checkpoint(black_box(saved)).unwrap();
         rollback_ns.push(started.elapsed().as_nanos() as u64);
         assert_eq!(live.process_runtime.spec_registry.specs_by_id.len(), n);
 

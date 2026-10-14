@@ -912,6 +912,15 @@ impl ListHandle {
         }
     }
 
+    /// Borrow sequence values without cloning owned payloads or retaining a tail.
+    pub fn iter_refs(&self) -> ListRefIter<'_> {
+        ListRefIter {
+            remaining: self,
+            offset: None,
+            len: self.len,
+        }
+    }
+
     pub fn iter(&self) -> ListIter {
         ListIter {
             remaining: self.clone(),
@@ -956,6 +965,43 @@ impl fmt::Debug for ListHandle {
         f.debug_list().entries(self.iter()).finish()
     }
 }
+
+pub struct ListRefIter<'a> {
+    remaining: &'a ListHandle,
+    offset: Option<usize>,
+    len: usize,
+}
+
+impl<'a> Iterator for ListRefIter<'a> {
+    type Item = &'a Value;
+    fn next(&mut self) -> Option<Self::Item> {
+        let value = match &self.remaining.repr {
+            ListRepr::Empty => return None,
+            ListRepr::Cons(node) => {
+                self.remaining = &node.tail;
+                &node.value
+            }
+            ListRepr::Packed(packed) => {
+                let offset = self.offset.unwrap_or(packed.offset);
+                let value = &packed.chunk.items[offset];
+                if offset + 1 == packed.chunk.items.len() {
+                    self.remaining = &packed.chunk.tail;
+                    self.offset = None;
+                } else {
+                    self.offset = Some(offset + 1);
+                }
+                value
+            }
+        };
+        self.len -= 1;
+        Some(value)
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.len, Some(self.len))
+    }
+}
+impl ExactSizeIterator for ListRefIter<'_> {}
+impl std::iter::FusedIterator for ListRefIter<'_> {}
 
 pub struct ListIter {
     remaining: ListHandle,
@@ -2156,6 +2202,37 @@ mod tests {
         assert_eq!(
             rich.to_eprint_lines(),
             vec!["Error: PatternMismatch: Pattern did not match.".to_string()]
+        );
+    }
+}
+
+#[cfg(test)]
+mod borrowed_list_tests {
+    use super::*;
+    #[test]
+    fn borrowed_iteration_preserves_payload_buffers_across_cons_chunks_and_offset() {
+        let text = "large payload".repeat(4096);
+        let buffer = text.as_ptr();
+        let list = ListHandle::from_items(
+            (0..LIST_CHUNK_CAPACITY + 3)
+                .map(|i| Value::Int(i.into()))
+                .chain([Value::Str(text)])
+                .collect(),
+        );
+        let list = ListHandle::cons(Value::Unit, &list)
+            .tail_handle()
+            .unwrap()
+            .tail_handle()
+            .unwrap();
+        assert_eq!(list.iter_refs().len(), LIST_CHUNK_CAPACITY + 3);
+        let values: Vec<_> = list.iter_refs().collect();
+        let Value::Str(text) = values.last().unwrap() else {
+            panic!()
+        };
+        assert_eq!(text.as_ptr(), buffer);
+        assert_eq!(
+            values.into_iter().cloned().collect::<Vec<_>>(),
+            list.iter().collect::<Vec<_>>()
         );
     }
 }

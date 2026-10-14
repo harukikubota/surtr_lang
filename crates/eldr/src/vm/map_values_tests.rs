@@ -211,7 +211,7 @@ fn map_values_checkpoint_restores_independent_partial_output_and_callback_positi
         saved_continuations,
         "advancing the live output must not change the saved partial map"
     );
-    vm.rollback_to_checkpoint(saved);
+    vm.rollback_to_checkpoint(saved).unwrap();
     assert!(vm.ready_future_value(future).is_none());
     assert_eq!(vm.output.as_ref().unwrap(), &["1", "2"]);
     let mut restored = vm.take_execution_context(vm.pc, target);

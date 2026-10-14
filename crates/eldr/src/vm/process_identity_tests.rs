@@ -165,7 +165,7 @@ fn checkpoint_before_stop_preserves_body_and_acceptance_without_live_pollution()
     assert!(saved.identity.same_identity(&pid));
     assert!(checkpoint.process_runtime.stopped_identities.is_empty());
 
-    vm.rollback_to_checkpoint(checkpoint);
+    vm.rollback_to_checkpoint(checkpoint).unwrap();
     assert!(!vm.stopped_identity_matches(&pid));
     let restored = vm.process_handle(pid.id).unwrap();
     assert!(restored.same_identity(&pid));
@@ -322,7 +322,7 @@ fn stopping_checkpoint_restores_waiting_wrapper_frames_and_delivers_reply_once()
         "checkpoint retains suspended closure frame"
     );
 
-    vm.rollback_to_checkpoint(checkpoint);
+    vm.rollback_to_checkpoint(checkpoint).unwrap();
     assert!(vm.process_handle(pid.id).unwrap().same_identity(&pid));
     assert_eq!(
         vm.process_runtime
@@ -364,7 +364,7 @@ fn rollback_does_not_reuse_pid_or_reconnect_failed_chunk_handle() {
     let checkpoint = vm.checkpoint_for_chunk(&empty_chunk());
     let failed_chunk_pid = spawn(&mut vm, Value::Unit);
     let discarded_id = failed_chunk_pid.id;
-    vm.rollback_to_checkpoint(checkpoint);
+    vm.rollback_to_checkpoint(checkpoint).unwrap();
     assert!(vm
         .process_handle(original.id)
         .unwrap()

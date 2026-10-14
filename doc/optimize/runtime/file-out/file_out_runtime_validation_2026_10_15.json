@@ -1,0 +1,203 @@
+{
+  "base_commit": "c277f7b0af3d0abbc51a898227c2e9ef67d53af0",
+  "runs": {
+    "fileout-raw-ready": {
+      "command": [
+        "rtk",
+        "cargo",
+        "nextest",
+        "run",
+        "-p",
+        "eldr",
+        "waiting_without_context_keeps"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 2.8612269580007705,
+      "CARGO_TARGET_DIR": "/tmp/surtr-oi036-debug-target",
+      "log": "fileout-raw-ready_2026_10_15.log",
+      "log_sha256": "3727b124992fabcbee2d40376438285b54afbd45bcf25068116dc9502b7ac3a1"
+    },
+    "fileout-final-ci": {
+      "command": [
+        "rtk",
+        "cargo",
+        "nextest",
+        "run",
+        "--profile",
+        "ci",
+        "--workspace"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 116.44228079200002,
+      "CARGO_TARGET_DIR": "/tmp/surtr-oi036-debug-target",
+      "log": "fileout-final-ci_2026_10_15.log",
+      "log_sha256": "19226f4c1139ccec639ad98a79cc5d490058871a0334ed4d0b0cdbcc01794376"
+    },
+    "fileout-final-stdlib": {
+      "command": [
+        "rtk",
+        "proxy",
+        "cargo",
+        "run",
+        "--locked",
+        "--",
+        "test",
+        "--quiet",
+        "--all",
+        "--format=json"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 22.62692245799917,
+      "CARGO_TARGET_DIR": "/tmp/surtr-oi036-debug-target",
+      "log": "fileout-final-stdlib_2026_10_15.log",
+      "log_sha256": "68b3b46eff5e7e92380aaf939e4c5523196236666a1cca4b0f959cc459adb7b3",
+      "summary": {
+        "discovered": 1124,
+        "executed": 1124,
+        "failed": 0,
+        "filtered": 0,
+        "passed": 1124,
+        "pending": 0,
+        "policy_errors": 0,
+        "runnable": 0,
+        "scope_failures": 0,
+        "script_errors": 0,
+        "selected": 1124,
+        "skipped": 0
+      }
+    },
+    "fileout-final-focused": {
+      "command": [
+        "rtk",
+        "cargo",
+        "nextest",
+        "run",
+        "-p",
+        "eldr",
+        "-p",
+        "sindr"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 5.174457416000223,
+      "CARGO_TARGET_DIR": "/tmp/surtr-oi036-debug-target",
+      "log": "fileout-final-focused_2026_10_15.log",
+      "log_sha256": "1f8ba0b3d7c0e830c0d5a54fa794470855de983fb68625bee26412316806f494"
+    },
+    "fileout-final-all-ci": {
+      "command": [
+        "rtk",
+        "cargo",
+        "nextest",
+        "run",
+        "--profile",
+        "ci",
+        "--workspace"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 118.03860933300166,
+      "CARGO_TARGET_DIR": "/tmp/surtr-oi036-debug-target",
+      "log": "fileout-final-all-ci_2026_10_15.log",
+      "log_sha256": "30ffa257c1cf13afe1dc85ad6f3d0deca2c4b0d7a1143bd2c6b84c51cb96df79"
+    },
+    "fileout-final-all-stdlib": {
+      "command": [
+        "rtk",
+        "proxy",
+        "cargo",
+        "run",
+        "--locked",
+        "--",
+        "test",
+        "--quiet",
+        "--all",
+        "--format=json"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 22.668141958998604,
+      "CARGO_TARGET_DIR": "/tmp/surtr-oi036-debug-target",
+      "log": "fileout-final-all-stdlib_2026_10_15.log",
+      "log_sha256": "752ed3119e016c16cbf09d9163f4de981718cf155c414533c0af960812f815f9",
+      "summary": {
+        "discovered": 1124,
+        "executed": 1124,
+        "failed": 0,
+        "filtered": 0,
+        "passed": 1124,
+        "pending": 0,
+        "policy_errors": 0,
+        "runnable": 0,
+        "scope_failures": 0,
+        "script_errors": 0,
+        "selected": 1124,
+        "skipped": 0
+      }
+    }
+  },
+  "focused": {
+    "eldr_sindr_passed": 558,
+    "binaries": 6,
+    "namespace_and_script_passed": 19,
+    "initial_acquisition_red": {
+      "passed": 0,
+      "failed": 2,
+      "expected_failures": [
+        "init observes missing dependency file",
+        "invalid parent does not prevent init"
+      ]
+    },
+    "fifo_red": {
+      "passed": 0,
+      "failed": 1,
+      "expected_failure": "acceptance performs external write before yield"
+    },
+    "setup_failures_excluded": [
+      "PID-returning closure fixture violates existing return restrictions (first stage)",
+      "Worker default args parse rejection",
+      "Worker supervisor_init codegen rejection",
+      "test helper visibility compile error"
+    ],
+    "worker_surface": "Existing grammar allows no args in handler defaults and rejects Worker in supervisor_init. Worker acquisition is tested directly with valid runtime metadata; no language rule expanded.",
+    "final_ci_passed": 2614,
+    "additional_regression_red": [
+      "started Task cancellation loses native write failure cause",
+      "secondary RuntimeError overwrites cancellation kind",
+      "second sink flush failure loses diagnostic",
+      "bare process alias disagrees with canonical slot key",
+      "empty path is incorrectly rejected as metadata"
+    ]
+  },
+  "review": "Independent final code and evidence audit completed; no required findings. 15 source hashes and 6 log hashes match; latest focused 558, CI 2614/70 binaries, stdlib 1124 all successful.",
+  "historical_source_sha256": {
+    "crates/eldr/src/vm.rs": "eac2d621a9ae497812bab66267d21f025ea76ea2b64cf47b6f2170db7d1d86cd",
+    "crates/eldr/src/vm/checkpoint_boot_plan_tests.rs": "0e3c5ccc4d74b25a151df1d76b80d39c344a49dba4d03ad80113e7afd0a2cca3",
+    "crates/eldr/src/vm/checkpoint_collections_tests.rs": "2bc8be8e89aaf9b7b07c90c8a6cd65c7787c344f07ddbc0f2b22d07cb5db3a88",
+    "crates/eldr/src/vm/checkpoint_metadata_tests.rs": "6454c2e2000adcd1cf15c95bee945588d86653c11ba5ca985418bc7a53655eac",
+    "crates/eldr/src/vm/continuation.rs": "23bef5b0e29de70f26ce2481b82dc83f600bb7c9322aa8335b09f0bca2bcb635",
+    "crates/eldr/src/vm/future_stack_tests.rs": "f3f227c5e8219e743d4a25e385adbeb2a11bb781889460ddc1d027e5bf4c2224",
+    "crates/eldr/src/vm/list_flat_map_tests.rs": "adbf528b67e0b96c353a59a0b878a44afe0882920b4c59bfa06083489621f858",
+    "crates/eldr/src/vm/map_values_tests.rs": "7335ce6a0a126414258e3acc12f34e2574850d99c40ed50bd2df23a6fcffc999",
+    "crates/eldr/src/vm/process_continuation.rs": "4a2fde62ea4600228475dd179311eb1b07541137fe07b6862b64ddd06a697b9f",
+    "crates/eldr/src/vm/process_identity_tests.rs": "f4dde5efe30bbc50efb4e44362d09463ab3cad55eb7513dd9267bc08b585e1d4",
+    "crates/eldr/src/vm/process_stop_tests.rs": "6b08b56e923eabbba3d0797d10f49b5028f18656221e92ce102feca87afa9ffb",
+    "crates/sindr/src/runtime.rs": "557ff7e62d525e515b5ce04f940604140798f05d59766527a0e47e140c376d72",
+    "tests/integration/namespaces.rs": "949b11601e07de6f17baa5c6e661f7afda6b1958c72a69e56562e2b7f3a5ab3f",
+    "crates/eldr/src/vm/handler_bindings.rs": "9f71677c297962d6ed4d7263e832a4ffccc8daea33b0b275ae122af752c77664"
+  },
+  "source_sha256": {
+    "crates/eldr/src/vm.rs": "829ab2523f6f882397bf8eb97892d1bf39a71c760d2dd076010dd90f412f4a15",
+    "crates/eldr/src/vm/checkpoint_boot_plan_tests.rs": "0e3c5ccc4d74b25a151df1d76b80d39c344a49dba4d03ad80113e7afd0a2cca3",
+    "crates/eldr/src/vm/checkpoint_collections_tests.rs": "2bc8be8e89aaf9b7b07c90c8a6cd65c7787c344f07ddbc0f2b22d07cb5db3a88",
+    "crates/eldr/src/vm/checkpoint_metadata_tests.rs": "6454c2e2000adcd1cf15c95bee945588d86653c11ba5ca985418bc7a53655eac",
+    "crates/eldr/src/vm/continuation.rs": "cd59cdeba9821cbf8bb1f459863d50d8dd2248cbfa90662cdbb40628953d2fd2",
+    "crates/eldr/src/vm/future_stack_tests.rs": "f3f227c5e8219e743d4a25e385adbeb2a11bb781889460ddc1d027e5bf4c2224",
+    "crates/eldr/src/vm/list_flat_map_tests.rs": "adbf528b67e0b96c353a59a0b878a44afe0882920b4c59bfa06083489621f858",
+    "crates/eldr/src/vm/map_values_tests.rs": "7335ce6a0a126414258e3acc12f34e2574850d99c40ed50bd2df23a6fcffc999",
+    "crates/eldr/src/vm/process_continuation.rs": "f0285fd630c6e6a64e4b5febef13ade5d26580c6d677e049312bcc11ebdefcdc",
+    "crates/eldr/src/vm/process_identity_tests.rs": "f4dde5efe30bbc50efb4e44362d09463ab3cad55eb7513dd9267bc08b585e1d4",
+    "crates/eldr/src/vm/process_stop_tests.rs": "6b08b56e923eabbba3d0797d10f49b5028f18656221e92ce102feca87afa9ffb",
+    "crates/sindr/src/runtime.rs": "557ff7e62d525e515b5ce04f940604140798f05d59766527a0e47e140c376d72",
+    "tests/integration/namespaces.rs": "949b11601e07de6f17baa5c6e661f7afda6b1958c72a69e56562e2b7f3a5ab3f",
+    "crates/eldr/src/vm/handler_bindings.rs": "820ad5053f0e57a7847f0c06aa89b9199deef6769228cc95a0d5467da4eb809b",
+    "crates/eldr/src/error.rs": "cf619a75d697152142fd0c183d9367d03ea940eb8270c1fd4d024c4a21906b78"
+  }
+}

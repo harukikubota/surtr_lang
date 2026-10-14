@@ -106,6 +106,20 @@ impl RuntimeError {
             .unwrap_or(RuntimeErrorKind::Generic)
     }
 
+    pub(crate) fn retain_secondary_failure(&mut self, secondary: &RuntimeError, label: &str) {
+        if secondary.message != self.message || secondary.kind() != self.kind() {
+            self.context.details.push(format!("{label}: {secondary}"));
+        }
+        for detail in &secondary.context.details {
+            // The secondary failure must never redefine the primary kind.
+            if !detail.starts_with(RUNTIME_ERROR_KIND_DETAIL_PREFIX)
+                && !self.context.details.contains(detail)
+            {
+                self.context.details.push(detail.clone());
+            }
+        }
+    }
+
     fn set_kind(&mut self, kind: RuntimeErrorKind) {
         self.context
             .details

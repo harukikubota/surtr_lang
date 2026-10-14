@@ -50,4 +50,4 @@ crate-localの直接テストから始め、通常入口の成功・拒否とfai
 - HashMap: [前処理と構築の分割](hashmap/hashmap_preparation_split_2026_10_15.md)を実装し、所有entryの全cloneを削減。全内容と時間・確保系列を確認し、CI 2,581件成功。OI-038のRSS原因は継続。
 - Regex: [探索・収集の分割](regex/regex_collection_split_2026_10_15.md)と全検証を完了。通常CLIの速度改善は未確認、RSS小幅増を記録。
 - Future: [cleanup表の一括検索と小さい収集内cache](value/future_cleanup_snapshot_2026_10_15.md)を実装・検証。CI 2,586件・標準1,124件成功。条件ごとの追加費用・通常CLIの未確認の速度改善を記録し、OI-037は継続。
-- FileOut: [第一段階のctx capture](file-out/file_out_handler_implementation_2026_10_15.md)を実装し、CI 2,588件・標準1,124件と独立レビュー成功。descriptor・owner・FIFO・復帰は未実装。FileOutの仕様段階レビューで、escaping closureのctx captureとTask bindingの所有接続を確認した。普通のPIDやclosureの保持だけでactive owner数を増やさず、process / init / Task / 未完了writeの所有と保存leaseを分ける。
+- FileOut: [第一段階のctx capture](file-out/file_out_handler_implementation_2026_10_15.md)を実装し、CI 2,588件・標準1,124件と独立レビュー成功。構造化binding・init前取得・descriptor / owner・FIFO・snapshot復帰を実装。最終CI 2,614件・標準1,124件成功。最終製品差分・検証記録の独立レビュー完了。OI-040を解決。FileOutの仕様段階レビューで、escaping closureのctx captureとTask bindingの所有接続を確認した。普通のPIDやclosureの保持だけでactive owner数を増やさず、process / init / Task / 未完了writeの所有と保存leaseを分ける。
