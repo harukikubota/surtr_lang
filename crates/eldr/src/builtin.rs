@@ -59,6 +59,9 @@ pub(crate) enum BuiltinContinuation {
     FlatMap(FlatMapContinuation),
     ListFinish(list_finish::ListFinishContinuation),
     MapValues(map_values::MapValuesContinuation),
+    SortedMap(map_values::SortedMapContinuation),
+    MapList(map_values::MapListContinuation),
+    MapFromEntries(map_values::MapFromEntriesContinuation),
     Generator(generator::GeneratorContinuation),
     Runtime(crate::vm::RuntimeContinuation),
     Identity,
@@ -82,6 +85,9 @@ impl BuiltinContinuation {
             Self::FlatMap(continuation) => return continuation.resume(result),
             Self::ListFinish(continuation) => return continuation.resume(result),
             Self::MapValues(continuation) => return continuation.resume(result),
+            Self::SortedMap(continuation) => return continuation.resume(result),
+            Self::MapList(continuation) => return continuation.resume(result),
+            Self::MapFromEntries(continuation) => return continuation.resume(result),
             Self::Generator(continuation) => return continuation.resume(vm, result),
             Self::Runtime(continuation) => return continuation.resume(vm, result),
             Self::Identity => result?,
@@ -253,7 +259,7 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "map_from_entries",
-        func: |vm, args| builtin_map_from_entries(vm, args).map(BuiltinOutcome::Complete),
+        func: map_values::builtin_map_from_entries,
     },
     BuiltinImpl {
         name: "map_len",
@@ -277,11 +283,11 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "map_keys",
-        func: |vm, args| builtin_map_keys(vm, args).map(BuiltinOutcome::Complete),
+        func: map_values::builtin_map_keys,
     },
     BuiltinImpl {
         name: "map_values_list",
-        func: |vm, args| builtin_map_values_list(vm, args).map(BuiltinOutcome::Complete),
+        func: map_values::builtin_map_values_list,
     },
     BuiltinImpl {
         name: "view",
@@ -2533,40 +2539,6 @@ fn builtin_empty_map(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeEr
     Ok(Value::HashMap(HashMapHandle::empty()))
 }
 
-fn builtin_map_from_entries(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let Value::List(entries) = &args[0] else {
-        return Err(RuntimeError::new(
-            "map_from_entries expects List<(String, V)>",
-        ));
-    };
-
-    let mut map = HashMapHandle::empty();
-    for (index, entry) in entries.iter().enumerate() {
-        let Value::Tuple(items) = entry else {
-            return Err(RuntimeError::new(format!(
-                "map_from_entries expects tuple entries at index {}, got {:?}",
-                index, entry
-            )));
-        };
-        let [key, value] = items.as_slice() else {
-            return Err(RuntimeError::new(format!(
-                "map_from_entries expects (String, V) tuples at index {}, got arity {}",
-                index,
-                items.len()
-            )));
-        };
-        let Value::Str(key) = key else {
-            return Err(RuntimeError::new(format!(
-                "map_from_entries expects String key at index {}, got {:?}",
-                index, key
-            )));
-        };
-        map.entries.insert(key.clone(), value.clone());
-    }
-
-    Ok(Value::HashMap(map))
-}
-
 fn builtin_map_len(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let map = decode_hash_map_arg(&args[0], "map_len", "map")?;
     Ok(Value::Int(int(map.len() as u64)))
@@ -2598,17 +2570,6 @@ fn builtin_map_remove(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeEr
     let map = decode_hash_map_arg(&args[0], "map_remove", "map")?;
     let key = decode_string_arg(&args[1], "map_remove", "key")?;
     Ok(Value::HashMap(map.remove(key)))
-}
-
-fn builtin_map_keys(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let map = decode_hash_map_arg(&args[0], "map_keys", "map")?;
-    let items = map.keys().into_iter().map(Value::Str).collect::<Vec<_>>();
-    Ok(Value::List(ListHandle::from_items(items)))
-}
-
-fn builtin_map_values_list(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let map = decode_hash_map_arg(&args[0], "map_values_list", "map")?;
-    Ok(Value::List(ListHandle::from_items(map.values())))
 }
 
 fn facet_index_to_usize(index: &SurtrInt, len: usize) -> Result<usize, LanguageErrorInput> {

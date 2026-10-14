@@ -8,26 +8,34 @@ pub(super) enum Invocation {
 }
 
 impl ExecutionContext {
-    /// A pure finish transition changes neither frames nor the delivery target.
-    pub(super) fn resume_list_finish(&mut self, budget: &mut Budget) -> bool {
+    /// Pure bounded transitions change neither frames nor the delivery target.
+    pub(super) fn resume_pure_builtin(&mut self, budget: &mut Budget) -> bool {
         if budget.expired()
             || self.cancellation.is_some()
             || !matches!(
                 self.pending_invocation.as_ref(),
                 Some(Ok(Invocation::Builtin(BuiltinOutcome::Resume(
                     BuiltinContinuation::ListFinish(_)
+                        | BuiltinContinuation::SortedMap(_)
+                        | BuiltinContinuation::MapList(_)
+                        | BuiltinContinuation::MapFromEntries(_)
                 ))))
             )
         {
             return false;
         }
-        let Some(Ok(Invocation::Builtin(BuiltinOutcome::Resume(BuiltinContinuation::ListFinish(
-            continuation,
-        ))))) = self.pending_invocation.take()
+        let Some(Ok(Invocation::Builtin(BuiltinOutcome::Resume(continuation)))) =
+            self.pending_invocation.take()
         else {
-            unreachable!("checked List finish invocation");
+            unreachable!("checked pure builtin invocation");
         };
-        let (outcome, used) = continuation.resume_steps(budget.remaining());
+        let (outcome, used) = match continuation {
+            BuiltinContinuation::ListFinish(next) => next.resume_steps(budget.remaining()),
+            BuiltinContinuation::SortedMap(next) => next.resume_steps(budget.remaining()),
+            BuiltinContinuation::MapList(next) => next.resume_steps(budget.remaining()),
+            BuiltinContinuation::MapFromEntries(next) => next.resume_steps(budget.remaining()),
+            _ => unreachable!("checked pure builtin continuation"),
+        };
         budget.consume(used);
         self.pending_invocation = Some(outcome.map(Invocation::Builtin));
         true

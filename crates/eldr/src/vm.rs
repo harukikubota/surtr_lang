@@ -44,6 +44,8 @@ mod future_stack_tests;
 #[cfg(test)]
 mod generator_tests;
 #[cfg(test)]
+mod hash_map_tests;
+#[cfg(test)]
 mod list_flat_map_tests;
 #[cfg(test)]
 mod map_values_tests;
@@ -4495,7 +4497,7 @@ impl VM {
             if budget.expired() {
                 return ProcessRunOutcome::QuantumExpired;
             }
-            if entered_context && context.resume_list_finish(budget) {
+            if entered_context && context.resume_pure_builtin(budget) {
                 self.pc = context.pc;
                 continue;
             }

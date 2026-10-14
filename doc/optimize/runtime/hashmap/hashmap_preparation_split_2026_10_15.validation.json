@@ -1,0 +1,55 @@
+{
+  "base": "b9e7a376",
+  "level": 3,
+  "checks": {
+    "ci": {
+      "command": [
+        "rtk",
+        "cargo",
+        "nextest",
+        "run",
+        "--locked",
+        "--profile",
+        "ci",
+        "--workspace"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 119.13224329200057,
+      "log": "/tmp/surtr-runtime-six/hashmap-ci.log"
+    },
+    "stdlib": {
+      "command": [
+        "rtk",
+        "proxy",
+        "cargo",
+        "run",
+        "--locked",
+        "--",
+        "test",
+        "--quiet",
+        "--all"
+      ],
+      "exit_code": 0,
+      "target": "/tmp/surtr-oi036-debug-target"
+    }
+  },
+  "ci_passed": 2581,
+  "eldr_passed": 398,
+  "stdlib": "all, exit 0; quiet mode does not print a count",
+  "quality": [
+    "cargo fmt --all --check",
+    "git diff --check",
+    "Python py_compile"
+  ],
+  "accepted_measurement_source_hashes_match": true,
+  "red": "owned String input and Resume before sort: old path fails the assertion",
+  "corrected_setup_failures": [
+    "missing test import (compile failure, not intended Red)",
+    "inclusive Generator::range endpoint in fixture"
+  ],
+  "limitations": [
+    "physical entry moves, Value operations and individual String comparisons remain synchronous",
+    "OI-038 allocator/RSS cause unresolved",
+    "manual VM workload is not isolated sort or ordinary CLI timing"
+  ]
+}

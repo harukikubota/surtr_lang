@@ -1,0 +1,13 @@
+numbers = Generator::range(0, 999) |> Generator::to_list()
+entries = List::map(numbers, {|n| (inspect(n), n)})
+source = HashMap::map_from_entries(entries)
+
+task = Task::async({||
+  result = HashMap::map_values(source, {|n|
+    if(n == 0, print("mapped"), ())
+    n
+  })
+  Ok(HashMap::map_len(result))
+})
+print("started")
+print(inspect(Task::await(task)))

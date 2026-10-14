@@ -72,3 +72,15 @@ uses an uncommitted product diff on the base commit. Measurements use randomized
 Rust hash seeds across fresh processes.
 Results describe these inputs, not scheduler fairness, cancellation, checkpoint,
 JSON object conversion or compiler/REPL/Task/process entry performance.
+
+## Budgeted preparation adoption (2026-10-15)
+
+`build.py` saves Cargo artifact manifests, exact source hashes and an immutable
+probe binary for each source/mode. `preparation.py --help` documents the four
+build-metadata inputs and output directory. Use separate targets for count/time
+and before/after. The accepted series compares b9e7a376 with the budgeted
+preparation implementation: 72 full-content verification and 864 measurement
+processes, six alternating samples per configuration. The workload/metrics
+source is unchanged. Run only after all builds and tests finish. See
+[the report](../../../doc/optimize/runtime/hashmap/hashmap_preparation_split_2026_10_15.md)
+for scope, synchronous work, and the unresolved OI-038 attribution.
