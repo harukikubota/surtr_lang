@@ -1,0 +1,8124 @@
+{
+  "scope": "real suspended VM Tasks, checkpoint/resume/shared and unique completion",
+  "builds": {
+    "before": {
+      "scope": "Eldr internal VM test executable; release",
+      "source_root": "/private/tmp/surtr-runtime-six/baseline",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "eldr",
+        "--lib",
+        "--no-run",
+        "--message-format=json",
+        "--target-dir",
+        "/private/tmp/surtr-runtime-six/builder-before-target",
+        "--release"
+      ],
+      "artifact": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///private/tmp/surtr-runtime-six/baseline/crates/eldr#0.1.0",
+        "manifest_path": "/private/tmp/surtr-runtime-six/baseline/crates/eldr/Cargo.toml",
+        "target": {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "eldr",
+          "src_path": "/private/tmp/surtr-runtime-six/baseline/crates/eldr/src/lib.rs",
+          "edition": "2021",
+          "doc": true,
+          "doctest": true,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": true
+        },
+        "features": [
+          "default",
+          "terminal-io"
+        ],
+        "filenames": [
+          "/private/tmp/surtr-runtime-six/builder-before-target/release/deps/eldr-7ddf4dcb324afb88"
+        ],
+        "executable": "/private/tmp/surtr-runtime-six/builder-before-target/release/deps/eldr-7ddf4dcb324afb88",
+        "fresh": false
+      },
+      "binary": "/private/tmp/surtr-runtime-six/builder-before/eldr-test",
+      "binary_sha256": "2297ba4369ec38e5a918e9154c5c3ac2552c40154b9f28a4acad58bbca2712e1",
+      "source_sha256": {
+        "Cargo.toml": "38e9103e083681e21ce66c2215d1c4440b7aa7556222c97a2815fba5b5809017",
+        "Cargo.lock": "2246d4ad3488ad37f2e96e2e3a7eff6f5ce5fa70cb454712e86ec542176105fd",
+        "crates/eldr/Cargo.toml": "c4576dce6ab937e3d2687eead09e63a056c5831589fc6aa7310159cfccbe8407",
+        "crates/eldr/src/builtin/generator.rs": "158cfbfa46a2b4e6f0355d18bfba11b0f8bebe56e627767b3fc430fbfcf47dc6",
+        "crates/eldr/src/builtin/list_builder.rs": "920bf4235e8baba304e7201ea18324eff7e339f7fa5805b94094a5188005a13a",
+        "crates/eldr/src/builtin/list_finish.rs": "9c676e368f0f736751f8db2f9f3cd5f085f4ba96f4a074f0de5dde8e8f4df8c4",
+        "crates/eldr/src/builtin/list_flat_map.rs": "3baa21ea8bd9783bdad8c53d34440d582b8767cb0fc36d825ea9ea879027ef45",
+        "crates/eldr/src/builtin/map_values.rs": "95a681125a62e6729988b117b75844708237dd8289f1b4e2a2b5a52f4e28f27f",
+        "crates/eldr/src/builtin.rs": "65e9f39f03b8e46a2629dd0b2da65b59a80ed9448024e563c1454c40a576b4a0",
+        "crates/eldr/src/dbg_display.rs": "5f6f820f0988b1c89100deb141dc60262e9b057b34f51e37b2c99bf9cc985cf5",
+        "crates/eldr/src/error.rs": "b9bdfaf2ef7d68ae8b5983225d6b830d0a4855b2594fa7cd0c7aef6d604b1715",
+        "crates/eldr/src/interactive.rs": "a1ea34e134f2db0b2a8afe7e213a4ae09441d0b5c2e1f37f5bb8b361288c57a9",
+        "crates/eldr/src/lib.rs": "c59063a81e6ce57e2fa639b70259c9e2545ec49bc814b5fd41379bcde030eeb9",
+        "crates/eldr/src/value.rs": "192b7e6f381c0169450fb172bea4c863aa2317b7a8defc987c529e6d074a2aee",
+        "crates/eldr/src/vm/checkpoint_boot_plan_tests.rs": "850715bb3946aa8a4cbad533707a5683c29f149d653aefd432f3a77128074340",
+        "crates/eldr/src/vm/checkpoint_collections_tests.rs": "503abe113771111f553a72c0039a316b892f4df99744ae73a0f23600ebefb44c",
+        "crates/eldr/src/vm/checkpoint_metadata_tests.rs": "f8709a4ed55450bb3e0457bc5ad63063ab4cf1a849b3def073f1ba1e00ca9c2d",
+        "crates/eldr/src/vm/checkpoint_value.rs": "504d0024b6cffbcc8a4c8cdacd12e949e963da58d3f0f28d71b5b4fa3bb926ae",
+        "crates/eldr/src/vm/continuation.rs": "ba5f585f3f4075b21830bbb7be5d14f1532d952d75af9f440083ec652cd2e870",
+        "crates/eldr/src/vm/future_stack_tests.rs": "755ca65d6cfbbcc3df47ec4e7cc33808c837b0c3c0020a532987c0417cb27ae4",
+        "crates/eldr/src/vm/generator_tests.rs": "95d89b213291353d32bd7ebc1e633876b488d17ce9f6364a46ee465122ab0f98",
+        "crates/eldr/src/vm/list_flat_map_tests.rs": "a1aefe049eefa11fccb4dd25d52403f17f9b2822cd383274b11ec79caf117193",
+        "crates/eldr/src/vm/map_values_tests.rs": "4325ca369ab087d1a6bc1682bebc57ce48d27363eb37223348a71ff312e1c1da",
+        "crates/eldr/src/vm/operand_stack.rs": "741797543e1d324fe92838c2ceac64083a72467c4ab5d2f32d4b28ac770478d7",
+        "crates/eldr/src/vm/process_continuation.rs": "5df4a8fded928177d7db94afb573896a192d35efd7d347c708cd5031e4b215f8",
+        "crates/eldr/src/vm/process_identity_tests.rs": "8dd7283a720910882bf31d4d69d2311d6984aaa51ced6545290c994b221fbd12",
+        "crates/eldr/src/vm/process_stop_tests.rs": "3bd7df08760e96dcff2febff8a6b330a5ba78c99751e7a1866ae6d0174083e91",
+        "crates/eldr/src/vm/profile_allocator.rs": "20f73207a21a208120ddb9027857377c0d3c1469f09ee6ddc257efed1ac16397",
+        "crates/eldr/src/vm/runtime_table.rs": "54344140b5b9173e4ec6b415f574dbae9e425b0148978f854418d3f924611db6",
+        "crates/eldr/src/vm/test_runner.rs": "6b4c24412c8403a7d29d5abd35502d9a82fe90a4dc578a39d3f07143a5a28093",
+        "crates/eldr/src/vm.rs": "c97dcd0b0e92ae1fa64dfe860af2d4411e325427e33c609ef0f4d8e24f6bdffc",
+        "crates/sindr/Cargo.toml": "5cc33c80cac02640df0139f11be5b5a82d6959041a712d02b2f081542aeb0d81",
+        "crates/sindr/src/builtin.rs": "f258eb9e2fd3db1c56741f28dfc770a385a6cb0533052346650d27b18c6558c1",
+        "crates/sindr/src/derive.rs": "c625e60e3f267480dcbc6a4ed790388086983011871cdbc268b2599c645f14eb",
+        "crates/sindr/src/intrinsic.rs": "29f03b2cfc73de05f84a9bc4d6d774ab0138f87b01b00f56d0d588df731e5f0f",
+        "crates/sindr/src/ir.rs": "220ba6d60bcfaffff536c8ef641213bb1769be4ddbcaab8026d4c1796793f43d",
+        "crates/sindr/src/lib.rs": "7a6556980c84ac7b0adb892dafa7d8566083de363013b2c0955487d1d2e65a24",
+        "crates/sindr/src/names.rs": "b0e8f74b2d92cbbafeb7696cc3bc414f07a1ef1cdc6f946433fcd12f05c6e708",
+        "crates/sindr/src/operator_diagnostics.rs": "68b502cd1dbba5f5990cac7156a2a10becea82f7b40a99f15b078b375302f679",
+        "crates/sindr/src/pattern.rs": "de7a28cd90aa4f6e0d25571368d58efeeffd7cb759cacabbe4be0d796fda2a87",
+        "crates/sindr/src/policy.rs": "0199f80cafcea07c92d46719e523b60c3774af1492d74dc54cfd7a6693481fa0",
+        "crates/sindr/src/primitives.rs": "f9a7a695b99839d2dad68c591c7960525b8a02416c2b427f7ba478fc0fe4c2b3",
+        "crates/sindr/src/reflection.rs": "3a1e1972cdaaa49bf57d024eb921c49576132bb4bf2891b3a69295661833d05d",
+        "crates/sindr/src/runtime.rs": "eeeb0a4e2f0d65905a7478b93313ea2bc7a9df8d9bed48ec5e1d9c95bbe7227c",
+        "crates/sindr/src/signature.rs": "93619ec608d17712295643bc6c2822219253911cabddb5ffaabb09db7fec9245",
+        "crates/sindr/src/stdlib.rs": "bc1291fde2e7a10d3949fd3789ff98f34fae0eb7248467531afcfb5ec149b0da",
+        "crates/sindr/src/viewer.rs": "af56d2cee26c984d5f994e570e18724b0883e8372ad109d1d2bf986eae2e3461",
+        "crates/sindr/src/warning.rs": "0556f55e951419d5c7d287a2b444b86279469862f44bc2a53f0b421dbc207d04",
+        "crates/diagnostics/Cargo.toml": "b821a58bd8cfc7464ce41d7faf8ec3e166d2daba6b36f06dfc55057f8b54d283",
+        "crates/diagnostics/src/data.rs": "c1685c1abe32888605a7c7a59babd43b47736c178febcaa95e29ed6e7841beee",
+        "crates/diagnostics/src/debug_render.rs": "f6b1565bcf7813945997390a4430fc270e160f651c090fdb31bfb6b8e1fc0aaa",
+        "crates/diagnostics/src/lib.rs": "6aa10d6345694f3312ecb6f775bf6dd349bd5a6a58f852a3e648bdf58bd62f42",
+        "crates/diagnostics/src/parse.rs": "5f528a27dee0cf62804e9130b31d060850c291b14487a59e5973a787b582b4bb",
+        "crates/diagnostics/src/projection.rs": "4966a5c92002269f5d874d6dc9561cd8c9be2e21cbb0137cc81d5bc79d98069d",
+        "crates/diagnostics/src/render.rs": "d31cb7082785dc3ec1b1656f715f6748224c2a6a36a4bacb5b32b78ed0c00005",
+        "crates/diagnostics/src/repl.rs": "80e5be2c3d8bbc583135fcb06570bba1345781f7bea0c6d884b507d5ac3cce43",
+        "crates/diagnostics/src/report.rs": "58f02f23824962cfcde1b6faca07aa375160d683cb9c14a51783511c0e9f0511",
+        "crates/diagnostics/src/resolve.rs": "fbdcfae6384ddf5a6254df3c53ca42464befb96d3bf5f70c1992546be4274c35",
+        "crates/diagnostics/src/runtime.rs": "0c333ee1cd7b67aa07adfa009c3de750a8cf1c1e50763f23f1c79f38ce495a2c",
+        "crates/diagnostics/src/source.rs": "b7d79b53471040324622dd818c502b98ccfc044597e925a216ed867ed8eda6a7",
+        "crates/diagnostics/src/surtr_code.rs": "80f1a089a0acbf26ac0b207aefc0f2fd2070020e8dcc2e2ace6aa3a63723fd1e",
+        "crates/diagnostics/src/tests/parse_and_resolve.rs": "62b26d54a6ba39dd4ee622ff81ca28cf830fcba810f624932ff80b447c37f527",
+        "crates/diagnostics/src/tests/render_and_source.rs": "3fd930393528e60b31ad35dba366bc3faec046481a7d5f16d730622e1d87bac2",
+        "crates/diagnostics/src/tests/repl.rs": "4ffa6e8a1202d5482444dad68f410e920b19d43b8572201090827c58eeade053",
+        "crates/diagnostics/src/tests/runtime.rs": "883538660bf32c69e763734a0e56ba37cdbac31f77020187a18998ad43e6c6e9",
+        "crates/diagnostics/src/tests/structured_reasons.rs": "91b46e87be05c41ce3a7d9eb72620728481d99bf70b1aafbbcc1418d10743bb9",
+        "crates/diagnostics/src/tests/test_support.rs": "6cff7e7b664831be1871829ada64c56373be9ad5e990fa267e4ed725dba099fe",
+        "crates/diagnostics/src/tests/typecheck.rs": "ccb64294ee01fc29771e5c077259d2da0c63fc47a9e5853a7446c71fb2e0cb23",
+        "crates/diagnostics/src/tests.rs": "628962b9d963f5f41b7f6976bdea5a21c03e59efaaa4806d1cdd6e953c712889",
+        "crates/diagnostics/src/typecheck.rs": "4f71478d5efb3fe0c4e01d2fcb49a93fe1493c424a75b954c97341b4a00290c8"
+      },
+      "head": "eec8c9b6a6fffc5085f46f48f9d37c7a2de1cd16",
+      "builder_sha256": "fd0a17a7efd236e39d47120925400b84366a9b71ad889fb280078aa4f935bb0e",
+      "rustc_version": "rustc 1.94.1 (e408947bf 2026-03-25)\nbinary: rustc\ncommit-hash: e408947bfd200af42db322daf0fadfe7e26d3bd1\ncommit-date: 2026-03-25\nhost: aarch64-apple-darwin\nrelease: 1.94.1\nLLVM version: 21.1.8\n"
+    },
+    "after": {
+      "scope": "Eldr internal VM test executable; release",
+      "source_root": "/Users/haruca/work/rust/surtr",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "eldr",
+        "--lib",
+        "--no-run",
+        "--message-format=json",
+        "--target-dir",
+        "/private/tmp/surtr-runtime-six/builder-after-target",
+        "--release"
+      ],
+      "artifact": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///Users/haruca/work/rust/surtr/crates/eldr#0.1.0",
+        "manifest_path": "/Users/haruca/work/rust/surtr/crates/eldr/Cargo.toml",
+        "target": {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "eldr",
+          "src_path": "/Users/haruca/work/rust/surtr/crates/eldr/src/lib.rs",
+          "edition": "2021",
+          "doc": true,
+          "doctest": true,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": true
+        },
+        "features": [
+          "default",
+          "terminal-io"
+        ],
+        "filenames": [
+          "/private/tmp/surtr-runtime-six/builder-after-target/release/deps/eldr-7ddf4dcb324afb88"
+        ],
+        "executable": "/private/tmp/surtr-runtime-six/builder-after-target/release/deps/eldr-7ddf4dcb324afb88",
+        "fresh": false
+      },
+      "binary": "/private/tmp/surtr-runtime-six/builder-after/eldr-test",
+      "binary_sha256": "074245df0207c5d1d3be9b48c6db600053b6ea5d7d63f58413bf433134a6e52f",
+      "source_sha256": {
+        "Cargo.toml": "38e9103e083681e21ce66c2215d1c4440b7aa7556222c97a2815fba5b5809017",
+        "Cargo.lock": "2246d4ad3488ad37f2e96e2e3a7eff6f5ce5fa70cb454712e86ec542176105fd",
+        "crates/eldr/Cargo.toml": "c4576dce6ab937e3d2687eead09e63a056c5831589fc6aa7310159cfccbe8407",
+        "crates/eldr/src/builtin/generator.rs": "158cfbfa46a2b4e6f0355d18bfba11b0f8bebe56e627767b3fc430fbfcf47dc6",
+        "crates/eldr/src/builtin/list_builder.rs": "19a6eaeb0f47ede7ca1bd489660c8ac060cfc675cb3770bf90f54e84ed3ab459",
+        "crates/eldr/src/builtin/list_finish.rs": "9c676e368f0f736751f8db2f9f3cd5f085f4ba96f4a074f0de5dde8e8f4df8c4",
+        "crates/eldr/src/builtin/list_flat_map.rs": "3baa21ea8bd9783bdad8c53d34440d582b8767cb0fc36d825ea9ea879027ef45",
+        "crates/eldr/src/builtin/map_values.rs": "95a681125a62e6729988b117b75844708237dd8289f1b4e2a2b5a52f4e28f27f",
+        "crates/eldr/src/builtin.rs": "65e9f39f03b8e46a2629dd0b2da65b59a80ed9448024e563c1454c40a576b4a0",
+        "crates/eldr/src/dbg_display.rs": "5f6f820f0988b1c89100deb141dc60262e9b057b34f51e37b2c99bf9cc985cf5",
+        "crates/eldr/src/error.rs": "b9bdfaf2ef7d68ae8b5983225d6b830d0a4855b2594fa7cd0c7aef6d604b1715",
+        "crates/eldr/src/interactive.rs": "a1ea34e134f2db0b2a8afe7e213a4ae09441d0b5c2e1f37f5bb8b361288c57a9",
+        "crates/eldr/src/lib.rs": "c59063a81e6ce57e2fa639b70259c9e2545ec49bc814b5fd41379bcde030eeb9",
+        "crates/eldr/src/value.rs": "192b7e6f381c0169450fb172bea4c863aa2317b7a8defc987c529e6d074a2aee",
+        "crates/eldr/src/vm/checkpoint_boot_plan_tests.rs": "850715bb3946aa8a4cbad533707a5683c29f149d653aefd432f3a77128074340",
+        "crates/eldr/src/vm/checkpoint_collections_tests.rs": "503abe113771111f553a72c0039a316b892f4df99744ae73a0f23600ebefb44c",
+        "crates/eldr/src/vm/checkpoint_metadata_tests.rs": "f8709a4ed55450bb3e0457bc5ad63063ab4cf1a849b3def073f1ba1e00ca9c2d",
+        "crates/eldr/src/vm/checkpoint_value.rs": "504d0024b6cffbcc8a4c8cdacd12e949e963da58d3f0f28d71b5b4fa3bb926ae",
+        "crates/eldr/src/vm/continuation.rs": "ba5f585f3f4075b21830bbb7be5d14f1532d952d75af9f440083ec652cd2e870",
+        "crates/eldr/src/vm/future_stack_tests.rs": "755ca65d6cfbbcc3df47ec4e7cc33808c837b0c3c0020a532987c0417cb27ae4",
+        "crates/eldr/src/vm/generator_tests.rs": "95d89b213291353d32bd7ebc1e633876b488d17ce9f6364a46ee465122ab0f98",
+        "crates/eldr/src/vm/list_flat_map_tests.rs": "a1aefe049eefa11fccb4dd25d52403f17f9b2822cd383274b11ec79caf117193",
+        "crates/eldr/src/vm/map_values_tests.rs": "4325ca369ab087d1a6bc1682bebc57ce48d27363eb37223348a71ff312e1c1da",
+        "crates/eldr/src/vm/operand_stack.rs": "741797543e1d324fe92838c2ceac64083a72467c4ab5d2f32d4b28ac770478d7",
+        "crates/eldr/src/vm/process_continuation.rs": "5df4a8fded928177d7db94afb573896a192d35efd7d347c708cd5031e4b215f8",
+        "crates/eldr/src/vm/process_identity_tests.rs": "8dd7283a720910882bf31d4d69d2311d6984aaa51ced6545290c994b221fbd12",
+        "crates/eldr/src/vm/process_stop_tests.rs": "3bd7df08760e96dcff2febff8a6b330a5ba78c99751e7a1866ae6d0174083e91",
+        "crates/eldr/src/vm/profile_allocator.rs": "20f73207a21a208120ddb9027857377c0d3c1469f09ee6ddc257efed1ac16397",
+        "crates/eldr/src/vm/runtime_table.rs": "54344140b5b9173e4ec6b415f574dbae9e425b0148978f854418d3f924611db6",
+        "crates/eldr/src/vm/test_runner.rs": "6b4c24412c8403a7d29d5abd35502d9a82fe90a4dc578a39d3f07143a5a28093",
+        "crates/eldr/src/vm.rs": "c97dcd0b0e92ae1fa64dfe860af2d4411e325427e33c609ef0f4d8e24f6bdffc",
+        "crates/sindr/Cargo.toml": "5cc33c80cac02640df0139f11be5b5a82d6959041a712d02b2f081542aeb0d81",
+        "crates/sindr/src/builtin.rs": "f258eb9e2fd3db1c56741f28dfc770a385a6cb0533052346650d27b18c6558c1",
+        "crates/sindr/src/derive.rs": "c625e60e3f267480dcbc6a4ed790388086983011871cdbc268b2599c645f14eb",
+        "crates/sindr/src/intrinsic.rs": "29f03b2cfc73de05f84a9bc4d6d774ab0138f87b01b00f56d0d588df731e5f0f",
+        "crates/sindr/src/ir.rs": "220ba6d60bcfaffff536c8ef641213bb1769be4ddbcaab8026d4c1796793f43d",
+        "crates/sindr/src/lib.rs": "7a6556980c84ac7b0adb892dafa7d8566083de363013b2c0955487d1d2e65a24",
+        "crates/sindr/src/names.rs": "b0e8f74b2d92cbbafeb7696cc3bc414f07a1ef1cdc6f946433fcd12f05c6e708",
+        "crates/sindr/src/operator_diagnostics.rs": "68b502cd1dbba5f5990cac7156a2a10becea82f7b40a99f15b078b375302f679",
+        "crates/sindr/src/pattern.rs": "de7a28cd90aa4f6e0d25571368d58efeeffd7cb759cacabbe4be0d796fda2a87",
+        "crates/sindr/src/policy.rs": "0199f80cafcea07c92d46719e523b60c3774af1492d74dc54cfd7a6693481fa0",
+        "crates/sindr/src/primitives.rs": "f9a7a695b99839d2dad68c591c7960525b8a02416c2b427f7ba478fc0fe4c2b3",
+        "crates/sindr/src/reflection.rs": "3a1e1972cdaaa49bf57d024eb921c49576132bb4bf2891b3a69295661833d05d",
+        "crates/sindr/src/runtime.rs": "a2df54fbf113d380f8fed2ea3ea792bf993d213da7c5a27c19db3140815cd862",
+        "crates/sindr/src/signature.rs": "93619ec608d17712295643bc6c2822219253911cabddb5ffaabb09db7fec9245",
+        "crates/sindr/src/stdlib.rs": "bc1291fde2e7a10d3949fd3789ff98f34fae0eb7248467531afcfb5ec149b0da",
+        "crates/sindr/src/viewer.rs": "af56d2cee26c984d5f994e570e18724b0883e8372ad109d1d2bf986eae2e3461",
+        "crates/sindr/src/warning.rs": "0556f55e951419d5c7d287a2b444b86279469862f44bc2a53f0b421dbc207d04",
+        "crates/diagnostics/Cargo.toml": "b821a58bd8cfc7464ce41d7faf8ec3e166d2daba6b36f06dfc55057f8b54d283",
+        "crates/diagnostics/src/data.rs": "c1685c1abe32888605a7c7a59babd43b47736c178febcaa95e29ed6e7841beee",
+        "crates/diagnostics/src/debug_render.rs": "f6b1565bcf7813945997390a4430fc270e160f651c090fdb31bfb6b8e1fc0aaa",
+        "crates/diagnostics/src/lib.rs": "6aa10d6345694f3312ecb6f775bf6dd349bd5a6a58f852a3e648bdf58bd62f42",
+        "crates/diagnostics/src/parse.rs": "5f528a27dee0cf62804e9130b31d060850c291b14487a59e5973a787b582b4bb",
+        "crates/diagnostics/src/projection.rs": "4966a5c92002269f5d874d6dc9561cd8c9be2e21cbb0137cc81d5bc79d98069d",
+        "crates/diagnostics/src/render.rs": "d31cb7082785dc3ec1b1656f715f6748224c2a6a36a4bacb5b32b78ed0c00005",
+        "crates/diagnostics/src/repl.rs": "80e5be2c3d8bbc583135fcb06570bba1345781f7bea0c6d884b507d5ac3cce43",
+        "crates/diagnostics/src/report.rs": "58f02f23824962cfcde1b6faca07aa375160d683cb9c14a51783511c0e9f0511",
+        "crates/diagnostics/src/resolve.rs": "fbdcfae6384ddf5a6254df3c53ca42464befb96d3bf5f70c1992546be4274c35",
+        "crates/diagnostics/src/runtime.rs": "0c333ee1cd7b67aa07adfa009c3de750a8cf1c1e50763f23f1c79f38ce495a2c",
+        "crates/diagnostics/src/source.rs": "b7d79b53471040324622dd818c502b98ccfc044597e925a216ed867ed8eda6a7",
+        "crates/diagnostics/src/surtr_code.rs": "80f1a089a0acbf26ac0b207aefc0f2fd2070020e8dcc2e2ace6aa3a63723fd1e",
+        "crates/diagnostics/src/tests/parse_and_resolve.rs": "62b26d54a6ba39dd4ee622ff81ca28cf830fcba810f624932ff80b447c37f527",
+        "crates/diagnostics/src/tests/render_and_source.rs": "3fd930393528e60b31ad35dba366bc3faec046481a7d5f16d730622e1d87bac2",
+        "crates/diagnostics/src/tests/repl.rs": "4ffa6e8a1202d5482444dad68f410e920b19d43b8572201090827c58eeade053",
+        "crates/diagnostics/src/tests/runtime.rs": "883538660bf32c69e763734a0e56ba37cdbac31f77020187a18998ad43e6c6e9",
+        "crates/diagnostics/src/tests/structured_reasons.rs": "91b46e87be05c41ce3a7d9eb72620728481d99bf70b1aafbbcc1418d10743bb9",
+        "crates/diagnostics/src/tests/test_support.rs": "6cff7e7b664831be1871829ada64c56373be9ad5e990fa267e4ed725dba099fe",
+        "crates/diagnostics/src/tests/typecheck.rs": "ccb64294ee01fc29771e5c077259d2da0c63fc47a9e5853a7446c71fb2e0cb23",
+        "crates/diagnostics/src/tests.rs": "628962b9d963f5f41b7f6976bdea5a21c03e59efaaa4806d1cdd6e953c712889",
+        "crates/diagnostics/src/typecheck.rs": "4f71478d5efb3fe0c4e01d2fcb49a93fe1493c424a75b954c97341b4a00290c8"
+      },
+      "head": "eec8c9b6a6fffc5085f46f48f9d37c7a2de1cd16",
+      "builder_sha256": "fd0a17a7efd236e39d47120925400b84366a9b71ad889fb280078aa4f935bb0e",
+      "rustc_version": "rustc 1.94.1 (e408947bf 2026-03-25)\nbinary: rustc\ncommit-hash: e408947bfd200af42db322daf0fadfe7e26d3bd1\ncommit-date: 2026-03-25\nhost: aarch64-apple-darwin\nrelease: 1.94.1\nLLVM version: 21.1.8\n"
+    }
+  },
+  "runner_sha256": "0bcddd4f44388ad4c03e07753f9fed0a37a38df0156fa034ff1eaa28caa8393f",
+  "probe_runner_sha256": "fc0edd286f4ede9c8dde02273579c5a6689f44db0997fd67966167572c103c91",
+  "samples": 6,
+  "repeats": 8,
+  "verification_processes": 16,
+  "measurement_processes": 96,
+  "logical_counters": true,
+  "allocator_counting": false,
+  "allocator_environment": {
+    "MallocNanoZone": "0"
+  },
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "rss_scope": "whole fresh process including preparation, all phases, repeats, asserts and JSON",
+  "unmeasured": [
+    "allocation requests",
+    "logical live bytes",
+    "ordinary CLI",
+    "allocator usable size"
+  ],
+  "summaries": [
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "complete_shared",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 311867.1875,
+        "min": 310140.875,
+        "max": 315895.875
+      },
+      "process_peak_rss_bytes": {
+        "median": 6594560.0,
+        "min": 6520832,
+        "max": 6602752
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 1536,
+        "max": 1536
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 1,
+        "max": 1
+      },
+      "capacity_growths": {
+        "min": 42,
+        "max": 42
+      },
+      "finish_steps": {
+        "min": 1036,
+        "max": 1036
+      },
+      "finish_copied_items": {
+        "min": 1024,
+        "max": 1024
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "complete_shared",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 297648.5,
+        "min": 296786.625,
+        "max": 305890.75
+      },
+      "process_peak_rss_bytes": {
+        "median": 6094848.0,
+        "min": 6078464,
+        "max": 6127616
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 1536,
+        "max": 1536
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 1,
+        "max": 1
+      },
+      "capacity_growths": {
+        "min": 2,
+        "max": 2
+      },
+      "finish_steps": {
+        "min": 1026,
+        "max": 1026
+      },
+      "finish_copied_items": {
+        "min": 1024,
+        "max": 1024
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "drop_changed",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 51398.375,
+        "min": 50489.75,
+        "max": 52703.0
+      },
+      "process_peak_rss_bytes": {
+        "median": 6594560.0,
+        "min": 6520832,
+        "max": 6602752
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "drop_changed",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 49656.4375,
+        "min": 49593.75,
+        "max": 50927.125
+      },
+      "process_peak_rss_bytes": {
+        "median": 6094848.0,
+        "min": 6078464,
+        "max": 6127616
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "drop_unchanged",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 257.5625,
+        "min": 197.875,
+        "max": 317.625
+      },
+      "process_peak_rss_bytes": {
+        "median": 6594560.0,
+        "min": 6520832,
+        "max": 6602752
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "drop_unchanged",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 356.8125,
+        "min": 291.625,
+        "max": 416.625
+      },
+      "process_peak_rss_bytes": {
+        "median": 6094848.0,
+        "min": 6078464,
+        "max": 6127616
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "first_resume",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 44611.9375,
+        "min": 44479.25,
+        "max": 46067.625
+      },
+      "process_peak_rss_bytes": {
+        "median": 6594560.0,
+        "min": 6520832,
+        "max": 6602752
+      },
+      "copies": {
+        "min": 1,
+        "max": 1
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 256,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 7,
+        "max": 7
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "first_resume",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 44929.6875,
+        "min": 44776.125,
+        "max": 46817.625
+      },
+      "process_peak_rss_bytes": {
+        "median": 6094848.0,
+        "min": 6078464,
+        "max": 6127616
+      },
+      "copies": {
+        "min": 1,
+        "max": 1
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 256,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 7,
+        "max": 7
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "resave",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 221.25,
+        "min": 208.25,
+        "max": 244.625
+      },
+      "process_peak_rss_bytes": {
+        "median": 6594560.0,
+        "min": 6520832,
+        "max": 6602752
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "resave",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 239.625,
+        "min": 223.875,
+        "max": 260.625
+      },
+      "process_peak_rss_bytes": {
+        "median": 6094848.0,
+        "min": 6078464,
+        "max": 6127616
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "resume_after_resave",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 44130.1875,
+        "min": 43692.75,
+        "max": 44291.625
+      },
+      "process_peak_rss_bytes": {
+        "median": 6594560.0,
+        "min": 6520832,
+        "max": 6602752
+      },
+      "copies": {
+        "min": 1,
+        "max": 1
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 256,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 7,
+        "max": 7
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "resume_after_resave",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 44273.6875,
+        "min": 44151.125,
+        "max": 45859.375
+      },
+      "process_peak_rss_bytes": {
+        "median": 6094848.0,
+        "min": 6078464,
+        "max": 6127616
+      },
+      "copies": {
+        "min": 1,
+        "max": 1
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 256,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 7,
+        "max": 7
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "rollback",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 3564.9375,
+        "min": 3463.625,
+        "max": 3677.25
+      },
+      "process_peak_rss_bytes": {
+        "median": 6594560.0,
+        "min": 6520832,
+        "max": 6602752
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "rollback",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 3768.125,
+        "min": 3599.0,
+        "max": 4010.25
+      },
+      "process_peak_rss_bytes": {
+        "median": 6094848.0,
+        "min": 6078464,
+        "max": 6127616
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "save",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 703.0625,
+        "min": 677.0,
+        "max": 838.375
+      },
+      "process_peak_rss_bytes": {
+        "median": 6594560.0,
+        "min": 6520832,
+        "max": 6602752
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "save",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 635.3125,
+        "min": 515.5,
+        "max": 708.375
+      },
+      "process_peak_rss_bytes": {
+        "median": 6094848.0,
+        "min": 6078464,
+        "max": 6127616
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "second_resume",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 43591.125,
+        "min": 43359.5,
+        "max": 43677.0
+      },
+      "process_peak_rss_bytes": {
+        "median": 6594560.0,
+        "min": 6520832,
+        "max": 6602752
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 256,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 7,
+        "max": 7
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "second_resume",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 42242.3125,
+        "min": 42171.875,
+        "max": 44911.625
+      },
+      "process_peak_rss_bytes": {
+        "median": 6094848.0,
+        "min": 6078464,
+        "max": 6127616
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 256,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 1,
+        "max": 1
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "unique_complete",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 391726.5625,
+        "min": 390448.0,
+        "max": 393036.25
+      },
+      "process_peak_rss_bytes": {
+        "median": 6594560.0,
+        "min": 6520832,
+        "max": 6602752
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 2048,
+        "max": 2048
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 1,
+        "max": 1
+      },
+      "capacity_growths": {
+        "min": 56,
+        "max": 56
+      },
+      "finish_steps": {
+        "min": 12,
+        "max": 12
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "unique_complete",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 376200.6875,
+        "min": 374698.125,
+        "max": 394671.875
+      },
+      "process_peak_rss_bytes": {
+        "median": 6094848.0,
+        "min": 6078464,
+        "max": 6127616
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 2048,
+        "max": 2048
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 1,
+        "max": 1
+      },
+      "capacity_growths": {
+        "min": 2,
+        "max": 2
+      },
+      "finish_steps": {
+        "min": 1,
+        "max": 1
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "complete_shared",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 330096.0625,
+        "min": 328614.5,
+        "max": 330968.875
+      },
+      "process_peak_rss_bytes": {
+        "median": 8192000.0,
+        "min": 8159232,
+        "max": 8224768
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 1536,
+        "max": 1536
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 1,
+        "max": 1
+      },
+      "capacity_growths": {
+        "min": 42,
+        "max": 42
+      },
+      "finish_steps": {
+        "min": 1036,
+        "max": 1036
+      },
+      "finish_copied_items": {
+        "min": 1024,
+        "max": 1024
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "complete_shared",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 318210.875,
+        "min": 316494.625,
+        "max": 347755.125
+      },
+      "process_peak_rss_bytes": {
+        "median": 7790592.0,
+        "min": 7749632,
+        "max": 8077312
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 1536,
+        "max": 1536
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 1,
+        "max": 1
+      },
+      "capacity_growths": {
+        "min": 2,
+        "max": 2
+      },
+      "finish_steps": {
+        "min": 1026,
+        "max": 1026
+      },
+      "finish_copied_items": {
+        "min": 1024,
+        "max": 1024
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "drop_changed",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 49723.9375,
+        "min": 49650.875,
+        "max": 50166.75
+      },
+      "process_peak_rss_bytes": {
+        "median": 8192000.0,
+        "min": 8159232,
+        "max": 8224768
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "drop_changed",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 49054.625,
+        "min": 48796.75,
+        "max": 53890.625
+      },
+      "process_peak_rss_bytes": {
+        "median": 7790592.0,
+        "min": 7749632,
+        "max": 8077312
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "drop_unchanged",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 252.6875,
+        "min": 203.0,
+        "max": 323.0
+      },
+      "process_peak_rss_bytes": {
+        "median": 8192000.0,
+        "min": 8159232,
+        "max": 8224768
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "drop_unchanged",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 338.625,
+        "min": 297.0,
+        "max": 520.625
+      },
+      "process_peak_rss_bytes": {
+        "median": 7790592.0,
+        "min": 7749632,
+        "max": 8077312
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "first_resume",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 46697.75,
+        "min": 46562.625,
+        "max": 48572.75
+      },
+      "process_peak_rss_bytes": {
+        "median": 8192000.0,
+        "min": 8159232,
+        "max": 8224768
+      },
+      "copies": {
+        "min": 1,
+        "max": 1
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 256,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 7,
+        "max": 7
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "first_resume",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 47395.875,
+        "min": 47130.375,
+        "max": 60093.625
+      },
+      "process_peak_rss_bytes": {
+        "median": 7790592.0,
+        "min": 7749632,
+        "max": 8077312
+      },
+      "copies": {
+        "min": 1,
+        "max": 1
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 256,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 7,
+        "max": 7
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "resave",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 218.875,
+        "min": 218.625,
+        "max": 234.625
+      },
+      "process_peak_rss_bytes": {
+        "median": 8192000.0,
+        "min": 8159232,
+        "max": 8224768
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "resave",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 247.25,
+        "min": 234.75,
+        "max": 1416.625
+      },
+      "process_peak_rss_bytes": {
+        "median": 7790592.0,
+        "min": 7749632,
+        "max": 8077312
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "resume_after_resave",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 46148.375,
+        "min": 45994.875,
+        "max": 46510.5
+      },
+      "process_peak_rss_bytes": {
+        "median": 8192000.0,
+        "min": 8159232,
+        "max": 8224768
+      },
+      "copies": {
+        "min": 1,
+        "max": 1
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 256,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 7,
+        "max": 7
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "resume_after_resave",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 46950.6875,
+        "min": 46005.25,
+        "max": 50401.0
+      },
+      "process_peak_rss_bytes": {
+        "median": 7790592.0,
+        "min": 7749632,
+        "max": 8077312
+      },
+      "copies": {
+        "min": 1,
+        "max": 1
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 256,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 7,
+        "max": 7
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "rollback",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 3981.75,
+        "min": 3849.0,
+        "max": 4166.625
+      },
+      "process_peak_rss_bytes": {
+        "median": 8192000.0,
+        "min": 8159232,
+        "max": 8224768
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "rollback",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 4294.3125,
+        "min": 4072.875,
+        "max": 4900.875
+      },
+      "process_peak_rss_bytes": {
+        "median": 7790592.0,
+        "min": 7749632,
+        "max": 8077312
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "save",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 573.0,
+        "min": 510.25,
+        "max": 797.0
+      },
+      "process_peak_rss_bytes": {
+        "median": 8192000.0,
+        "min": 8159232,
+        "max": 8224768
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "save",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 838.5,
+        "min": 541.625,
+        "max": 1219.125
+      },
+      "process_peak_rss_bytes": {
+        "median": 7790592.0,
+        "min": 7749632,
+        "max": 8077312
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "second_resume",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 45658.875,
+        "min": 45536.5,
+        "max": 46005.25
+      },
+      "process_peak_rss_bytes": {
+        "median": 8192000.0,
+        "min": 8159232,
+        "max": 8224768
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 256,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 7,
+        "max": 7
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "second_resume",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 44820.5,
+        "min": 44218.75,
+        "max": 47572.875
+      },
+      "process_peak_rss_bytes": {
+        "median": 7790592.0,
+        "min": 7749632,
+        "max": 8077312
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 256,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 1,
+        "max": 1
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "unique_complete",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 401036.25,
+        "min": 400869.75,
+        "max": 401213.5
+      },
+      "process_peak_rss_bytes": {
+        "median": 8192000.0,
+        "min": 8159232,
+        "max": 8224768
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 2048,
+        "max": 2048
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 1,
+        "max": 1
+      },
+      "capacity_growths": {
+        "min": 56,
+        "max": 56
+      },
+      "finish_steps": {
+        "min": 12,
+        "max": 12
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "unique_complete",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 388427.125,
+        "min": 385364.625,
+        "max": 430302.25
+      },
+      "process_peak_rss_bytes": {
+        "median": 7790592.0,
+        "min": 7749632,
+        "max": 8077312
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 2048,
+        "max": 2048
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 1,
+        "max": 1
+      },
+      "capacity_growths": {
+        "min": 2,
+        "max": 2
+      },
+      "finish_steps": {
+        "min": 1,
+        "max": 1
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "complete_shared",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 1038617.25,
+        "min": 1007718.75,
+        "max": 1416406.125
+      },
+      "process_peak_rss_bytes": {
+        "median": 20340736.0,
+        "min": 20168704,
+        "max": 26640384
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 1536,
+        "max": 1536
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 1,
+        "max": 1
+      },
+      "capacity_growths": {
+        "min": 42,
+        "max": 42
+      },
+      "finish_steps": {
+        "min": 16456,
+        "max": 16456
+      },
+      "finish_copied_items": {
+        "min": 16384,
+        "max": 16384
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "complete_shared",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 978929.6875,
+        "min": 940010.375,
+        "max": 2128640.625
+      },
+      "process_peak_rss_bytes": {
+        "median": 33136640.0,
+        "min": 33095680,
+        "max": 34258944
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 1536,
+        "max": 1536
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 1,
+        "max": 1
+      },
+      "capacity_growths": {
+        "min": 2,
+        "max": 2
+      },
+      "finish_steps": {
+        "min": 16386,
+        "max": 16386
+      },
+      "finish_copied_items": {
+        "min": 16384,
+        "max": 16384
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "drop_changed",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 423567.625,
+        "min": 405354.25,
+        "max": 983614.5
+      },
+      "process_peak_rss_bytes": {
+        "median": 20340736.0,
+        "min": 20168704,
+        "max": 26640384
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "drop_changed",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 408932.25,
+        "min": 392125.0,
+        "max": 971640.5
+      },
+      "process_peak_rss_bytes": {
+        "median": 33136640.0,
+        "min": 33095680,
+        "max": 34258944
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "drop_unchanged",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 406.25,
+        "min": 270.75,
+        "max": 1531.25
+      },
+      "process_peak_rss_bytes": {
+        "median": 20340736.0,
+        "min": 20168704,
+        "max": 26640384
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "drop_unchanged",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 544.375,
+        "min": 322.875,
+        "max": 1885.5
+      },
+      "process_peak_rss_bytes": {
+        "median": 33136640.0,
+        "min": 33095680,
+        "max": 34258944
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "first_resume",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 47216.0625,
+        "min": 45104.125,
+        "max": 52463.75
+      },
+      "process_peak_rss_bytes": {
+        "median": 20340736.0,
+        "min": 20168704,
+        "max": 26640384
+      },
+      "copies": {
+        "min": 1,
+        "max": 1
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 256,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 7,
+        "max": 7
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "first_resume",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 49367.0,
+        "min": 47656.5,
+        "max": 87802.0
+      },
+      "process_peak_rss_bytes": {
+        "median": 33136640.0,
+        "min": 33095680,
+        "max": 34258944
+      },
+      "copies": {
+        "min": 1,
+        "max": 1
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 256,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 7,
+        "max": 7
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "resave",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 237.125,
+        "min": 218.625,
+        "max": 328.125
+      },
+      "process_peak_rss_bytes": {
+        "median": 20340736.0,
+        "min": 20168704,
+        "max": 26640384
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "resave",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 283.9375,
+        "min": 229.25,
+        "max": 3218.625
+      },
+      "process_peak_rss_bytes": {
+        "median": 33136640.0,
+        "min": 33095680,
+        "max": 34258944
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "resume_after_resave",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 46083.1875,
+        "min": 44797.0,
+        "max": 48026.0
+      },
+      "process_peak_rss_bytes": {
+        "median": 20340736.0,
+        "min": 20168704,
+        "max": 26640384
+      },
+      "copies": {
+        "min": 1,
+        "max": 1
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 256,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 7,
+        "max": 7
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "resume_after_resave",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 46541.6875,
+        "min": 43984.375,
+        "max": 88198.0
+      },
+      "process_peak_rss_bytes": {
+        "median": 33136640.0,
+        "min": 33095680,
+        "max": 34258944
+      },
+      "copies": {
+        "min": 1,
+        "max": 1
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 256,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 7,
+        "max": 7
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "rollback",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 4515.625,
+        "min": 3682.375,
+        "max": 7119.625
+      },
+      "process_peak_rss_bytes": {
+        "median": 20340736.0,
+        "min": 20168704,
+        "max": 26640384
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "rollback",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 4614.6875,
+        "min": 3656.25,
+        "max": 13588.75
+      },
+      "process_peak_rss_bytes": {
+        "median": 33136640.0,
+        "min": 33095680,
+        "max": 34258944
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "save",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 1588.5,
+        "min": 1323.125,
+        "max": 3968.875
+      },
+      "process_peak_rss_bytes": {
+        "median": 20340736.0,
+        "min": 20168704,
+        "max": 26640384
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "save",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 1299.4375,
+        "min": 770.625,
+        "max": 5682.375
+      },
+      "process_peak_rss_bytes": {
+        "median": 33136640.0,
+        "min": 33095680,
+        "max": 34258944
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "second_resume",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 45622.3125,
+        "min": 43760.5,
+        "max": 47833.375
+      },
+      "process_peak_rss_bytes": {
+        "median": 20340736.0,
+        "min": 20168704,
+        "max": 26640384
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 256,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 7,
+        "max": 7
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "second_resume",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 44367.1875,
+        "min": 41630.25,
+        "max": 92760.375
+      },
+      "process_peak_rss_bytes": {
+        "median": 33136640.0,
+        "min": 33095680,
+        "max": 34258944
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 256,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 1,
+        "max": 1
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "unique_complete",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 630197.9375,
+        "min": 596025.875,
+        "max": 722895.875
+      },
+      "process_peak_rss_bytes": {
+        "median": 20340736.0,
+        "min": 20168704,
+        "max": 26640384
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 2048,
+        "max": 2048
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 1,
+        "max": 1
+      },
+      "capacity_growths": {
+        "min": 56,
+        "max": 56
+      },
+      "finish_steps": {
+        "min": 72,
+        "max": 72
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "unique_complete",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 621948.125,
+        "min": 601525.875,
+        "max": 1091182.375
+      },
+      "process_peak_rss_bytes": {
+        "median": 33136640.0,
+        "min": 33095680,
+        "max": 34258944
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 2048,
+        "max": 2048
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 1,
+        "max": 1
+      },
+      "capacity_growths": {
+        "min": 1,
+        "max": 1
+      },
+      "finish_steps": {
+        "min": 1,
+        "max": 1
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "complete_shared",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 1139669.25,
+        "min": 1130224.0,
+        "max": 1430302.125
+      },
+      "process_peak_rss_bytes": {
+        "median": 32718848.0,
+        "min": 32653312,
+        "max": 36700160
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 1536,
+        "max": 1536
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 1,
+        "max": 1
+      },
+      "capacity_growths": {
+        "min": 42,
+        "max": 42
+      },
+      "finish_steps": {
+        "min": 16456,
+        "max": 16456
+      },
+      "finish_copied_items": {
+        "min": 16384,
+        "max": 16384
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "complete_shared",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 1157630.1875,
+        "min": 1139156.0,
+        "max": 2106572.875
+      },
+      "process_peak_rss_bytes": {
+        "median": 45654016.0,
+        "min": 45580288,
+        "max": 46710784
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 1536,
+        "max": 1536
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 1,
+        "max": 1
+      },
+      "capacity_growths": {
+        "min": 2,
+        "max": 2
+      },
+      "finish_steps": {
+        "min": 16386,
+        "max": 16386
+      },
+      "finish_copied_items": {
+        "min": 16384,
+        "max": 16384
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "drop_changed",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 471838.5,
+        "min": 467718.875,
+        "max": 718447.75
+      },
+      "process_peak_rss_bytes": {
+        "median": 32718848.0,
+        "min": 32653312,
+        "max": 36700160
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "drop_changed",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 432479.1875,
+        "min": 414109.5,
+        "max": 865489.5
+      },
+      "process_peak_rss_bytes": {
+        "median": 45654016.0,
+        "min": 45580288,
+        "max": 46710784
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "drop_unchanged",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 487.0,
+        "min": 406.25,
+        "max": 989.5
+      },
+      "process_peak_rss_bytes": {
+        "median": 32718848.0,
+        "min": 32653312,
+        "max": 36700160
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "drop_unchanged",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 682.375,
+        "min": 432.0,
+        "max": 2093.75
+      },
+      "process_peak_rss_bytes": {
+        "median": 45654016.0,
+        "min": 45580288,
+        "max": 46710784
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "first_resume",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 48718.8125,
+        "min": 47760.25,
+        "max": 60328.0
+      },
+      "process_peak_rss_bytes": {
+        "median": 32718848.0,
+        "min": 32653312,
+        "max": 36700160
+      },
+      "copies": {
+        "min": 1,
+        "max": 1
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 256,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 7,
+        "max": 7
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "first_resume",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 50265.5,
+        "min": 48458.125,
+        "max": 230120.0
+      },
+      "process_peak_rss_bytes": {
+        "median": 45654016.0,
+        "min": 45580288,
+        "max": 46710784
+      },
+      "copies": {
+        "min": 1,
+        "max": 1
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 256,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 7,
+        "max": 7
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "resave",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 234.375,
+        "min": 208.375,
+        "max": 400.875
+      },
+      "process_peak_rss_bytes": {
+        "median": 32718848.0,
+        "min": 32653312,
+        "max": 36700160
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "resave",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 273.5625,
+        "min": 229.125,
+        "max": 1364.625
+      },
+      "process_peak_rss_bytes": {
+        "median": 45654016.0,
+        "min": 45580288,
+        "max": 46710784
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "resume_after_resave",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 47182.1875,
+        "min": 46447.875,
+        "max": 54578.0
+      },
+      "process_peak_rss_bytes": {
+        "median": 32718848.0,
+        "min": 32653312,
+        "max": 36700160
+      },
+      "copies": {
+        "min": 1,
+        "max": 1
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 256,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 7,
+        "max": 7
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "resume_after_resave",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 47541.75,
+        "min": 46864.625,
+        "max": 78807.5
+      },
+      "process_peak_rss_bytes": {
+        "median": 45654016.0,
+        "min": 45580288,
+        "max": 46710784
+      },
+      "copies": {
+        "min": 1,
+        "max": 1
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 256,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 7,
+        "max": 7
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "rollback",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 5169.25,
+        "min": 4666.625,
+        "max": 7692.75
+      },
+      "process_peak_rss_bytes": {
+        "median": 32718848.0,
+        "min": 32653312,
+        "max": 36700160
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "rollback",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 5570.3125,
+        "min": 4776.0,
+        "max": 12260.375
+      },
+      "process_peak_rss_bytes": {
+        "median": 45654016.0,
+        "min": 45580288,
+        "max": 46710784
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "save",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 1406.1875,
+        "min": 1140.75,
+        "max": 3219.0
+      },
+      "process_peak_rss_bytes": {
+        "median": 32718848.0,
+        "min": 32653312,
+        "max": 36700160
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "save",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 1546.9375,
+        "min": 942.75,
+        "max": 5333.125
+      },
+      "process_peak_rss_bytes": {
+        "median": 45654016.0,
+        "min": 45580288,
+        "max": 46710784
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "second_resume",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 46302.0625,
+        "min": 46015.75,
+        "max": 49427.0
+      },
+      "process_peak_rss_bytes": {
+        "median": 32718848.0,
+        "min": 32653312,
+        "max": 36700160
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 256,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 7,
+        "max": 7
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "second_resume",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 44460.875,
+        "min": 44161.375,
+        "max": 72531.125
+      },
+      "process_peak_rss_bytes": {
+        "median": 45654016.0,
+        "min": 45580288,
+        "max": 46710784
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 256,
+        "max": 256
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 1,
+        "max": 1
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "unique_complete",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 618127.5625,
+        "min": 604536.375,
+        "max": 748218.875
+      },
+      "process_peak_rss_bytes": {
+        "median": 32718848.0,
+        "min": 32653312,
+        "max": 36700160
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 2048,
+        "max": 2048
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 1,
+        "max": 1
+      },
+      "capacity_growths": {
+        "min": 56,
+        "max": 56
+      },
+      "finish_steps": {
+        "min": 72,
+        "max": 72
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 1,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "unique_complete",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 631547.0,
+        "min": 621067.625,
+        "max": 1305114.5
+      },
+      "process_peak_rss_bytes": {
+        "median": 45654016.0,
+        "min": 45580288,
+        "max": 46710784
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 2048,
+        "max": 2048
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 1,
+        "max": 1
+      },
+      "capacity_growths": {
+        "min": 1,
+        "max": 1
+      },
+      "finish_steps": {
+        "min": 1,
+        "max": 1
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "complete_shared",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 10071895.75,
+        "min": 10017442.875,
+        "max": 10181494.625
+      },
+      "process_peak_rss_bytes": {
+        "median": 34906112.0,
+        "min": 34816000,
+        "max": 34930688
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 49152,
+        "max": 49152
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 32,
+        "max": 32
+      },
+      "capacity_growths": {
+        "min": 1344,
+        "max": 1344
+      },
+      "finish_steps": {
+        "min": 33152,
+        "max": 33152
+      },
+      "finish_copied_items": {
+        "min": 32768,
+        "max": 32768
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "complete_shared",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 9733734.375,
+        "min": 9671166.625,
+        "max": 9751286.375
+      },
+      "process_peak_rss_bytes": {
+        "median": 34906112.0,
+        "min": 34881536,
+        "max": 34963456
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 49152,
+        "max": 49152
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 32,
+        "max": 32
+      },
+      "capacity_growths": {
+        "min": 64,
+        "max": 64
+      },
+      "finish_steps": {
+        "min": 32832,
+        "max": 32832
+      },
+      "finish_copied_items": {
+        "min": 32768,
+        "max": 32768
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "drop_changed",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 382789.0625,
+        "min": 376911.375,
+        "max": 388505.25
+      },
+      "process_peak_rss_bytes": {
+        "median": 34906112.0,
+        "min": 34816000,
+        "max": 34930688
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "drop_changed",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 364549.375,
+        "min": 360036.625,
+        "max": 365870.0
+      },
+      "process_peak_rss_bytes": {
+        "median": 34906112.0,
+        "min": 34881536,
+        "max": 34963456
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "drop_unchanged",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 414.0625,
+        "min": 317.75,
+        "max": 484.25
+      },
+      "process_peak_rss_bytes": {
+        "median": 34906112.0,
+        "min": 34816000,
+        "max": 34930688
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "drop_unchanged",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 562.4375,
+        "min": 427.25,
+        "max": 770.75
+      },
+      "process_peak_rss_bytes": {
+        "median": 34906112.0,
+        "min": 34881536,
+        "max": 34963456
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "first_resume",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 1425992.125,
+        "min": 1418598.875,
+        "max": 1431796.625
+      },
+      "process_peak_rss_bytes": {
+        "median": 34906112.0,
+        "min": 34816000,
+        "max": 34930688
+      },
+      "copies": {
+        "min": 32,
+        "max": 32
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 8192,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 224,
+        "max": 224
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "first_resume",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 1417078.125,
+        "min": 1416687.0,
+        "max": 1424771.125
+      },
+      "process_peak_rss_bytes": {
+        "median": 34906112.0,
+        "min": 34881536,
+        "max": 34963456
+      },
+      "copies": {
+        "min": 32,
+        "max": 32
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 8192,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 224,
+        "max": 224
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "resave",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 320.1875,
+        "min": 286.25,
+        "max": 354.0
+      },
+      "process_peak_rss_bytes": {
+        "median": 34906112.0,
+        "min": 34816000,
+        "max": 34930688
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "resave",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 302.0625,
+        "min": 255.25,
+        "max": 411.625
+      },
+      "process_peak_rss_bytes": {
+        "median": 34906112.0,
+        "min": 34881536,
+        "max": 34963456
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "resume_after_resave",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 1421351.5625,
+        "min": 1418536.625,
+        "max": 1426291.75
+      },
+      "process_peak_rss_bytes": {
+        "median": 34906112.0,
+        "min": 34816000,
+        "max": 34930688
+      },
+      "copies": {
+        "min": 32,
+        "max": 32
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 8192,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 224,
+        "max": 224
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "resume_after_resave",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 1416315.125,
+        "min": 1412546.875,
+        "max": 1426500.125
+      },
+      "process_peak_rss_bytes": {
+        "median": 34906112.0,
+        "min": 34881536,
+        "max": 34963456
+      },
+      "copies": {
+        "min": 32,
+        "max": 32
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 8192,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 224,
+        "max": 224
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "rollback",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 87044.4375,
+        "min": 85807.0,
+        "max": 89083.25
+      },
+      "process_peak_rss_bytes": {
+        "median": 34906112.0,
+        "min": 34816000,
+        "max": 34930688
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "rollback",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 86601.5625,
+        "min": 85708.25,
+        "max": 88427.125
+      },
+      "process_peak_rss_bytes": {
+        "median": 34906112.0,
+        "min": 34881536,
+        "max": 34963456
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "save",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 1325.5,
+        "min": 1078.375,
+        "max": 1520.75
+      },
+      "process_peak_rss_bytes": {
+        "median": 34906112.0,
+        "min": 34816000,
+        "max": 34930688
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "save",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 1226.375,
+        "min": 932.125,
+        "max": 1744.875
+      },
+      "process_peak_rss_bytes": {
+        "median": 34906112.0,
+        "min": 34881536,
+        "max": 34963456
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "second_resume",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 1407171.75,
+        "min": 1403166.375,
+        "max": 1418859.375
+      },
+      "process_peak_rss_bytes": {
+        "median": 34906112.0,
+        "min": 34816000,
+        "max": 34930688
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 8192,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 224,
+        "max": 224
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "second_resume",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 1407112.1875,
+        "min": 1400489.625,
+        "max": 1415364.375
+      },
+      "process_peak_rss_bytes": {
+        "median": 34906112.0,
+        "min": 34881536,
+        "max": 34963456
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 8192,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 32,
+        "max": 32
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "unique_complete",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 11261698.0625,
+        "min": 11241067.625,
+        "max": 11336000.0
+      },
+      "process_peak_rss_bytes": {
+        "median": 34906112.0,
+        "min": 34816000,
+        "max": 34930688
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 65536,
+        "max": 65536
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 32,
+        "max": 32
+      },
+      "capacity_growths": {
+        "min": 1792,
+        "max": 1792
+      },
+      "finish_steps": {
+        "min": 384,
+        "max": 384
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "int",
+      "phase": "unique_complete",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 11108552.0625,
+        "min": 11072963.5,
+        "max": 11127562.625
+      },
+      "process_peak_rss_bytes": {
+        "median": 34906112.0,
+        "min": 34881536,
+        "max": 34963456
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 65536,
+        "max": 65536
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 32,
+        "max": 32
+      },
+      "capacity_growths": {
+        "min": 64,
+        "max": 64
+      },
+      "finish_steps": {
+        "min": 32,
+        "max": 32
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "complete_shared",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 11122169.1875,
+        "min": 11057302.0,
+        "max": 11358203.25
+      },
+      "process_peak_rss_bytes": {
+        "median": 67248128.0,
+        "min": 67207168,
+        "max": 67665920
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 49152,
+        "max": 49152
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 32,
+        "max": 32
+      },
+      "capacity_growths": {
+        "min": 1344,
+        "max": 1344
+      },
+      "finish_steps": {
+        "min": 33152,
+        "max": 33152
+      },
+      "finish_copied_items": {
+        "min": 32768,
+        "max": 32768
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "complete_shared",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 10901078.3125,
+        "min": 10785323.0,
+        "max": 11133588.375
+      },
+      "process_peak_rss_bytes": {
+        "median": 67248128.0,
+        "min": 67207168,
+        "max": 67715072
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 49152,
+        "max": 49152
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 32,
+        "max": 32
+      },
+      "capacity_growths": {
+        "min": 64,
+        "max": 64
+      },
+      "finish_steps": {
+        "min": 32832,
+        "max": 32832
+      },
+      "finish_copied_items": {
+        "min": 32768,
+        "max": 32768
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "drop_changed",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 626158.8125,
+        "min": 615088.625,
+        "max": 637187.375
+      },
+      "process_peak_rss_bytes": {
+        "median": 67248128.0,
+        "min": 67207168,
+        "max": 67665920
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "drop_changed",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 581304.75,
+        "min": 573656.375,
+        "max": 599677.125
+      },
+      "process_peak_rss_bytes": {
+        "median": 67248128.0,
+        "min": 67207168,
+        "max": 67715072
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "drop_unchanged",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 833.375,
+        "min": 739.375,
+        "max": 1067.75
+      },
+      "process_peak_rss_bytes": {
+        "median": 67248128.0,
+        "min": 67207168,
+        "max": 67665920
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "drop_unchanged",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 906.4375,
+        "min": 770.5,
+        "max": 1000.0
+      },
+      "process_peak_rss_bytes": {
+        "median": 67248128.0,
+        "min": 67207168,
+        "max": 67715072
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "first_resume",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 1531700.5625,
+        "min": 1516651.25,
+        "max": 1553239.75
+      },
+      "process_peak_rss_bytes": {
+        "median": 67248128.0,
+        "min": 67207168,
+        "max": 67665920
+      },
+      "copies": {
+        "min": 32,
+        "max": 32
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 8192,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 224,
+        "max": 224
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "first_resume",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 1529921.9375,
+        "min": 1510187.375,
+        "max": 1558203.0
+      },
+      "process_peak_rss_bytes": {
+        "median": 67248128.0,
+        "min": 67207168,
+        "max": 67715072
+      },
+      "copies": {
+        "min": 32,
+        "max": 32
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 8192,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 224,
+        "max": 224
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "resave",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 606.9375,
+        "min": 489.375,
+        "max": 770.75
+      },
+      "process_peak_rss_bytes": {
+        "median": 67248128.0,
+        "min": 67207168,
+        "max": 67665920
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "resave",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 565.125,
+        "min": 401.125,
+        "max": 833.25
+      },
+      "process_peak_rss_bytes": {
+        "median": 67248128.0,
+        "min": 67207168,
+        "max": 67715072
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "resume_after_resave",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 1527468.6875,
+        "min": 1518317.75,
+        "max": 1540828.0
+      },
+      "process_peak_rss_bytes": {
+        "median": 67248128.0,
+        "min": 67207168,
+        "max": 67665920
+      },
+      "copies": {
+        "min": 32,
+        "max": 32
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 8192,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 224,
+        "max": 224
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "resume_after_resave",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 1517776.0,
+        "min": 1508067.5,
+        "max": 1570125.0
+      },
+      "process_peak_rss_bytes": {
+        "median": 67248128.0,
+        "min": 67207168,
+        "max": 67715072
+      },
+      "copies": {
+        "min": 32,
+        "max": 32
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 8192,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 224,
+        "max": 224
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "rollback",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 107888.0625,
+        "min": 105666.5,
+        "max": 109687.625
+      },
+      "process_peak_rss_bytes": {
+        "median": 67248128.0,
+        "min": 67207168,
+        "max": 67665920
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "rollback",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 107328.0625,
+        "min": 105619.75,
+        "max": 112078.125
+      },
+      "process_peak_rss_bytes": {
+        "median": 67248128.0,
+        "min": 67207168,
+        "max": 67715072
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "save",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 2387.9375,
+        "min": 2281.5,
+        "max": 2844.0
+      },
+      "process_peak_rss_bytes": {
+        "median": 67248128.0,
+        "min": 67207168,
+        "max": 67665920
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "save",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 2262.9375,
+        "min": 2005.25,
+        "max": 2625.125
+      },
+      "process_peak_rss_bytes": {
+        "median": 67248128.0,
+        "min": 67207168,
+        "max": 67715072
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "second_resume",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 1512242.25,
+        "min": 1501724.0,
+        "max": 1533739.625
+      },
+      "process_peak_rss_bytes": {
+        "median": 67248128.0,
+        "min": 67207168,
+        "max": 67665920
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 8192,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 224,
+        "max": 224
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "second_resume",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 1511476.5625,
+        "min": 1502593.75,
+        "max": 1537312.5
+      },
+      "process_peak_rss_bytes": {
+        "median": 67248128.0,
+        "min": 67207168,
+        "max": 67715072
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 8192,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 32,
+        "max": 32
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "unique_complete",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 11929541.6875,
+        "min": 11868614.75,
+        "max": 12298749.75
+      },
+      "process_peak_rss_bytes": {
+        "median": 67248128.0,
+        "min": 67207168,
+        "max": 67665920
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 65536,
+        "max": 65536
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 32,
+        "max": 32
+      },
+      "capacity_growths": {
+        "min": 1792,
+        "max": 1792
+      },
+      "finish_steps": {
+        "min": 384,
+        "max": 384
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 1024,
+      "payload": "string",
+      "phase": "unique_complete",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 11819697.9375,
+        "min": 11785171.625,
+        "max": 12103291.75
+      },
+      "process_peak_rss_bytes": {
+        "median": 67248128.0,
+        "min": 67207168,
+        "max": 67715072
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 65536,
+        "max": 65536
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 32,
+        "max": 32
+      },
+      "capacity_growths": {
+        "min": 64,
+        "max": 64
+      },
+      "finish_steps": {
+        "min": 32,
+        "max": 32
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "complete_shared",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 34421473.875,
+        "min": 33850515.625,
+        "max": 41014583.25
+      },
+      "process_peak_rss_bytes": {
+        "median": 246472704.0,
+        "min": 245874688,
+        "max": 291110912
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 49152,
+        "max": 49152
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 32,
+        "max": 32
+      },
+      "capacity_growths": {
+        "min": 1344,
+        "max": 1344
+      },
+      "finish_steps": {
+        "min": 526592,
+        "max": 526592
+      },
+      "finish_copied_items": {
+        "min": 524288,
+        "max": 524288
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "complete_shared",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 34062447.8125,
+        "min": 32829322.875,
+        "max": 36436250.125
+      },
+      "process_peak_rss_bytes": {
+        "median": 292978688.0,
+        "min": 292945920,
+        "max": 293208064
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 49152,
+        "max": 49152
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 32,
+        "max": 32
+      },
+      "capacity_growths": {
+        "min": 64,
+        "max": 64
+      },
+      "finish_steps": {
+        "min": 524352,
+        "max": 524352
+      },
+      "finish_copied_items": {
+        "min": 524288,
+        "max": 524288
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "drop_changed",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 6015627.625,
+        "min": 5974588.25,
+        "max": 6172234.375
+      },
+      "process_peak_rss_bytes": {
+        "median": 246472704.0,
+        "min": 245874688,
+        "max": 291110912
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "drop_changed",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 5335161.5,
+        "min": 5269609.25,
+        "max": 5394807.5
+      },
+      "process_peak_rss_bytes": {
+        "median": 292978688.0,
+        "min": 292945920,
+        "max": 293208064
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "drop_unchanged",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 1309.9375,
+        "min": 1208.375,
+        "max": 1463.625
+      },
+      "process_peak_rss_bytes": {
+        "median": 246472704.0,
+        "min": 245874688,
+        "max": 291110912
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "drop_unchanged",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 1317.5625,
+        "min": 1234.375,
+        "max": 1354.125
+      },
+      "process_peak_rss_bytes": {
+        "median": 292978688.0,
+        "min": 292945920,
+        "max": 293208064
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "first_resume",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 1436080.75,
+        "min": 1431755.25,
+        "max": 1521073.0
+      },
+      "process_peak_rss_bytes": {
+        "median": 246472704.0,
+        "min": 245874688,
+        "max": 291110912
+      },
+      "copies": {
+        "min": 32,
+        "max": 32
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 8192,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 224,
+        "max": 224
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "first_resume",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 1477125.0625,
+        "min": 1425906.25,
+        "max": 1532901.375
+      },
+      "process_peak_rss_bytes": {
+        "median": 292978688.0,
+        "min": 292945920,
+        "max": 293208064
+      },
+      "copies": {
+        "min": 32,
+        "max": 32
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 8192,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 224,
+        "max": 224
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "resave",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 460.9375,
+        "min": 364.5,
+        "max": 770.75
+      },
+      "process_peak_rss_bytes": {
+        "median": 246472704.0,
+        "min": 245874688,
+        "max": 291110912
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "resave",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 434.8125,
+        "min": 406.375,
+        "max": 505.125
+      },
+      "process_peak_rss_bytes": {
+        "median": 292978688.0,
+        "min": 292945920,
+        "max": 293208064
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "resume_after_resave",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 1437888.0,
+        "min": 1416031.125,
+        "max": 1466994.75
+      },
+      "process_peak_rss_bytes": {
+        "median": 246472704.0,
+        "min": 245874688,
+        "max": 291110912
+      },
+      "copies": {
+        "min": 32,
+        "max": 32
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 8192,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 224,
+        "max": 224
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "resume_after_resave",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 1446924.5,
+        "min": 1432151.125,
+        "max": 1476323.125
+      },
+      "process_peak_rss_bytes": {
+        "median": 292978688.0,
+        "min": 292945920,
+        "max": 293208064
+      },
+      "copies": {
+        "min": 32,
+        "max": 32
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 8192,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 224,
+        "max": 224
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "rollback",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 89598.9375,
+        "min": 89156.125,
+        "max": 92083.375
+      },
+      "process_peak_rss_bytes": {
+        "median": 246472704.0,
+        "min": 245874688,
+        "max": 291110912
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "rollback",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 89109.3125,
+        "min": 88265.75,
+        "max": 92156.0
+      },
+      "process_peak_rss_bytes": {
+        "median": 292978688.0,
+        "min": 292945920,
+        "max": 293208064
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "save",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 3200.5,
+        "min": 2661.625,
+        "max": 3953.375
+      },
+      "process_peak_rss_bytes": {
+        "median": 246472704.0,
+        "min": 245874688,
+        "max": 291110912
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "save",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 3119.8125,
+        "min": 2552.25,
+        "max": 3385.625
+      },
+      "process_peak_rss_bytes": {
+        "median": 292978688.0,
+        "min": 292945920,
+        "max": 293208064
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "second_resume",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 1416585.8125,
+        "min": 1413463.375,
+        "max": 1519354.25
+      },
+      "process_peak_rss_bytes": {
+        "median": 246472704.0,
+        "min": 245874688,
+        "max": 291110912
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 8192,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 224,
+        "max": 224
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "second_resume",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 1436471.3125,
+        "min": 1426968.875,
+        "max": 1443869.875
+      },
+      "process_peak_rss_bytes": {
+        "median": 292978688.0,
+        "min": 292945920,
+        "max": 293208064
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 8192,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 32,
+        "max": 32
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "unique_complete",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 11917981.6875,
+        "min": 11650380.25,
+        "max": 13782052.25
+      },
+      "process_peak_rss_bytes": {
+        "median": 246472704.0,
+        "min": 245874688,
+        "max": 291110912
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 65536,
+        "max": 65536
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 32,
+        "max": 32
+      },
+      "capacity_growths": {
+        "min": 1792,
+        "max": 1792
+      },
+      "finish_steps": {
+        "min": 2304,
+        "max": 2304
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "int",
+      "phase": "unique_complete",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 12422560.0,
+        "min": 12017468.875,
+        "max": 12942588.375
+      },
+      "process_peak_rss_bytes": {
+        "median": 292978688.0,
+        "min": 292945920,
+        "max": 293208064
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 65536,
+        "max": 65536
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 32,
+        "max": 32
+      },
+      "capacity_growths": {
+        "min": 32,
+        "max": 32
+      },
+      "finish_steps": {
+        "min": 32,
+        "max": 32
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "complete_shared",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 43253809.9375,
+        "min": 42522838.5,
+        "max": 43992520.75
+      },
+      "process_peak_rss_bytes": {
+        "median": 518848512.0,
+        "min": 518750208,
+        "max": 521273344
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 49152,
+        "max": 49152
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 32,
+        "max": 32
+      },
+      "capacity_growths": {
+        "min": 1344,
+        "max": 1344
+      },
+      "finish_steps": {
+        "min": 526592,
+        "max": 526592
+      },
+      "finish_copied_items": {
+        "min": 524288,
+        "max": 524288
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "complete_shared",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 45729062.375,
+        "min": 42624640.5,
+        "max": 51460036.625
+      },
+      "process_peak_rss_bytes": {
+        "median": 567959552.0,
+        "min": 565985280,
+        "max": 568442880
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 49152,
+        "max": 49152
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 32,
+        "max": 32
+      },
+      "capacity_growths": {
+        "min": 64,
+        "max": 64
+      },
+      "finish_steps": {
+        "min": 524352,
+        "max": 524352
+      },
+      "finish_copied_items": {
+        "min": 524288,
+        "max": 524288
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "drop_changed",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 9999908.875,
+        "min": 9795942.5,
+        "max": 10267807.25
+      },
+      "process_peak_rss_bytes": {
+        "median": 518848512.0,
+        "min": 518750208,
+        "max": 521273344
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "drop_changed",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 8472479.3125,
+        "min": 8303156.375,
+        "max": 9201650.75
+      },
+      "process_peak_rss_bytes": {
+        "median": 567959552.0,
+        "min": 565985280,
+        "max": 568442880
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "drop_unchanged",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 1364.625,
+        "min": 1270.875,
+        "max": 1567.5
+      },
+      "process_peak_rss_bytes": {
+        "median": 518848512.0,
+        "min": 518750208,
+        "max": 521273344
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "drop_unchanged",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 1468.8125,
+        "min": 1354.125,
+        "max": 1599.0
+      },
+      "process_peak_rss_bytes": {
+        "median": 567959552.0,
+        "min": 565985280,
+        "max": 568442880
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "first_resume",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 1535544.125,
+        "min": 1525687.5,
+        "max": 1578593.875
+      },
+      "process_peak_rss_bytes": {
+        "median": 518848512.0,
+        "min": 518750208,
+        "max": 521273344
+      },
+      "copies": {
+        "min": 32,
+        "max": 32
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 8192,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 224,
+        "max": 224
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "first_resume",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 1529942.6875,
+        "min": 1502369.75,
+        "max": 1682505.0
+      },
+      "process_peak_rss_bytes": {
+        "median": 567959552.0,
+        "min": 565985280,
+        "max": 568442880
+      },
+      "copies": {
+        "min": 32,
+        "max": 32
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 8192,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 224,
+        "max": 224
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "resave",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 731.875,
+        "min": 619.875,
+        "max": 749.625
+      },
+      "process_peak_rss_bytes": {
+        "median": 518848512.0,
+        "min": 518750208,
+        "max": 521273344
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "resave",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 742.25,
+        "min": 609.5,
+        "max": 1078.125
+      },
+      "process_peak_rss_bytes": {
+        "median": 567959552.0,
+        "min": 565985280,
+        "max": 568442880
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "resume_after_resave",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 1518849.1875,
+        "min": 1502203.125,
+        "max": 1557406.0
+      },
+      "process_peak_rss_bytes": {
+        "median": 518848512.0,
+        "min": 518750208,
+        "max": 521273344
+      },
+      "copies": {
+        "min": 32,
+        "max": 32
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 8192,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 224,
+        "max": 224
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "resume_after_resave",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 1551974.0,
+        "min": 1529297.125,
+        "max": 1580880.25
+      },
+      "process_peak_rss_bytes": {
+        "median": 567959552.0,
+        "min": 565985280,
+        "max": 568442880
+      },
+      "copies": {
+        "min": 32,
+        "max": 32
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 8192,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 224,
+        "max": 224
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "rollback",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 108598.875,
+        "min": 107317.625,
+        "max": 111989.625
+      },
+      "process_peak_rss_bytes": {
+        "median": 518848512.0,
+        "min": 518750208,
+        "max": 521273344
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "rollback",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 109140.625,
+        "min": 107604.125,
+        "max": 112812.375
+      },
+      "process_peak_rss_bytes": {
+        "median": 567959552.0,
+        "min": 565985280,
+        "max": 568442880
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "save",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 3148.4375,
+        "min": 2978.875,
+        "max": 3656.125
+      },
+      "process_peak_rss_bytes": {
+        "median": 518848512.0,
+        "min": 518750208,
+        "max": 521273344
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "save",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 3450.5,
+        "min": 3051.875,
+        "max": 4239.5
+      },
+      "process_peak_rss_bytes": {
+        "median": 567959552.0,
+        "min": 565985280,
+        "max": 568442880
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 0,
+        "max": 0
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "second_resume",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 1509020.9375,
+        "min": 1496479.25,
+        "max": 1559901.125
+      },
+      "process_peak_rss_bytes": {
+        "median": 518848512.0,
+        "min": 518750208,
+        "max": 521273344
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 8192,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 224,
+        "max": 224
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "second_resume",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 1538341.1875,
+        "min": 1514651.25,
+        "max": 1566900.875
+      },
+      "process_peak_rss_bytes": {
+        "median": 567959552.0,
+        "min": 565985280,
+        "max": 568442880
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 8192,
+        "max": 8192
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 0,
+        "max": 0
+      },
+      "capacity_growths": {
+        "min": 32,
+        "max": 32
+      },
+      "finish_steps": {
+        "min": 0,
+        "max": 0
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "unique_complete",
+      "variant": "after",
+      "elapsed_ns": {
+        "median": 12438031.1875,
+        "min": 12316750.0,
+        "max": 12947770.875
+      },
+      "process_peak_rss_bytes": {
+        "median": 518848512.0,
+        "min": 518750208,
+        "max": 521273344
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 65536,
+        "max": 65536
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 32,
+        "max": 32
+      },
+      "capacity_growths": {
+        "min": 1792,
+        "max": 1792
+      },
+      "finish_steps": {
+        "min": 2304,
+        "max": 2304
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    },
+    {
+      "tasks": 32,
+      "builder_len": 16384,
+      "payload": "string",
+      "phase": "unique_complete",
+      "variant": "before",
+      "elapsed_ns": {
+        "median": 13429088.5625,
+        "min": 13044760.25,
+        "max": 13566125.0
+      },
+      "process_peak_rss_bytes": {
+        "median": 567959552.0,
+        "min": 565985280,
+        "max": 568442880
+      },
+      "copies": {
+        "min": 0,
+        "max": 0
+      },
+      "copied_items": {
+        "min": 0,
+        "max": 0
+      },
+      "pushes": {
+        "min": 65536,
+        "max": 65536
+      },
+      "callback_calls": {
+        "min": 0,
+        "max": 0
+      },
+      "finishes": {
+        "min": 32,
+        "max": 32
+      },
+      "capacity_growths": {
+        "min": 32,
+        "max": 32
+      },
+      "finish_steps": {
+        "min": 32,
+        "max": 32
+      },
+      "finish_copied_items": {
+        "min": 0,
+        "max": 0
+      }
+    }
+  ]
+}

@@ -349,6 +349,7 @@
   - [構築経路の選択](optimize/runtime/checkpoint/list_builder_route_decision_2026_10_12.md)では、サイズ閾値を設けずList/Generatorの共通Builderを使う方針を確認した。サイズ単独の優劣境界は原本から選べず、全条件の最速方式を確定したものではない。
   - [末尾の直接所有の比較](optimize/runtime/checkpoint/list_builder_owned_tail_2026_10_12.md)で真に短い実出力0/1/8/32/256と初期構築を追加した。RefCell直接保持と専有Boxはいずれも改善・悪化が混在し不採用。Rc方式を維持し、空の保存で元の予約bufferが共有化される問題のみ修正した。通常経路の遅化とRSS差の解消を示す結果ではない。
   - [実VMのメモリ境界測定](optimize/runtime/checkpoint/list_runtime_oi039_vm_memory_2026_10_12.md)でrequested-live最大増分はInt約360→180 MiB、String約745→448 MiBとなり、全破棄後の開始値復帰を確認した。Intの全期間peak RSSは停止barrierなしでも約22 MiB増えた。解放境界のresident増と後続反復への残存を観測したが、allocator/OS内訳とpeakへの寄与量は未特定。計数とRSSは別processの系列である。
+- 追加結果: [Packed / Builderの有界chunk採用](optimize/runtime/list/packed_chunk_adoption_2026_10_15.md#実vmのbuilderへの影響)で、32 Task / 長さ16,384のunique完成中央値はInt 12.423→11.918 ms、String 13.429→12.438 ms、process全期間peak RSSはInt 279.406→235.055 MiB、String 541.648→494.813 MiBとなった。Intの時間範囲とshared完成の範囲は重なる。前回Rc版との比較であり、旧Vec基準への解消やallocator原因の特定ではない。
 - 未確定点:
   - 通常追加時のRc所有確認、残るValueのstackコピー、VMの完成継続判定等が時間へ与える寄与。判定順の変更が無効でも、判定費用自体が0と確定したわけではない。最初のsegment確保は `unique_complete` の準備区間に含まれるため、測定した遅化をその確保時間と同一視しない。
   - IntのRSS増に対するCons構築、allocator、前区間の解放・再利用の寄与。構造上の追加allocationだけからRSS差の原因と量を断定しない。

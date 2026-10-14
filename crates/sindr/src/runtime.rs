@@ -422,8 +422,16 @@ struct ListConsNode {
 
 #[derive(Clone)]
 struct PackedList {
-    items: Rc<Vec<Value>>,
+    chunk: Rc<PackedChunk>,
     offset: usize,
+}
+
+/// Maximum values retained by a single packed sequence chunk.
+pub const LIST_CHUNK_CAPACITY: usize = 256;
+
+struct PackedChunk {
+    items: Vec<Value>,
+    tail: ListHandle,
 }
 
 /// Callable runtime value.
@@ -811,19 +819,52 @@ impl ListHandle {
         }
     }
 
-    /// Move the buffer into immutable storage without rebuilding its elements.
+    /// Move values into bounded immutable chunks without cloning payloads.
     pub fn from_items(items: Vec<Value>) -> Self {
         let len = items.len();
         if len == 0 {
-            Self::empty()
-        } else {
-            Self {
-                repr: ListRepr::Packed(PackedList {
-                    items: Rc::new(items),
-                    offset: 0,
-                }),
-                len,
+            return Self::empty();
+        }
+        if len <= LIST_CHUNK_CAPACITY {
+            return Self::prepend_items(items, &Self::empty());
+        }
+        let mut remaining = items.into_iter().rev();
+        let mut output = Self::empty();
+        let mut chunk_len = (len - 1) % LIST_CHUNK_CAPACITY + 1;
+        loop {
+            let mut chunk = remaining.by_ref().take(chunk_len).collect::<Vec<_>>();
+            if chunk.is_empty() {
+                return output;
             }
+            chunk.reverse();
+            output = Self::prepend_items(chunk, &output);
+            chunk_len = LIST_CHUNK_CAPACITY;
+        }
+    }
+
+    /// Prepend one nonempty bounded chunk, moving its owned values.
+    /// Invalid length is an internal contract violation, never a representation fallback.
+    pub fn prepend_items(mut items: Vec<Value>, tail: &Self) -> Self {
+        assert!(
+            !items.is_empty() && items.len() <= LIST_CHUNK_CAPACITY,
+            "Packed chunk length must be 1..=256"
+        );
+        let len = tail
+            .len
+            .checked_add(items.len())
+            .expect("List length overflow");
+        if items.capacity() > LIST_CHUNK_CAPACITY {
+            items = items.into_boxed_slice().into_vec();
+        }
+        Self {
+            repr: ListRepr::Packed(PackedList {
+                chunk: Rc::new(PackedChunk {
+                    items,
+                    tail: tail.clone(),
+                }),
+                offset: 0,
+            }),
+            len,
         }
     }
 
@@ -839,7 +880,7 @@ impl ListHandle {
         match &self.repr {
             ListRepr::Empty => None,
             ListRepr::Cons(node) => Some(node.value.clone()),
-            ListRepr::Packed(packed) => Some(packed.items[packed.offset].clone()),
+            ListRepr::Packed(packed) => Some(packed.chunk.items[packed.offset].clone()),
         }
     }
 
@@ -848,20 +889,21 @@ impl ListHandle {
             ListRepr::Empty => None,
             ListRepr::Cons(node) => Some(node.tail.clone()),
             ListRepr::Packed(packed) => {
+                let offset = packed
+                    .offset
+                    .checked_add(1)
+                    .expect("Packed List offset overflow");
                 let len = self
                     .len
                     .checked_sub(1)
                     .expect("nonempty Packed List length");
-                Some(if len == 0 {
-                    Self::empty()
+                Some(if offset == packed.chunk.items.len() {
+                    packed.chunk.tail.clone()
                 } else {
                     Self {
                         repr: ListRepr::Packed(PackedList {
-                            items: Rc::clone(&packed.items),
-                            offset: packed
-                                .offset
-                                .checked_add(1)
-                                .expect("Packed List offset overflow"),
+                            chunk: Rc::clone(&packed.chunk),
+                            offset,
                         }),
                         len,
                     }
@@ -880,15 +922,25 @@ impl ListHandle {
 impl Drop for ListHandle {
     fn drop(&mut self) {
         let mut repr = std::mem::replace(&mut self.repr, ListRepr::Empty);
-        while let ListRepr::Cons(node) = repr {
-            // A shared tail remains owned by its other handles.
-            let Ok(mut node) = Rc::try_unwrap(node) else {
-                break;
+        loop {
+            let tail = match repr {
+                ListRepr::Empty => break,
+                ListRepr::Cons(node) => {
+                    let Ok(mut node) = Rc::try_unwrap(node) else {
+                        break;
+                    };
+                    drop(node.value);
+                    std::mem::replace(&mut node.tail.repr, ListRepr::Empty)
+                }
+                ListRepr::Packed(packed) => {
+                    let Ok(mut chunk) = Rc::try_unwrap(packed.chunk) else {
+                        break;
+                    };
+                    drop(chunk.items);
+                    std::mem::replace(&mut chunk.tail.repr, ListRepr::Empty)
+                }
             };
-            // Keep the existing head-before-tail destruction order. Only the
-            // tail chain is iterative; nested Values use their own destructors.
-            drop(node.value);
-            repr = std::mem::replace(&mut node.tail.repr, ListRepr::Empty);
+            repr = tail;
         }
     }
 }
@@ -1683,43 +1735,95 @@ mod tests {
     }
 
     #[test]
-    fn packed_lists_move_and_share_the_original_buffer_at_every_length() {
-        for len in [1, 8, 1024] {
-            let items = (0..len).map(|n| Value::Int(int(n))).collect::<Vec<_>>();
-            let allocation = items.as_ptr();
-            let packed = ListHandle::from_items(items);
+    fn packed_lists_bound_retention_and_preserve_every_chunk_boundary() {
+        for len in [1, 8, 255, 256, 257, 511, 512, 513, 1024] {
+            let packed = ListHandle::from_items((0..len).map(|n| Value::Int(int(n))).collect());
             let super::ListRepr::Packed(storage) = &packed.repr else {
                 panic!("nonempty from_items must be Packed")
             };
-            assert_eq!(storage.items.as_ptr(), allocation);
-            assert_eq!(storage.offset, 0);
-            assert_eq!(packed.len(), len as usize);
-            let with_head = ListHandle::cons(Value::Unit, &packed);
-            let super::ListRepr::Cons(node) = &with_head.repr else {
-                panic!("cons must allocate one Cons")
-            };
-            let super::ListRepr::Packed(shared_tail) = &node.tail.repr else {
-                panic!("cons must preserve Packed tail")
-            };
-            assert!(std::rc::Rc::ptr_eq(&storage.items, &shared_tail.items));
-            let mut cursor = packed.clone();
-            for offset in 0..len {
-                let super::ListRepr::Packed(current) = &cursor.repr else {
-                    panic!("tail must stay Packed")
-                };
-                assert!(std::rc::Rc::ptr_eq(&storage.items, &current.items));
-                assert_eq!(current.offset, offset as usize);
-                assert_eq!(cursor.len(), (len - offset) as usize);
-                assert_eq!(cursor.head_value(), Some(Value::Int(int(offset))));
+            assert!(
+                storage.chunk.items.len() <= 256,
+                "one retained chunk is bounded"
+            );
+            let first = std::rc::Rc::downgrade(&storage.chunk);
+            let saved = packed.clone();
+            let mut cursor = packed;
+            for n in 0..len {
+                assert_eq!(cursor.len(), (len - n) as usize);
+                assert_eq!(cursor.head_value(), Some(Value::Int(int(n))));
                 cursor = cursor.tail_handle().unwrap();
             }
-            assert!(matches!(cursor.repr, super::ListRepr::Empty));
-            assert_eq!(cursor.len(), 0);
-            assert!(matches!(
-                ListHandle::from_items(vec![]).repr,
-                super::ListRepr::Empty
-            ));
+            assert!(cursor.is_empty());
+            assert!(first.upgrade().is_some(), "saved root keeps its chunk");
+            let mut last = saved.clone();
+            for _ in 1..len {
+                last = last.tail_handle().unwrap();
+            }
+            drop(saved);
+            if len > 256 {
+                assert!(
+                    first.upgrade().is_none(),
+                    "short tail releases earlier chunks"
+                );
+            }
+            assert_eq!(last.head_value(), Some(Value::Int(int(len - 1))));
         }
+    }
+
+    #[test]
+    fn packed_chunks_move_string_payloads_and_bound_reserved_capacity() {
+        let items: Vec<_> = (0..513)
+            .map(|n| Value::Str(format!("{n}:{}", "x".repeat(64))))
+            .collect();
+        let pointers: Vec<_> = items
+            .iter()
+            .map(|item| match item {
+                Value::Str(text) => text.as_ptr(),
+                _ => unreachable!(),
+            })
+            .collect();
+        let mut cursor = ListHandle::from_items(items);
+        for pointer in pointers {
+            let super::ListRepr::Packed(packed) = &cursor.repr else {
+                unreachable!()
+            };
+            let Value::Str(text) = &packed.chunk.items[packed.offset] else {
+                unreachable!()
+            };
+            assert_eq!(text.as_ptr(), pointer, "handoff must not clone payloads");
+            assert!(packed.chunk.items.capacity() <= super::LIST_CHUNK_CAPACITY);
+            cursor = cursor.tail_handle().unwrap();
+        }
+        let mut reserved = Vec::with_capacity(4096);
+        reserved.push(Value::Unit);
+        let list = ListHandle::from_items(reserved);
+        let super::ListRepr::Packed(packed) = &list.repr else {
+            unreachable!()
+        };
+        assert!(packed.chunk.items.capacity() <= super::LIST_CHUNK_CAPACITY);
+    }
+
+    #[test]
+    fn packed_chunk_constructor_rejects_invalid_lengths() {
+        assert!(std::panic::catch_unwind(|| ListHandle::prepend_items(
+            vec![],
+            &ListHandle::empty()
+        ))
+        .is_err());
+        assert!(std::panic::catch_unwind(|| ListHandle::prepend_items(
+            vec![Value::Unit; 257],
+            &ListHandle::empty()
+        ))
+        .is_err());
+        let overflow = ListHandle {
+            repr: super::ListRepr::Empty,
+            len: usize::MAX,
+        };
+        assert!(std::panic::catch_unwind(|| ListHandle::prepend_items(
+            vec![Value::Unit],
+            &overflow
+        ))
+        .is_err());
     }
 
     #[test]
@@ -1730,7 +1834,7 @@ mod tests {
         let super::ListRepr::Packed(storage) = &packed.repr else {
             unreachable!()
         };
-        let buffer = Rc::downgrade(&storage.items);
+        let buffer = Rc::downgrade(&storage.chunk);
         let shared_tail = ListHandle::cons(Value::Bool(false), &packed);
         let super::ListRepr::Cons(node) = &shared_tail.repr else {
             unreachable!()

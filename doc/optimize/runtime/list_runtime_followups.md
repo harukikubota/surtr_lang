@@ -1,6 +1,6 @@
 # List / VM の残課題
 
-更新日: 2026-10-13。状態: 未解決事項の調査・設計用。
+更新日: 2026-10-15。状態: 残課題の実装・測定を進行中。
 
 以下には追加の性能改善を残す。
 最適化の採用方式や実時間の目標値は、各項目の調査後に決める。
@@ -13,7 +13,7 @@ Future表が非空でも、[位置追跡](value/future_stack_index_optimization_
 
 以下は当初資料だけをmainへ集約した。製品コードの統合状況は [runtime一覧](README.md) を参照する。
 
-- RT-2: [完成Vecのchunk移譲比較](list/list_chunk_handoff_comparison_2026_10_13.md)。保持量だけでなく移譲の追加allocation・peakを測定した。製品方式は未決。
+- RT-2: [256要素chunkの製品採用](list/packed_chunk_adoption_2026_10_15.md)を完了した。短いtailが過去のchunkを保持しない方式と有界Builder完成を採用し、構築費用・peak増加と他owner保持を方式の制約として記録した。
 - RT-4: [Regex入力共有](regex/regex_input_sharing_2026_10_13.md)をmain `c577b32d`へコミットした。[mainでの再測定・検証](regex/regex_input_sharing_adoption_2026_10_13.md)を追加した。同期探索・収集の分割は残る。
 - RT-4: [FileOutHandler再現](file-out/file_out_handler_lifecycle_reproduction_2026_10_13.md)と[修復仕様案](file-out/file_out_handler_lifecycle_repair_spec.md)。既存の資源寿命不一致はOI-040で追跡する。製品修復は未実施。
 - RT-5: [Builder共有化](checkpoint/list_runtime_rt5_builder_optimization_2026_10_12.md)、[通常経路の追加調査](checkpoint/list_runtime_oi039_cost_2026_10_12.md)、[実VMメモリ境界](checkpoint/list_runtime_oi039_vm_memory_2026_10_12.md)、[末尾所有の比較](checkpoint/list_builder_owned_tail_2026_10_12.md)。`9ea8`の採用済み共有方式をmainへコミットした。[mainでの再測定・検証](checkpoint/list_runtime_rt5_builder_adoption_2026_10_13.md)を追加した。OI-039の遅化/RSS原因は残る。
@@ -32,14 +32,6 @@ Future表が非空でも、[位置追跡](value/future_stack_index_optimization_
 待機・取消・rollback を維持する。通常の実行切替えでは Builder を移動し、checkpoint は独立した保存状態を持つ。
 
 ## Runtime の追加調査・最適化
-
-### RT-2 Packed の使用済み先頭部分の保持
-
-- 現状: 小さい suffix だけを保持しても、元の `Rc<Vec<Value>>` 全体が生存する。最後の参照の破棄では buffer 全体の解放が発生し得る。
-- 未確定点: chunk 化、明示的な compaction、共有を続ける方式のどれを採用するか。保持量とコピー量の交換条件を先に測る。
-- 測定済み: [保持方式比較](list/list_tail_retention_comparison_2026_10_11.md)で、共有継続・chunk・明示的 compaction を同じ入力で比較した。短い suffix の保持量は減るが、元 List を checkpoint が保持している間は全体を解放できない。製品の最適化は未着手。
-- 次の作業: 比較で確認した所有条件を基に採用方式と製品への移行仕様を決める。chunk は Builder / `from_items` からの所有権移動、compaction は入口と対象 suffix、予算・取消・rollback を具体化する。
-- 受け入れ条件: `cons` / `head` / `tail` / `uncons` / `len` の仮想的な O(1)、永続性、論理順を保つ。tail のたびに全要素をコピーする経路を導入しない。改善対象と、保持量が改善しないケースを記録する。
 
 ### RT-4 未分割 builtin と外部呼出し
 

@@ -69,3 +69,16 @@ PROBE_VERIFY=1 target/list-tail-retention-count/release/list-tail-retention-prob
 runner は macOS 専用。性能系列では `PROBE_VERIFY` を unset する。
 出力 `{prefix}.jsonl` と `{prefix}.summary.json` に全サンプル、中央値・範囲と
 commit / source・lock・binary の SHA-256、toolchain / OS を保存する。
+
+## 256要素chunkの製品採用を再現する
+
+上のモデル比較と過去原本は作成時点のPackedを基準にする。現行製品の`shared`は256要素chunkを使う。新しい製品前後比較には`build.py`と`adoption.py`を使い、局所モデルの`chunk`を選ばない。前後それぞれ独立targetでcount / time binaryを構築し、source / Cargo artifact / binary hashを保存する。
+
+```sh
+python3 tests/profile/list_tail_retention/build.py --root /absolute/baseline --revision eec8c9b6 --target-dir /absolute/before-count-target --output-dir /absolute/before-count
+python3 tests/profile/list_tail_retention/build.py --root /absolute/baseline --revision eec8c9b6 --time-only --target-dir /absolute/before-time-target --output-dir /absolute/before-time
+# 現行rootも同じ手順でafter-count / after-timeを保存する
+python3 tests/profile/list_tail_retention/adoption.py --before-count /absolute/before-count/builds.json --before-time /absolute/before-time/builds.json --after-count /absolute/after-count/builds.json --after-time /absolute/after-time/builds.json --output /absolute/new_adoption --samples 6
+```
+
+18条件の前後各6 sample、count / time別、AB / BA同数の432 fresh processと、別36 verify processを使う。既存原本への上書きを拒否する。tail全走査の確保0、全破棄後の要求layout残存0と全値を照合する。計数と検証の時間を記録せず、time系列の未測定確保値はnullにする。製品の保持量・構築・peakの結果は[採用記録](../../../doc/optimize/runtime/list/packed_chunk_adoption_2026_10_15.md)を参照する。測定中はbuild・他のtestを行わない。

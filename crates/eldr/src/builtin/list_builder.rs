@@ -1,5 +1,5 @@
 use crate::error::RuntimeError;
-use sindr::runtime::{ListHandle, Value};
+use sindr::runtime::{ListHandle, Value, LIST_CHUNK_CAPACITY};
 use std::{fmt, rc::Rc};
 
 /// Append-only segments keep checkpoint prefixes immutable.
@@ -65,9 +65,12 @@ impl ListBuilder {
         if capacity == 0 {
             return Ok(Self::default());
         }
+        if capacity > isize::MAX as usize / std::mem::size_of::<Value>() {
+            return Err(RuntimeError::new("List builder capacity overflow"));
+        }
         let mut items = Vec::new();
         items
-            .try_reserve(capacity)
+            .try_reserve(capacity.min(LIST_CHUNK_CAPACITY))
             .map_err(|_| RuntimeError::new("List builder capacity overflow"))?;
         Ok(Self {
             head: Some(Rc::new(Segment {
@@ -85,7 +88,12 @@ impl ListBuilder {
             .checked_add(1)
             .ok_or_else(|| RuntimeError::new("List builder length overflow"))?;
         let capacity_growth;
-        if let Some(segment) = self.head.as_mut().and_then(Rc::get_mut) {
+        if let Some(segment) = self
+            .head
+            .as_mut()
+            .and_then(Rc::get_mut)
+            .filter(|segment| segment.items.len() < LIST_CHUNK_CAPACITY)
+        {
             let capacity = segment.items.capacity();
             if segment.items.len() == capacity {
                 segment
@@ -178,8 +186,8 @@ impl ListBuilderFinish {
                 "List builder finish cursor exceeds segment length",
             ));
         }
-        // The ordinary single-buffer path remains a direct ownership transfer.
-        if self.output.is_empty()
+        // Every segment is bounded; moving its buffer costs one transition.
+        if !current.items.is_empty()
             && self.cursor == current.items.len()
             && Rc::strong_count(current) == 1
         {
@@ -190,7 +198,8 @@ impl ListBuilderFinish {
                 .current
                 .as_ref()
                 .map_or(0, |segment| segment.items.len());
-            self.output = ListHandle::from_items(std::mem::take(&mut segment.items));
+            self.output =
+                ListHandle::prepend_items(std::mem::take(&mut segment.items), &self.output);
             return if self.current.is_none() {
                 self.complete()
             } else {
@@ -382,19 +391,20 @@ mod tests {
     }
 
     #[test]
-    fn unique_buffer_finish_moves_without_copy_in_one_step() {
+    fn unique_chunk_finish_moves_without_copy_in_bounded_steps() {
         let mut builder = ListBuilder::with_capacity(1024).unwrap();
         for n in 0..1024 {
             builder.push(value(n)).unwrap();
         }
         reset_list_builder_metrics();
-        let ListFinishStep::Complete(list) = builder.finish().resume().unwrap() else {
-            panic!("unique buffer must finish in one transition");
+        let ListFinishStep::Pending(continuation) = builder.finish().resume().unwrap() else {
+            panic!("1024 elements must not finish in one transition");
         };
+        let list = finish(continuation);
         assert_eq!(list.len(), 1024);
         let metrics = list_builder_metrics();
         assert_eq!(metrics.finish_copied_items, 0);
-        assert_eq!(metrics.finish_steps, 1);
+        assert_eq!(metrics.finish_steps, 4);
         assert_eq!(metrics.finishes, 1);
     }
 
@@ -471,7 +481,9 @@ mod tests {
             (0..16).map(value).collect::<Vec<_>>()
         );
         assert_eq!(list_builder_metrics().finish_copied_items, 0);
-        assert!(list_builder_metrics().finish_steps >= 16);
+        // Eight emitted values are dropped individually, then the remaining
+        // bounded owned buffer is attached to the already emitted output.
+        assert_eq!(list_builder_metrics().finish_steps, 9);
     }
 
     #[test]

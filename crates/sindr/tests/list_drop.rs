@@ -78,6 +78,24 @@ fn cons_over_packed_drop() {
 }
 
 #[test]
+fn mixed_packed_and_cons_chain_drop() {
+    subprocess("mixed_packed_and_cons_chain_drop", || {
+        let mut list = ListHandle::empty();
+        for _ in 0..LENGTH {
+            list = ListHandle::cons(Value::Bool(true), &list);
+            list = ListHandle::prepend_items(vec![Value::Bool(false)], &list);
+        }
+        let mut suffix = list.clone();
+        for _ in 0..2 * LENGTH - 1 {
+            suffix = suffix.tail_handle().unwrap();
+        }
+        drop(list);
+        assert_eq!(suffix.head_value(), Some(Value::Bool(true)));
+        drop(suffix);
+    });
+}
+
+#[test]
 fn fixed_depth_values_with_long_cons_drop() {
     subprocess("fixed_depth_values_with_long_cons_drop", || {
         let long_list = || Value::List(cons_chain(ListHandle::empty()));

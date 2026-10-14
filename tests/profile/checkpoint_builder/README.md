@@ -104,3 +104,13 @@ main `c577b32d` の別checkoutへ、このharnessと
 変更前のbuild・測定はそのcheckoutで行い、変更後とはtarget directoryを分ける。
 [main反映と再測定](../../../doc/optimize/runtime/checkpoint/list_runtime_rt5_builder_adoption_2026_10_13.md)
 にCargo artifact、source・binary hash、前後交互系列を保存している。
+
+## 256要素segment / Packed chunkの比較
+
+`chunk_adoption.py`は`lookup_build.py --release`で保存した2つの実VM test executableを比較する。旧Vec基準ではなく、`eec8c9b6`のRc segment版と有界chunk版の比較である。
+
+```sh
+python3 tests/profile/checkpoint_builder/chunk_adoption.py --before /absolute/before/builds.json --after /absolute/after/builds.json --output /absolute/new_chunk_run --samples 6 --repeats 8
+```
+
+1 / 32 Task、長さ1,024 / 16,384、Int / Stringの8条件。別16 processの全内容確認、前後6 sample・8反復・AB / BA同数の96時間processで、10区間と既存のlogical counterを照合する。要求allocatorは計数しない。RSSは準備・全区間・全反復・assert・JSONを含むprocess全期間peakで、特定の完成区間へ帰属させない。途中保存のValue clone 0、shared完成のclone数を維持する。完成遷移の増加は256上限の所有移譲を共通予算へ接続した結果である。[採用記録](../../../doc/optimize/runtime/list/packed_chunk_adoption_2026_10_15.md#実vmのbuilderへの影響)を参照する。
