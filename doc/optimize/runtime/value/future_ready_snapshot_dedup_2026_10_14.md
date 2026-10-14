@@ -64,4 +64,6 @@ counterはready判定の関数呼出しと、Future表から収集候補を作�
 
 ## 残件
 
+その後、[ready mapの借用](future_ready_snapshot_borrow_2026_10_14.md)で収集用のsource clone自体を省いた。上記の原本は重複削減時点の記録として保持する。
+
 未解決IDの各連続区間のFuture表・cleanup検索、各opcodeでの再確認、ready mapの検査費用、distinct ready IDの収集用cloneと各slotへのclone、値Vecと位置表の保持費用は残る。実時間・allocator・RSSとOI-037は未測定・未解決のままとする。

@@ -83,7 +83,7 @@ fn main() {
     values.truncate(n);
     let mut original: OperandStack = values.into();
     let mut clones: Vec<OperandStack> = Vec::with_capacity(count);
-    let ready = [(1, Value::Unit)].into();
+    let ready = [(1, &Value::Unit)].into();
     if mode == "allocation" { start(0); }
     let clock = (mode == "time").then(Instant::now);
     for _ in 0..pending { original.push(Value::PendingFuture(1)); }

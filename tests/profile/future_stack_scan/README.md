@@ -109,3 +109,13 @@ python3 tests/profile/future_stack_scan/ready_snapshot.py --before /absolute/bef
 1 / 256 / 4,096追跡位置、6条件、3配置、前後2 sampleをAB / BAの216 fresh processで検証する。2 ID交互のReady / Cancelled / Future結果では確認とsource cloneを位置数→distinct ID数に減らす。反復・全ID別・Running / unknown / PendingFutureなしの対照と、全slotの値、一段ずつのFuture結果、read / write visitsを固定する。
 
 操作数だけの系列であり、実時間・allocator要求・live・RSS・通常CLIは測らない。cleanup待ちの再確認、Tupleの配送と保存枝の独立性はcrate-local受入テストで確認する。[仕様と結果](../../../doc/optimize/runtime/value/future_ready_snapshot_dedup_2026_10_14.md)の基準patchを`cabbcf9e`へ適用すると変更前sourceを再現できる。受入テスト2件は変更前に失敗するため、操作数の比較ではmanual testだけを指定する。
+
+ready ID重複削減済みのowned収集と参照収集の比較では、`ready_snapshot.py --borrowed-snapshot`を使う。前後ともdistinct ready ID数の確認を要求し、参照版のsource cloneは0回、slot cloneは前後同数とする。要素型サイズも測るが、実allocator要求・RSSは測らない。
+
+## ready mapの借用
+
+```sh
+python3 tests/profile/future_stack_scan/ready_snapshot.py --before /absolute/before/builds.json --after /absolute/after/builds.json --borrowed-snapshot --output /absolute/new_borrow_run
+```
+
+[仕様と結果](../../../doc/optimize/runtime/value/future_ready_snapshot_borrow_2026_10_14.md)の基準patchを`c76a0980`へ適用すると同じ観測を持つowned版を再現できる。受入テスト2件はowned版で失敗するため、比較ではmanual testだけを指定する。過去の重複削減比較はこのflagなしで実行する。

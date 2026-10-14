@@ -1,0 +1,554 @@
+[
+  {
+    "kind": "owner-clone",
+    "side": "before",
+    "result": {
+      "case": "never",
+      "n": 0,
+      "count": 8,
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-clone",
+    "side": "before",
+    "result": {
+      "case": "cleared",
+      "n": 0,
+      "count": 8,
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-clone",
+    "side": "before",
+    "result": {
+      "case": "popped",
+      "n": 0,
+      "count": 8,
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-clone",
+    "side": "before",
+    "result": {
+      "case": "truncated",
+      "n": 0,
+      "count": 8,
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-clone",
+    "side": "before",
+    "result": {
+      "case": "resolved",
+      "n": 0,
+      "count": 8,
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-clone",
+    "side": "before",
+    "result": {
+      "case": "pending",
+      "n": 0,
+      "count": 8,
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-clone",
+    "side": "before",
+    "result": {
+      "case": "never",
+      "n": 16,
+      "count": 8,
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-clone",
+    "side": "before",
+    "result": {
+      "case": "cleared",
+      "n": 16,
+      "count": 8,
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-clone",
+    "side": "before",
+    "result": {
+      "case": "popped",
+      "n": 16,
+      "count": 8,
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-clone",
+    "side": "before",
+    "result": {
+      "case": "truncated",
+      "n": 16,
+      "count": 8,
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-clone",
+    "side": "before",
+    "result": {
+      "case": "resolved",
+      "n": 16,
+      "count": 8,
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-clone",
+    "side": "before",
+    "result": {
+      "case": "pending",
+      "n": 16,
+      "count": 8,
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-clone",
+    "side": "after",
+    "result": {
+      "case": "never",
+      "n": 0,
+      "count": 8,
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-clone",
+    "side": "after",
+    "result": {
+      "case": "cleared",
+      "n": 0,
+      "count": 8,
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-clone",
+    "side": "after",
+    "result": {
+      "case": "popped",
+      "n": 0,
+      "count": 8,
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-clone",
+    "side": "after",
+    "result": {
+      "case": "truncated",
+      "n": 0,
+      "count": 8,
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-clone",
+    "side": "after",
+    "result": {
+      "case": "resolved",
+      "n": 0,
+      "count": 8,
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-clone",
+    "side": "after",
+    "result": {
+      "case": "pending",
+      "n": 0,
+      "count": 8,
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-clone",
+    "side": "after",
+    "result": {
+      "case": "never",
+      "n": 16,
+      "count": 8,
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-clone",
+    "side": "after",
+    "result": {
+      "case": "cleared",
+      "n": 16,
+      "count": 8,
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-clone",
+    "side": "after",
+    "result": {
+      "case": "popped",
+      "n": 16,
+      "count": 8,
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-clone",
+    "side": "after",
+    "result": {
+      "case": "truncated",
+      "n": 16,
+      "count": 8,
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-clone",
+    "side": "after",
+    "result": {
+      "case": "resolved",
+      "n": 16,
+      "count": 8,
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-clone",
+    "side": "after",
+    "result": {
+      "case": "pending",
+      "n": 16,
+      "count": 8,
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-resume",
+    "side": "before",
+    "result": {
+      "n": 0,
+      "pending": 1,
+      "count": 8,
+      "operation": "none",
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-resume",
+    "side": "before",
+    "result": {
+      "n": 0,
+      "pending": 1,
+      "count": 8,
+      "operation": "append",
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-resume",
+    "side": "before",
+    "result": {
+      "n": 0,
+      "pending": 1,
+      "count": 8,
+      "operation": "resolve",
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-resume",
+    "side": "before",
+    "result": {
+      "n": 0,
+      "pending": 256,
+      "count": 8,
+      "operation": "none",
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-resume",
+    "side": "before",
+    "result": {
+      "n": 0,
+      "pending": 256,
+      "count": 8,
+      "operation": "append",
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-resume",
+    "side": "before",
+    "result": {
+      "n": 0,
+      "pending": 256,
+      "count": 8,
+      "operation": "resolve",
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-resume",
+    "side": "before",
+    "result": {
+      "n": 16,
+      "pending": 1,
+      "count": 8,
+      "operation": "none",
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-resume",
+    "side": "before",
+    "result": {
+      "n": 16,
+      "pending": 1,
+      "count": 8,
+      "operation": "append",
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-resume",
+    "side": "before",
+    "result": {
+      "n": 16,
+      "pending": 1,
+      "count": 8,
+      "operation": "resolve",
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-resume",
+    "side": "before",
+    "result": {
+      "n": 16,
+      "pending": 256,
+      "count": 8,
+      "operation": "none",
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-resume",
+    "side": "before",
+    "result": {
+      "n": 16,
+      "pending": 256,
+      "count": 8,
+      "operation": "append",
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-resume",
+    "side": "before",
+    "result": {
+      "n": 16,
+      "pending": 256,
+      "count": 8,
+      "operation": "resolve",
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-resume",
+    "side": "after",
+    "result": {
+      "n": 0,
+      "pending": 1,
+      "count": 8,
+      "operation": "none",
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-resume",
+    "side": "after",
+    "result": {
+      "n": 0,
+      "pending": 1,
+      "count": 8,
+      "operation": "append",
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-resume",
+    "side": "after",
+    "result": {
+      "n": 0,
+      "pending": 1,
+      "count": 8,
+      "operation": "resolve",
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-resume",
+    "side": "after",
+    "result": {
+      "n": 0,
+      "pending": 256,
+      "count": 8,
+      "operation": "none",
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-resume",
+    "side": "after",
+    "result": {
+      "n": 0,
+      "pending": 256,
+      "count": 8,
+      "operation": "append",
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-resume",
+    "side": "after",
+    "result": {
+      "n": 0,
+      "pending": 256,
+      "count": 8,
+      "operation": "resolve",
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-resume",
+    "side": "after",
+    "result": {
+      "n": 16,
+      "pending": 1,
+      "count": 8,
+      "operation": "none",
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-resume",
+    "side": "after",
+    "result": {
+      "n": 16,
+      "pending": 1,
+      "count": 8,
+      "operation": "append",
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-resume",
+    "side": "after",
+    "result": {
+      "n": 16,
+      "pending": 1,
+      "count": 8,
+      "operation": "resolve",
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-resume",
+    "side": "after",
+    "result": {
+      "n": 16,
+      "pending": 256,
+      "count": 8,
+      "operation": "none",
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-resume",
+    "side": "after",
+    "result": {
+      "n": 16,
+      "pending": 256,
+      "count": 8,
+      "operation": "append",
+      "mode": "verify",
+      "verified": true
+    }
+  },
+  {
+    "kind": "owner-resume",
+    "side": "after",
+    "result": {
+      "n": 16,
+      "pending": 256,
+      "count": 8,
+      "operation": "resolve",
+      "mode": "verify",
+      "verified": true
+    }
+  }
+]

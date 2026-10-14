@@ -913,6 +913,30 @@ struct RootSupervisorState {
 }
 
 impl ProcessRuntime {
+    fn raw_ready_future_value(&self, future_id: FutureId) -> Option<&Value> {
+        self.futures
+            .get(&future_id)
+            .and_then(|future| match &future.state {
+                FutureState::Ready(value) | FutureState::Cancelled(value) => Some(value),
+                FutureState::Running => None,
+            })
+    }
+
+    fn ready_future_value_ref(&self, future_id: FutureId) -> Option<&Value> {
+        use process_continuation::DetachedCompletion;
+        let value = self.raw_ready_future_value(future_id)?;
+        let cleanup_pending = self
+            .detached_tasks
+            .values()
+            .any(|task| match task.completion {
+                DetachedCompletion::Future(Some(id)) | DetachedCompletion::ErrorFuture(id) => {
+                    id == future_id
+                }
+                DetachedCompletion::Future(None) | DetachedCompletion::Process { .. } => false,
+            });
+        (!cleanup_pending).then_some(value)
+    }
+
     fn observed_process_status(&self, process: &ProcessInstance) -> ProcessStatus {
         let tasks = self
             .detached_tasks
@@ -4300,16 +4324,19 @@ impl VM {
         // Reuse ready IDs in this snapshot; unresolved IDs only share a run.
         let mut previous = None;
         let mut ready = HashMap::new();
+        let runtime = &self.process_runtime;
         for id in self.stack.pending_future_ids() {
             if previous.replace(id) == Some(id) || ready.contains_key(&id) {
                 continue;
             }
             #[cfg(test)]
             future_stack_tests::record_ready_lookup();
-            if let Some(value) = self.ready_future_value(id) {
+            if let Some(value) = runtime.ready_future_value_ref(id) {
                 ready.insert(id, value);
             }
         }
+        #[cfg(test)]
+        future_stack_tests::record_snapshot_layout(&ready);
         if ready.is_empty() {
             return;
         }
@@ -4838,13 +4865,7 @@ impl VM {
     }
 
     fn raw_ready_future_value(&self, future_id: FutureId) -> Option<&Value> {
-        self.process_runtime
-            .futures
-            .get(&future_id)
-            .and_then(|future| match &future.state {
-                FutureState::Ready(value) | FutureState::Cancelled(value) => Some(value),
-                FutureState::Running => None,
-            })
+        self.process_runtime.raw_ready_future_value(future_id)
     }
 
     fn can_optimize_tail_call(&self, next_pc: usize) -> bool {

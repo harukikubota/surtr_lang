@@ -1,5 +1,7 @@
 # Empty Future metadata clone
 
+現行private sourceのready mapは`HashMap<u64, &Value>`を受け取るため、probeのready fixtureも参照を渡す。古いowned版sourceを再現するときは、そのbuild記録のprobe hashと対応するGit版を使う（`c76a0980`以前のprobe）。現行sourceの内容確認は[記録](../../../doc/optimize/runtime/value/future_ready_snapshot_borrow_2026_10_14.md)を参照する。
+
 This standalone release probe imports the exact private `OperandStack` source
 and links the Cargo-built `sindr` library. It measures this one owner, including
 clone and destruction, without a VM, scheduler or test harness. It is not a

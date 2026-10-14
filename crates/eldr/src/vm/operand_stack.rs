@@ -125,7 +125,7 @@ impl OperandStack {
         }
     }
 
-    pub(super) fn replace_ready_futures(&mut self, ready: &HashMap<u64, Value>) {
+    pub(super) fn replace_ready_futures(&mut self, ready: &HashMap<u64, &Value>) {
         let values = &mut self.values;
         let Some(slots) = &mut self.pending_slots else {
             return;
@@ -136,7 +136,9 @@ impl OperandStack {
                 unreachable!("PendingFuture stack position mismatch");
             };
             if let Some(resolved) = ready.get(id) {
-                values[slot] = resolved.clone();
+                #[cfg(test)]
+                super::future_stack_tests::record_slot_value_clone();
+                values[slot] = (**resolved).clone();
             }
             remaining += usize::from(matches!(values[slot], Value::PendingFuture(_)));
         }
@@ -270,10 +272,10 @@ mod tests {
             Value::Unit,
         ]
         .into();
-        stack.replace_ready_futures(&[(1, Value::PendingFuture(3)), (2, Value::Unit)].into());
+        stack.replace_ready_futures(&[(1, &Value::PendingFuture(3)), (2, &Value::Unit)].into());
         count(&stack);
         assert_eq!(stack.pending_positions().len(), 2);
-        stack.replace_ready_futures(&[(3, Value::Unit)].into());
+        stack.replace_ready_futures(&[(3, &Value::Unit)].into());
         count(&stack);
         assert!(!stack.has_pending_futures());
     }
@@ -288,7 +290,7 @@ mod tests {
                 }
                 "truncate" => original.truncate(1),
                 "clear" => original.clear(),
-                "resolve" => original.replace_ready_futures(&[(1, Value::Unit)].into()),
+                "resolve" => original.replace_ready_futures(&[(1, &Value::Unit)].into()),
                 _ => unreachable!(),
             }
             let original_slots = original.pending_slots.as_ref().unwrap();
@@ -319,7 +321,7 @@ mod tests {
             assert_eq!(saved.values, saved_values);
             assert!(!saved.has_pending_futures());
             saved.push(Value::PendingFuture(3));
-            saved.replace_ready_futures(&[(3, Value::Unit)].into());
+            saved.replace_ready_futures(&[(3, &Value::Unit)].into());
             assert_eq!(original.pending_future_ids().collect::<Vec<_>>(), vec![2]);
             count(&saved);
             count(&original);
@@ -344,8 +346,8 @@ mod tests {
         original.pop();
         original.truncate(3);
         original.replace_ready_futures(&HashMap::new());
-        original.replace_ready_futures(&[(99, Value::Unit)].into());
-        original.replace_ready_futures(&[(1, Value::PendingFuture(4))].into());
+        original.replace_ready_futures(&[(99, &Value::Unit)].into());
+        original.replace_ready_futures(&[(1, &Value::PendingFuture(4))].into());
         assert_eq!(
             &**original.pending_slots.as_ref().unwrap() as *const Vec<usize>,
             shared
@@ -358,7 +360,7 @@ mod tests {
                 Value::PendingFuture(2)
             ]
         );
-        original.replace_ready_futures(&[(2, Value::Unit)].into());
+        original.replace_ready_futures(&[(2, &Value::Unit)].into());
         assert_ne!(
             &**original.pending_slots.as_ref().unwrap() as *const Vec<usize>,
             shared
@@ -384,7 +386,7 @@ mod tests {
                 }
                 "truncate" => original.truncate(1),
                 "clear" => original.clear(),
-                "resolve" => original.replace_ready_futures(&[(1, Value::Unit)].into()),
+                "resolve" => original.replace_ready_futures(&[(1, &Value::Unit)].into()),
                 _ => unreachable!(),
             }
             assert!(

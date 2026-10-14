@@ -1227,18 +1227,7 @@ impl VM {
     }
 
     pub(super) fn ready_future_value_ref(&self, future_id: FutureId) -> Option<&Value> {
-        let value = self.raw_ready_future_value(future_id)?;
-        let cleanup_pending =
-            self.process_runtime
-                .detached_tasks
-                .values()
-                .any(|task| match task.completion {
-                    DetachedCompletion::Future(Some(id)) | DetachedCompletion::ErrorFuture(id) => {
-                        id == future_id
-                    }
-                    DetachedCompletion::Future(None) | DetachedCompletion::Process { .. } => false,
-                });
-        (!cleanup_pending).then_some(value)
+        self.process_runtime.ready_future_value_ref(future_id)
     }
 
     pub(super) fn remove_process_detached_tasks(&mut self, pid: u64) {

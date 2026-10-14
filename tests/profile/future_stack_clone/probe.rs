@@ -87,7 +87,7 @@ fn main() {
                 "cleared" => original.clear(),
                 "popped" => { original.pop(); },
                 "truncated" => original.truncate(n),
-                "resolved" => original.replace_ready_futures(&[(1, Value::Unit)].into()),
+                "resolved" => original.replace_ready_futures(&[(1, &Value::Unit)].into()),
                 _ => unreachable!(),
             }
         },

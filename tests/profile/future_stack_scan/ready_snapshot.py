@@ -20,6 +20,7 @@ def main():
     parser.add_argument('--before', type=Path, required=True)
     parser.add_argument('--after', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--borrowed-snapshot', action='store_true', help='after variant stores references and performs no collection clones')
     args = parser.parse_args()
     builds = {side: json.loads(path.read_text())
               for side, path in [('before', args.before), ('after', args.after)]}
@@ -44,10 +45,17 @@ def main():
                             pending = case != 'empty_slots'
                             ready = case in ['ready', 'cancelled', 'future_result']
                             expected = 0 if not pending else (1 if pattern == 'repeated' else n)
-                            if side == 'after' and pattern == 'alternating' and ready:
+                            if (side == 'after' or args.borrowed_snapshot) and pattern == 'alternating' and ready:
                                 expected = min(n, 2)
                             assert row['ready_lookups'] == expected, row
-                            assert row['source_value_clones'] == (expected if ready else 0), row
+                            source_expected = expected if ready else 0
+                            if args.borrowed_snapshot and side == 'after':
+                                source_expected = 0
+                            assert row['source_value_clones'] == source_expected, row
+                            if args.borrowed_snapshot:
+                                assert row['slot_value_clones'] == (n if ready else 0), row
+                                pair_expected = row['borrowed_pair_bytes' if side == 'after' else 'owned_pair_bytes'] if pending else 0
+                                assert row['snapshot_pair_bytes'] == pair_expected, row
                             assert row['table_empty_checks'] == int(pending), row
                             assert row['read_visits'] == (n if pending else 0), row
                             assert row['write_visits'] == (n if ready else 0), row
@@ -60,7 +68,8 @@ def main():
     assert len({(row['context_bytes'], row['vm_bytes']) for row in rows}) == 1
     summary = {
         'scope': 'actual stack resolution readiness calls and source Value clones; full stack contents and one-step Future results verified',
-        'unmeasured': ['elapsed time', 'allocator requests', 'logical live bytes', 'RSS', 'ordinary CLI', 'nested clone calls', 'slot clone calls'],
+        'unmeasured': ['elapsed time', 'allocator requests', 'logical live bytes', 'RSS', 'ordinary CLI', 'nested clone calls'] + ([] if args.borrowed_snapshot else ['slot clone calls']),
+        'borrowed_snapshot': args.borrowed_snapshot,
         'builds': builds, 'runner_sha256': sha(Path(__file__)),
         'processes': len(rows), 'samples_per_variant': 2,
         'measurements': [row for row in rows if row['sample'] == 0],

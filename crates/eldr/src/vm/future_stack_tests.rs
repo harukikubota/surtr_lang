@@ -7,6 +7,16 @@ thread_local! {
     static SCANNED_VALUES: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
     static READY_LOOKUPS: Cell<usize> = const { Cell::new(0) };
     static READY_VALUE_CLONES: Cell<usize> = const { Cell::new(0) };
+    static SLOT_VALUE_CLONES: Cell<usize> = const { Cell::new(0) };
+    static SNAPSHOT_PAIR_BYTES: Cell<usize> = const { Cell::new(0) };
+}
+
+pub(super) fn record_slot_value_clone() {
+    SLOT_VALUE_CLONES.with(|count| count.set(count.get() + 1));
+}
+
+pub(super) fn record_snapshot_layout<T>(_: &HashMap<u64, T>) {
+    SNAPSHOT_PAIR_BYTES.with(|size| size.set(std::mem::size_of::<(u64, T)>()));
 }
 
 pub(super) fn record_ready_value_clone() {
@@ -52,6 +62,8 @@ fn reset_scans() {
     SCANNED_VALUES.with(|counts| counts.set((0, 0)));
     READY_LOOKUPS.with(|count| count.set(0));
     READY_VALUE_CLONES.with(|count| count.set(0));
+    SLOT_VALUE_CLONES.with(|count| count.set(0));
+    SNAPSHOT_PAIR_BYTES.with(|size| size.set(0));
 }
 
 fn scans() -> (usize, usize) {
@@ -389,11 +401,8 @@ fn pending_slot_waits_until_its_producer_cleanup_record_is_removed() {
     assert_eq!(vm.stack, vec![Value::Int(int(13)); 256]);
     assert_eq!(scans(), (256, 256));
     assert_eq!(ready_lookups(), 1);
-    assert_eq!(
-        ready_value_clones(),
-        1,
-        "clone one source value only after cleanup"
-    );
+    assert_eq!(ready_value_clones(), 0, "borrow the source after cleanup");
+    assert_eq!(SLOT_VALUE_CLONES.with(Cell::get), 256);
     reset_scans();
     vm.resolve_ready_pending_stack_values();
     assert_eq!(scans(), (0, 0));
@@ -805,7 +814,8 @@ fn ready_snapshot_reuses_ids_and_resets_each_collection_without_cascading() {
         .collect();
     reset_scans();
     vm.resolve_ready_pending_stack_values();
-    assert_eq!((ready_lookups(), ready_value_clones()), (2, 2));
+    assert_eq!((ready_lookups(), ready_value_clones()), (2, 0));
+    assert_eq!(SLOT_VALUE_CLONES.with(Cell::get), 5);
     assert_eq!(
         vm.stack,
         vec![
@@ -861,10 +871,11 @@ fn ready_snapshot_keeps_missing_results_uncached_and_slot_copies_independent() {
         vm.resolve_ready_pending_stack_values();
         assert_eq!(
             (ready_lookups(), ready_value_clones()),
-            (3, 1),
+            (3, 0),
             "{case}: ready once, missing result twice"
         );
         assert_eq!(scans(), (5, 5));
+        assert_eq!(SLOT_VALUE_CLONES.with(Cell::get), 3);
         assert_eq!(
             vm.stack,
             vec![
@@ -975,6 +986,8 @@ fn repeated_future_lookup_profile() {
     let (read, write) = scans();
     let lookups = ready_lookups();
     let source_clones = ready_value_clones();
+    let slot_clones = SLOT_VALUE_CLONES.with(Cell::get);
+    let pair_bytes = SNAPSHOT_PAIR_BYTES.with(Cell::get);
     let empty_checks = table_empty_checks();
     for (i, pair) in vm.stack.chunks_exact(2).enumerate() {
         let id = ids[match pattern.as_str() {
@@ -1012,6 +1025,9 @@ fn repeated_future_lookup_profile() {
                 "profile":"oi036_lookup_runs", "case":case, "n":n,
                 "alternating":alternating, "ready_lookups":lookups,
                 "pattern":pattern, "source_value_clones":source_clones,
+                "slot_value_clones":slot_clones, "snapshot_pair_bytes":pair_bytes,
+                "owned_pair_bytes":std::mem::size_of::<(u64, Value)>(),
+                "borrowed_pair_bytes":std::mem::size_of::<(u64, &Value)>(),
                 "read_visits":read, "write_visits":write, "table_empty_checks":empty_checks,
                 "context_bytes":std::mem::size_of::<ExecutionContext>(),
                 "vm_bytes":std::mem::size_of::<VM>(), "verified":true,
