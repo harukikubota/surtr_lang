@@ -60,3 +60,11 @@ Future table, operand stacks with or without PendingFuture, and ordinary cached
 Task/List literal programs. Exact visit counts and content checks are separate
 from elapsed time and whole-process RSS. Results are in
 [`doc/optimize/runtime/value/`](../../doc/optimize/runtime/value/).
+
+## Future Stack Clone
+
+[`future_stack_clone/`](future_stack_clone/README.md) compiles exact before/after
+private OperandStack sources into standalone probes. Actual System allocation
+requests, clone/drop timing, and content checks run in separate processes.
+Empty retired metadata is compared with never-allocated and live-Future controls.
+This is an isolated owner benchmark; whole-VM/checkpoint and RSS are unmeasured.

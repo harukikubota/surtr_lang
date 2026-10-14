@@ -1,0 +1,114 @@
+{
+  "scope": "isolated OperandStack, not full Eldr VM",
+  "records": {
+    "before": {
+      "command": [
+        "rustc",
+        "--edition=2021",
+        "-C",
+        "opt-level=3",
+        "-C",
+        "debuginfo=0",
+        "-C",
+        "codegen-units=16",
+        "/Users/haruca/work/rust/surtr/tests/profile/future_stack_clone/probe.rs",
+        "--extern",
+        "sindr=/tmp/surtr-oi036-index-inline-target/release/libsindr.rlib",
+        "-L",
+        "dependency=/tmp/surtr-oi036-index-inline-target/release/deps",
+        "-o",
+        "/private/tmp/surtr-oi036-empty-clone/probes/before-probe"
+      ],
+      "source_path": "/private/tmp/surtr-oi036-empty-clone/before_operand_stack.rs",
+      "source_sha256": "0cf189f2ba13ce98b8680670558fc2fede95b8d26203d46608d3b116e4df08e5",
+      "saved_source": "/private/tmp/surtr-oi036-empty-clone/probes/before_operand_stack.rs",
+      "binary": "/private/tmp/surtr-oi036-empty-clone/probes/before-probe",
+      "binary_sha256": "614af5db7b36aac5abf9ff564ab1ba49b8c42a6bb67bc1f3491ff3f09cdc48de"
+    },
+    "after": {
+      "command": [
+        "rustc",
+        "--edition=2021",
+        "-C",
+        "opt-level=3",
+        "-C",
+        "debuginfo=0",
+        "-C",
+        "codegen-units=16",
+        "/Users/haruca/work/rust/surtr/tests/profile/future_stack_clone/probe.rs",
+        "--extern",
+        "sindr=/tmp/surtr-oi036-index-inline-target/release/libsindr.rlib",
+        "-L",
+        "dependency=/tmp/surtr-oi036-index-inline-target/release/deps",
+        "-o",
+        "/private/tmp/surtr-oi036-empty-clone/probes/after-probe"
+      ],
+      "source_path": "/Users/haruca/work/rust/surtr/crates/eldr/src/vm/operand_stack.rs",
+      "source_sha256": "58934f5f58ef526d5cf7c3e1a1c60a9a27413fe6763cae51b4068fdeb47f16fd",
+      "saved_source": "/private/tmp/surtr-oi036-empty-clone/probes/after_operand_stack.rs",
+      "binary": "/private/tmp/surtr-oi036-empty-clone/probes/after-probe",
+      "binary_sha256": "a239f8c67a13d19e7ad1b0af933e6506879a662b0a9da19ccf6c4b11508aeb69"
+    }
+  },
+  "sindr_artifact": {
+    "reason": "compiler-artifact",
+    "package_id": "path+file:///Users/haruca/work/rust/surtr/crates/sindr#0.1.0",
+    "manifest_path": "/Users/haruca/work/rust/surtr/crates/sindr/Cargo.toml",
+    "target": {
+      "kind": [
+        "lib"
+      ],
+      "crate_types": [
+        "lib"
+      ],
+      "name": "sindr",
+      "src_path": "/Users/haruca/work/rust/surtr/crates/sindr/src/lib.rs",
+      "edition": "2021",
+      "doc": true,
+      "doctest": true,
+      "test": true
+    },
+    "profile": {
+      "opt_level": "3",
+      "debuginfo": 0,
+      "debug_assertions": false,
+      "overflow_checks": false,
+      "test": false
+    },
+    "features": [
+      "default"
+    ],
+    "filenames": [
+      "/tmp/surtr-oi036-index-inline-target/release/libsindr.rlib",
+      "/tmp/surtr-oi036-index-inline-target/release/deps/libsindr-c0c7bdea367ce351.rmeta"
+    ],
+    "executable": null,
+    "fresh": false
+  },
+  "sindr_library_sha256": "9e32b40fc8f6056164c6a6100923df721cd90c2074629dad41269fbec0ba88d0",
+  "sindr_source_sha256": {
+    "crates/sindr/src/builtin.rs": "f258eb9e2fd3db1c56741f28dfc770a385a6cb0533052346650d27b18c6558c1",
+    "crates/sindr/src/derive.rs": "c625e60e3f267480dcbc6a4ed790388086983011871cdbc268b2599c645f14eb",
+    "crates/sindr/src/intrinsic.rs": "29f03b2cfc73de05f84a9bc4d6d774ab0138f87b01b00f56d0d588df731e5f0f",
+    "crates/sindr/src/ir.rs": "220ba6d60bcfaffff536c8ef641213bb1769be4ddbcaab8026d4c1796793f43d",
+    "crates/sindr/src/lib.rs": "7a6556980c84ac7b0adb892dafa7d8566083de363013b2c0955487d1d2e65a24",
+    "crates/sindr/src/names.rs": "b0e8f74b2d92cbbafeb7696cc3bc414f07a1ef1cdc6f946433fcd12f05c6e708",
+    "crates/sindr/src/operator_diagnostics.rs": "68b502cd1dbba5f5990cac7156a2a10becea82f7b40a99f15b078b375302f679",
+    "crates/sindr/src/pattern.rs": "de7a28cd90aa4f6e0d25571368d58efeeffd7cb759cacabbe4be0d796fda2a87",
+    "crates/sindr/src/policy.rs": "0199f80cafcea07c92d46719e523b60c3774af1492d74dc54cfd7a6693481fa0",
+    "crates/sindr/src/primitives.rs": "f9a7a695b99839d2dad68c591c7960525b8a02416c2b427f7ba478fc0fe4c2b3",
+    "crates/sindr/src/reflection.rs": "3a1e1972cdaaa49bf57d024eb921c49576132bb4bf2891b3a69295661833d05d",
+    "crates/sindr/src/runtime.rs": "eeeb0a4e2f0d65905a7478b93313ea2bc7a9df8d9bed48ec5e1d9c95bbe7227c",
+    "crates/sindr/src/signature.rs": "93619ec608d17712295643bc6c2822219253911cabddb5ffaabb09db7fec9245",
+    "crates/sindr/src/stdlib.rs": "bc1291fde2e7a10d3949fd3789ff98f34fae0eb7248467531afcfb5ec149b0da",
+    "crates/sindr/src/viewer.rs": "af56d2cee26c984d5f994e570e18724b0883e8372ad109d1d2bf986eae2e3461",
+    "crates/sindr/src/warning.rs": "0556f55e951419d5c7d287a2b444b86279469862f44bc2a53f0b421dbc207d04",
+    "Cargo.toml": "38e9103e083681e21ce66c2215d1c4440b7aa7556222c97a2815fba5b5809017",
+    "Cargo.lock": "2246d4ad3488ad37f2e96e2e3a7eff6f5ce5fa70cb454712e86ec542176105fd",
+    "crates/sindr/Cargo.toml": "5cc33c80cac02640df0139f11be5b5a82d6959041a712d02b2f081542aeb0d81"
+  },
+  "probe_source": "/Users/haruca/work/rust/surtr/tests/profile/future_stack_clone/probe.rs",
+  "probe_sha256": "98f73502faf92cb3e6fe22d199dafc3359e83a0a3412c25747d11ee8eb191dd1",
+  "builder_sha256": "33a40f105fe8759c8e8fe0eafbaef5574a67fb8c63ed7247c40637b00e23669c",
+  "rustc_version": "rustc 1.94.1 (e408947bf 2026-03-25)\nbinary: rustc\ncommit-hash: e408947bfd200af42db322daf0fadfe7e26d3bd1\ncommit-date: 2026-03-25\nhost: aarch64-apple-darwin\nrelease: 1.94.1\nLLVM version: 21.1.8\n"
+}

@@ -72,3 +72,5 @@ RSSはprocess全期間の高水位で、区間内保持量ではない。request
 ## 残件
 
 Futureなしのガードでも既存のpointer幅metadataを読む費用は残る。位置bufferの保持・clone、追跡slotごとのFuture表・cleanup検索、通常入口の小さい時間差も残る。今回の通常入口は前回の採用版と比較したもので、追跡前のVec版との新しい速度比較は行っていない。OI-037のRSS差とruntime全般のfairnessは対象外とする。
+
+その後、[空位置bufferのclone削減](future_stack_empty_clone_2026_10_14.md)を実装した。上記の数値は表の空判定削減を測った時点の原本として保持している。

@@ -4,10 +4,29 @@ use std::ops::Deref;
 
 /// Owns the values and the sorted positions of top-level PendingFuture slots.
 /// Mutable access cannot change a Value variant outside this type.
-#[derive(Debug, Default, Clone, PartialEq)]
+#[derive(Debug, Default)]
 pub(super) struct OperandStack {
     values: Vec<Value>,
     pending_slots: Option<Box<Vec<usize>>>,
+}
+
+impl Clone for OperandStack {
+    fn clone(&self) -> Self {
+        Self {
+            values: self.values.clone(),
+            pending_slots: self
+                .pending_slots
+                .as_ref()
+                .filter(|slots| !slots.is_empty())
+                .cloned(),
+        }
+    }
+}
+
+impl PartialEq for OperandStack {
+    fn eq(&self, other: &Self) -> bool {
+        self.values == other.values && self.pending_positions() == other.pending_positions()
+    }
 }
 
 impl OperandStack {
@@ -235,5 +254,53 @@ mod tests {
         stack.replace_ready_futures(&[(3, Value::Unit)].into());
         count(&stack);
         assert!(!stack.has_pending_futures());
+    }
+
+    #[test]
+    fn clones_omit_empty_position_buffers_and_preserve_original_reservations() {
+        for operation in ["pop", "truncate", "clear", "resolve"] {
+            let mut original: OperandStack = vec![Value::Unit, Value::PendingFuture(1)].into();
+            match operation {
+                "pop" => {
+                    original.pop();
+                }
+                "truncate" => original.truncate(1),
+                "clear" => original.clear(),
+                "resolve" => original.replace_ready_futures(&[(1, Value::Unit)].into()),
+                _ => unreachable!(),
+            }
+            let original_slots = original.pending_slots.as_ref().unwrap();
+            let original_box = &**original_slots as *const Vec<usize>;
+            let original_buffer = original_slots.as_ptr();
+            let capacity = original_slots.capacity();
+            let mut saved = original.clone();
+            assert!(
+                saved.pending_slots.is_none(),
+                "{operation}: empty clone must not allocate metadata"
+            );
+            assert_eq!(saved, original);
+            count(&saved);
+            let saved_values = saved.values.clone();
+            original.push(Value::PendingFuture(2));
+            assert_eq!(
+                original.pending_slots.as_ref().unwrap().capacity(),
+                capacity
+            );
+            assert_eq!(
+                &**original.pending_slots.as_ref().unwrap() as *const Vec<usize>,
+                original_box
+            );
+            assert_eq!(
+                original.pending_slots.as_ref().unwrap().as_ptr(),
+                original_buffer
+            );
+            assert_eq!(saved.values, saved_values);
+            assert!(!saved.has_pending_futures());
+            saved.push(Value::PendingFuture(3));
+            saved.replace_ready_futures(&[(3, Value::Unit)].into());
+            assert_eq!(original.pending_future_ids().collect::<Vec<_>>(), vec![2]);
+            count(&saved);
+            count(&original);
+        }
     }
 }
