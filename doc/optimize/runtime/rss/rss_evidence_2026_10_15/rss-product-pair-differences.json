@@ -1,0 +1,13 @@
+{
+  "future": [
+    "crates/eldr/src/vm.rs",
+    "crates/eldr/src/vm/future_stack_tests.rs"
+  ],
+  "map": [
+    "crates/eldr/src/builtin.rs",
+    "crates/eldr/src/builtin/map_values.rs",
+    "crates/eldr/src/vm.rs",
+    "crates/eldr/src/vm/map_values_tests.rs",
+    "crates/sindr/src/runtime.rs"
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "baseline": {
+    "rust_sources": 259,
+    "differences": []
+  },
+  "shared": {
+    "rust_sources": 263,
+    "differences": []
+  },
+  "future-before": {
+    "rust_sources": 249,
+    "differences": []
+  },
+  "future-after": {
+    "rust_sources": 250,
+    "differences": []
+  },
+  "map-before": {
+    "rust_sources": 252,
+    "differences": []
+  },
+  "map-after": {
+    "rust_sources": 253,
+    "differences": []
+  }
+}

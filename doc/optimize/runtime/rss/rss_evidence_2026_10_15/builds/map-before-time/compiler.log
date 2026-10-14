@@ -1,0 +1,52 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling proc-macro2 v1.0.106
+   Compiling libc v0.2.183
+   Compiling quote v1.0.45
+   Compiling unicode-ident v1.0.24
+   Compiling serde_core v1.0.228
+   Compiling autocfg v1.5.0
+   Compiling serde v1.0.228
+   Compiling zmij v1.0.21
+   Compiling serde_json v1.0.149
+   Compiling num-traits v0.2.19
+   Compiling parking_lot_core v0.9.12
+   Compiling signal-hook v0.3.18
+   Compiling memchr v2.8.0
+   Compiling foldhash v0.1.5
+   Compiling itoa v1.0.18
+   Compiling equivalent v1.0.2
+   Compiling allocator-api2 v0.2.21
+   Compiling hashbrown v0.15.5
+   Compiling rustix v0.38.44
+   Compiling syn v2.0.117
+   Compiling log v0.4.29
+   Compiling scopeguard v1.2.0
+   Compiling unicode-segmentation v1.13.2
+   Compiling cfg-if v1.0.4
+   Compiling smallvec v1.15.1
+   Compiling lock_api v0.4.14
+   Compiling chumsky v0.12.0
+   Compiling yansi v1.0.1
+   Compiling regex-syntax v0.8.10
+   Compiling bitflags v2.11.0
+   Compiling unicode-width v0.2.0
+   Compiling ariadne v0.6.0
+   Compiling num-integer v0.1.46
+   Compiling errno v0.3.14
+   Compiling mio v1.2.0
+   Compiling signal-hook-registry v1.4.8
+   Compiling parking_lot v0.12.5
+   Compiling serde_derive v1.0.228
+   Compiling signal-hook-mio v0.2.5
+   Compiling crossterm v0.28.1
+   Compiling regex-automata v0.4.14
+   Compiling num-bigint v0.4.6
+   Compiling bincode v1.3.3
+   Compiling regex v1.12.3
+   Compiling sindr v0.1.0 (/tmp/surtr-runtime-six/rss-historical/map-before/crates/sindr)
+   Compiling spire v0.1.0 (/tmp/surtr-runtime-six/rss-historical/map-before/crates/spire)
+   Compiling diagnostics v0.1.0 (/tmp/surtr-runtime-six/rss-historical/map-before/crates/diagnostics)
+   Compiling eldr v0.1.0 (/tmp/surtr-runtime-six/rss-historical/map-before/crates/eldr)
+   Compiling hashmap-cost-probe v0.0.0 (/tmp/surtr-runtime-six/rss-historical/map-before/tests/profile/hashmap_cost)
+    Finished `release` profile [optimized] target(s) in 32.99s

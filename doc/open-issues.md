@@ -320,6 +320,8 @@
   - 同じ入力と所有条件、baseline / optimized binaryのSHAを保持し、counter有効・無効とOS allocatorの構成を分ける。元の前後測定原本を上書きしない。
   - baseline / optimizedを交互に実行して同一binary内とbinary間の分布を比較する。requested量だけでRSS差の原因を断定しない。
 
+- 2026-10-15追試: [履歴の独立buildと6回AB/BA](optimize/runtime/rss/native_rss_recheck_2026_10_15.md)でchain 10,000のRSS 76.414→98.742 MiB、全6区間のrequested / freed / live / peak一致を確認。旧版のnested自身に高低2群があり、allocator環境指定の実動作は確認できない。原因は未解決。
+
 ### OI-038 HashMapコピー削減後のprocess RSS差
 
 - 背景:
@@ -335,6 +337,8 @@
 - テスト方針:
   - [前後測定と交互追試原本](optimize/runtime/hashmap/hashmap_runtime_optimization_2026_10_11.md#同一キーの保持量とrss)を保持し、count有効・無効、allocator構成、同一binary内とbinary間の分布を分ける。
   - 時間・RSSの閾値をcorrectness testに追加せず、原因を固定する決定的な検証と手動測定を組み合わせる。
+
+- 2026-10-15追試: [履歴の独立buildと6回AB/BA](optimize/runtime/rss/native_rss_recheck_2026_10_15.md)でdistinct String 6.203→6.375 MiB。run requestedは282,593,722→3,953,382 bytes、final live deltaは一致。sort対照には同じ増分なし。OI-037との同一原因は未確認。
 
 ### OI-039 Builderコピー削減後の通常経路とIntのRSS差
 
@@ -362,6 +366,8 @@
   - [採用した交互原本](optimize/runtime/checkpoint/rt5_builder_2026_10_12_accepted_recheck.jsonl)・[集計](optimize/runtime/checkpoint/rt5_builder_2026_10_12_accepted_recheck.summary.json)と保存binaryを保持する。
   - [今回の全条件交互比較](optimize/runtime/checkpoint/oi039_2026_10_12_capacity_compare.jsonl)・[集計](optimize/runtime/checkpoint/oi039_2026_10_12_capacity_compare.summary.json)とkernelの所有条件別原本も保持し、実VMのentry変更・保存枝・解放境界でrequested/live/RSSを直接照合する。
   - shared処理合計、通常の完了区間、準備・初回確保、解放を分け、requested / live / RSSを別指標として測る。速度閾値をcorrectness testへ加えない。
+
+- 2026-10-15追試: [所有条件・解放境界・通常CLI](optimize/runtime/rss/builder_rss_and_cli_recheck_2026_10_15.md)。当時の199 / 200 source SHAを全件復元し、元probeでも差を再現。Intの通常完成だけではRSS差約0.2 MiB、保存付き→全破棄→通常完成の同一processで約22 MiB増。empty allocator領域のresident残存を観測した。通常CLI18条件は一律速度改善を確認できず、追加費用とallocator / OS細部は未解決。
 
 ## 更新ルール
 

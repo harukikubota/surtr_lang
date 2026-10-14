@@ -1,0 +1,14 @@
+{
+  "command": [
+    "python3",
+    "/Users/haruca/work/rust/surtr/tests/profile/runtime_rss_recheck/native.py",
+    "--builds",
+    "/tmp/surtr-runtime-six/rss-rebuilt",
+    "--output",
+    "/tmp/surtr-runtime-six/rss-results/native",
+    "--samples",
+    "6"
+  ],
+  "exit_code": 0,
+  "wall_seconds": 40.6905317080018
+}

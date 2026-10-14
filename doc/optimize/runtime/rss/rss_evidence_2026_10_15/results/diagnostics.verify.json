@@ -1,0 +1,626 @@
+[
+  {
+    "side": "baseline",
+    "mode": "time",
+    "ownership": "shared",
+    "payload": "int",
+    "repeats": 1,
+    "control": "default",
+    "verified": true,
+    "barrier": false,
+    "binary_sha256": "efebcf0a5079ad56e6fa6aa827205532138be2113dac45a20c5f0fa6f9eaddd5",
+    "child_allocator_environment": {},
+    "rows": [
+      {
+        "allocator_counting": false,
+        "builder_len": 16384,
+        "copy_mode": "baseline",
+        "output_len": 18432,
+        "payload": "int",
+        "profile": "checkpoint_builder_vm_memory_verify",
+        "repeats": 1,
+        "tasks": 32,
+        "verified": true,
+        "workload_live_restored": false
+      }
+    ]
+  },
+  {
+    "side": "baseline",
+    "mode": "count",
+    "ownership": "shared",
+    "payload": "int",
+    "repeats": 1,
+    "control": "default",
+    "verified": true,
+    "barrier": false,
+    "binary_sha256": "d1c7fc8fba20ea1d2e7a3dc29dd50aa3db9f3c833286de8f8a4957986b151b8c",
+    "child_allocator_environment": {},
+    "rows": [
+      {
+        "allocator_counting": true,
+        "builder_len": 16384,
+        "copy_mode": "baseline",
+        "output_len": 18432,
+        "payload": "int",
+        "profile": "checkpoint_builder_vm_memory_verify",
+        "repeats": 1,
+        "tasks": 32,
+        "verified": true,
+        "workload_live_restored": true
+      }
+    ]
+  },
+  {
+    "side": "shared",
+    "mode": "time",
+    "ownership": "shared",
+    "payload": "int",
+    "repeats": 1,
+    "control": "default",
+    "verified": true,
+    "barrier": false,
+    "binary_sha256": "1bd101e97094d169e019d362df47ec6c3777beaf57cb466ead2af15c38bbbe8a",
+    "child_allocator_environment": {},
+    "rows": [
+      {
+        "allocator_counting": false,
+        "builder_len": 16384,
+        "copy_mode": "shared",
+        "output_len": 18432,
+        "payload": "int",
+        "profile": "checkpoint_builder_vm_memory_verify",
+        "repeats": 1,
+        "tasks": 32,
+        "verified": true,
+        "workload_live_restored": false
+      }
+    ]
+  },
+  {
+    "side": "shared",
+    "mode": "count",
+    "ownership": "shared",
+    "payload": "int",
+    "repeats": 1,
+    "control": "default",
+    "verified": true,
+    "barrier": false,
+    "binary_sha256": "53440142cbdfd72f414868f0cdeb819bf4353dbc13cc0b68290688230d176df2",
+    "child_allocator_environment": {},
+    "rows": [
+      {
+        "allocator_counting": true,
+        "builder_len": 16384,
+        "copy_mode": "shared",
+        "output_len": 18432,
+        "payload": "int",
+        "profile": "checkpoint_builder_vm_memory_verify",
+        "repeats": 1,
+        "tasks": 32,
+        "verified": true,
+        "workload_live_restored": true
+      }
+    ]
+  },
+  {
+    "side": "baseline",
+    "mode": "time",
+    "ownership": "shared",
+    "payload": "string",
+    "repeats": 1,
+    "control": "default",
+    "verified": true,
+    "barrier": false,
+    "binary_sha256": "efebcf0a5079ad56e6fa6aa827205532138be2113dac45a20c5f0fa6f9eaddd5",
+    "child_allocator_environment": {},
+    "rows": [
+      {
+        "allocator_counting": false,
+        "builder_len": 16384,
+        "copy_mode": "baseline",
+        "output_len": 18432,
+        "payload": "string",
+        "profile": "checkpoint_builder_vm_memory_verify",
+        "repeats": 1,
+        "tasks": 32,
+        "verified": true,
+        "workload_live_restored": false
+      }
+    ]
+  },
+  {
+    "side": "baseline",
+    "mode": "count",
+    "ownership": "shared",
+    "payload": "string",
+    "repeats": 1,
+    "control": "default",
+    "verified": true,
+    "barrier": false,
+    "binary_sha256": "d1c7fc8fba20ea1d2e7a3dc29dd50aa3db9f3c833286de8f8a4957986b151b8c",
+    "child_allocator_environment": {},
+    "rows": [
+      {
+        "allocator_counting": true,
+        "builder_len": 16384,
+        "copy_mode": "baseline",
+        "output_len": 18432,
+        "payload": "string",
+        "profile": "checkpoint_builder_vm_memory_verify",
+        "repeats": 1,
+        "tasks": 32,
+        "verified": true,
+        "workload_live_restored": true
+      }
+    ]
+  },
+  {
+    "side": "shared",
+    "mode": "time",
+    "ownership": "shared",
+    "payload": "string",
+    "repeats": 1,
+    "control": "default",
+    "verified": true,
+    "barrier": false,
+    "binary_sha256": "1bd101e97094d169e019d362df47ec6c3777beaf57cb466ead2af15c38bbbe8a",
+    "child_allocator_environment": {},
+    "rows": [
+      {
+        "allocator_counting": false,
+        "builder_len": 16384,
+        "copy_mode": "shared",
+        "output_len": 18432,
+        "payload": "string",
+        "profile": "checkpoint_builder_vm_memory_verify",
+        "repeats": 1,
+        "tasks": 32,
+        "verified": true,
+        "workload_live_restored": false
+      }
+    ]
+  },
+  {
+    "side": "shared",
+    "mode": "count",
+    "ownership": "shared",
+    "payload": "string",
+    "repeats": 1,
+    "control": "default",
+    "verified": true,
+    "barrier": false,
+    "binary_sha256": "53440142cbdfd72f414868f0cdeb819bf4353dbc13cc0b68290688230d176df2",
+    "child_allocator_environment": {},
+    "rows": [
+      {
+        "allocator_counting": true,
+        "builder_len": 16384,
+        "copy_mode": "shared",
+        "output_len": 18432,
+        "payload": "string",
+        "profile": "checkpoint_builder_vm_memory_verify",
+        "repeats": 1,
+        "tasks": 32,
+        "verified": true,
+        "workload_live_restored": true
+      }
+    ]
+  },
+  {
+    "side": "baseline",
+    "mode": "time",
+    "ownership": "unique",
+    "payload": "int",
+    "repeats": 1,
+    "control": "default",
+    "verified": true,
+    "barrier": false,
+    "binary_sha256": "efebcf0a5079ad56e6fa6aa827205532138be2113dac45a20c5f0fa6f9eaddd5",
+    "child_allocator_environment": {},
+    "rows": [
+      {
+        "allocator_counting": false,
+        "builder_len": 16384,
+        "copy_mode": "baseline",
+        "output_len": 18432,
+        "payload": "int",
+        "profile": "checkpoint_builder_vm_memory_verify",
+        "repeats": 1,
+        "tasks": 32,
+        "verified": true,
+        "workload_live_restored": false
+      }
+    ]
+  },
+  {
+    "side": "baseline",
+    "mode": "count",
+    "ownership": "unique",
+    "payload": "int",
+    "repeats": 1,
+    "control": "default",
+    "verified": true,
+    "barrier": false,
+    "binary_sha256": "d1c7fc8fba20ea1d2e7a3dc29dd50aa3db9f3c833286de8f8a4957986b151b8c",
+    "child_allocator_environment": {},
+    "rows": [
+      {
+        "allocator_counting": true,
+        "builder_len": 16384,
+        "copy_mode": "baseline",
+        "output_len": 18432,
+        "payload": "int",
+        "profile": "checkpoint_builder_vm_memory_verify",
+        "repeats": 1,
+        "tasks": 32,
+        "verified": true,
+        "workload_live_restored": true
+      }
+    ]
+  },
+  {
+    "side": "shared",
+    "mode": "time",
+    "ownership": "unique",
+    "payload": "int",
+    "repeats": 1,
+    "control": "default",
+    "verified": true,
+    "barrier": false,
+    "binary_sha256": "1bd101e97094d169e019d362df47ec6c3777beaf57cb466ead2af15c38bbbe8a",
+    "child_allocator_environment": {},
+    "rows": [
+      {
+        "allocator_counting": false,
+        "builder_len": 16384,
+        "copy_mode": "shared",
+        "output_len": 18432,
+        "payload": "int",
+        "profile": "checkpoint_builder_vm_memory_verify",
+        "repeats": 1,
+        "tasks": 32,
+        "verified": true,
+        "workload_live_restored": false
+      }
+    ]
+  },
+  {
+    "side": "shared",
+    "mode": "count",
+    "ownership": "unique",
+    "payload": "int",
+    "repeats": 1,
+    "control": "default",
+    "verified": true,
+    "barrier": false,
+    "binary_sha256": "53440142cbdfd72f414868f0cdeb819bf4353dbc13cc0b68290688230d176df2",
+    "child_allocator_environment": {},
+    "rows": [
+      {
+        "allocator_counting": true,
+        "builder_len": 16384,
+        "copy_mode": "shared",
+        "output_len": 18432,
+        "payload": "int",
+        "profile": "checkpoint_builder_vm_memory_verify",
+        "repeats": 1,
+        "tasks": 32,
+        "verified": true,
+        "workload_live_restored": true
+      }
+    ]
+  },
+  {
+    "side": "baseline",
+    "mode": "time",
+    "ownership": "unique",
+    "payload": "string",
+    "repeats": 1,
+    "control": "default",
+    "verified": true,
+    "barrier": false,
+    "binary_sha256": "efebcf0a5079ad56e6fa6aa827205532138be2113dac45a20c5f0fa6f9eaddd5",
+    "child_allocator_environment": {},
+    "rows": [
+      {
+        "allocator_counting": false,
+        "builder_len": 16384,
+        "copy_mode": "baseline",
+        "output_len": 18432,
+        "payload": "string",
+        "profile": "checkpoint_builder_vm_memory_verify",
+        "repeats": 1,
+        "tasks": 32,
+        "verified": true,
+        "workload_live_restored": false
+      }
+    ]
+  },
+  {
+    "side": "baseline",
+    "mode": "count",
+    "ownership": "unique",
+    "payload": "string",
+    "repeats": 1,
+    "control": "default",
+    "verified": true,
+    "barrier": false,
+    "binary_sha256": "d1c7fc8fba20ea1d2e7a3dc29dd50aa3db9f3c833286de8f8a4957986b151b8c",
+    "child_allocator_environment": {},
+    "rows": [
+      {
+        "allocator_counting": true,
+        "builder_len": 16384,
+        "copy_mode": "baseline",
+        "output_len": 18432,
+        "payload": "string",
+        "profile": "checkpoint_builder_vm_memory_verify",
+        "repeats": 1,
+        "tasks": 32,
+        "verified": true,
+        "workload_live_restored": true
+      }
+    ]
+  },
+  {
+    "side": "shared",
+    "mode": "time",
+    "ownership": "unique",
+    "payload": "string",
+    "repeats": 1,
+    "control": "default",
+    "verified": true,
+    "barrier": false,
+    "binary_sha256": "1bd101e97094d169e019d362df47ec6c3777beaf57cb466ead2af15c38bbbe8a",
+    "child_allocator_environment": {},
+    "rows": [
+      {
+        "allocator_counting": false,
+        "builder_len": 16384,
+        "copy_mode": "shared",
+        "output_len": 18432,
+        "payload": "string",
+        "profile": "checkpoint_builder_vm_memory_verify",
+        "repeats": 1,
+        "tasks": 32,
+        "verified": true,
+        "workload_live_restored": false
+      }
+    ]
+  },
+  {
+    "side": "shared",
+    "mode": "count",
+    "ownership": "unique",
+    "payload": "string",
+    "repeats": 1,
+    "control": "default",
+    "verified": true,
+    "barrier": false,
+    "binary_sha256": "53440142cbdfd72f414868f0cdeb819bf4353dbc13cc0b68290688230d176df2",
+    "child_allocator_environment": {},
+    "rows": [
+      {
+        "allocator_counting": true,
+        "builder_len": 16384,
+        "copy_mode": "shared",
+        "output_len": 18432,
+        "payload": "string",
+        "profile": "checkpoint_builder_vm_memory_verify",
+        "repeats": 1,
+        "tasks": 32,
+        "verified": true,
+        "workload_live_restored": true
+      }
+    ]
+  },
+  {
+    "side": "baseline",
+    "mode": "time",
+    "ownership": "sequential",
+    "payload": "int",
+    "repeats": 1,
+    "control": "default",
+    "verified": true,
+    "barrier": false,
+    "binary_sha256": "efebcf0a5079ad56e6fa6aa827205532138be2113dac45a20c5f0fa6f9eaddd5",
+    "child_allocator_environment": {},
+    "rows": [
+      {
+        "allocator_counting": false,
+        "builder_len": 16384,
+        "copy_mode": "baseline",
+        "output_len": 18432,
+        "payload": "int",
+        "profile": "checkpoint_builder_vm_memory_verify",
+        "repeats": 1,
+        "tasks": 32,
+        "verified": true,
+        "workload_live_restored": false
+      }
+    ]
+  },
+  {
+    "side": "baseline",
+    "mode": "count",
+    "ownership": "sequential",
+    "payload": "int",
+    "repeats": 1,
+    "control": "default",
+    "verified": true,
+    "barrier": false,
+    "binary_sha256": "d1c7fc8fba20ea1d2e7a3dc29dd50aa3db9f3c833286de8f8a4957986b151b8c",
+    "child_allocator_environment": {},
+    "rows": [
+      {
+        "allocator_counting": true,
+        "builder_len": 16384,
+        "copy_mode": "baseline",
+        "output_len": 18432,
+        "payload": "int",
+        "profile": "checkpoint_builder_vm_memory_verify",
+        "repeats": 1,
+        "tasks": 32,
+        "verified": true,
+        "workload_live_restored": true
+      }
+    ]
+  },
+  {
+    "side": "shared",
+    "mode": "time",
+    "ownership": "sequential",
+    "payload": "int",
+    "repeats": 1,
+    "control": "default",
+    "verified": true,
+    "barrier": false,
+    "binary_sha256": "1bd101e97094d169e019d362df47ec6c3777beaf57cb466ead2af15c38bbbe8a",
+    "child_allocator_environment": {},
+    "rows": [
+      {
+        "allocator_counting": false,
+        "builder_len": 16384,
+        "copy_mode": "shared",
+        "output_len": 18432,
+        "payload": "int",
+        "profile": "checkpoint_builder_vm_memory_verify",
+        "repeats": 1,
+        "tasks": 32,
+        "verified": true,
+        "workload_live_restored": false
+      }
+    ]
+  },
+  {
+    "side": "shared",
+    "mode": "count",
+    "ownership": "sequential",
+    "payload": "int",
+    "repeats": 1,
+    "control": "default",
+    "verified": true,
+    "barrier": false,
+    "binary_sha256": "53440142cbdfd72f414868f0cdeb819bf4353dbc13cc0b68290688230d176df2",
+    "child_allocator_environment": {},
+    "rows": [
+      {
+        "allocator_counting": true,
+        "builder_len": 16384,
+        "copy_mode": "shared",
+        "output_len": 18432,
+        "payload": "int",
+        "profile": "checkpoint_builder_vm_memory_verify",
+        "repeats": 1,
+        "tasks": 32,
+        "verified": true,
+        "workload_live_restored": true
+      }
+    ]
+  },
+  {
+    "side": "baseline",
+    "mode": "time",
+    "ownership": "sequential",
+    "payload": "string",
+    "repeats": 1,
+    "control": "default",
+    "verified": true,
+    "barrier": false,
+    "binary_sha256": "efebcf0a5079ad56e6fa6aa827205532138be2113dac45a20c5f0fa6f9eaddd5",
+    "child_allocator_environment": {},
+    "rows": [
+      {
+        "allocator_counting": false,
+        "builder_len": 16384,
+        "copy_mode": "baseline",
+        "output_len": 18432,
+        "payload": "string",
+        "profile": "checkpoint_builder_vm_memory_verify",
+        "repeats": 1,
+        "tasks": 32,
+        "verified": true,
+        "workload_live_restored": false
+      }
+    ]
+  },
+  {
+    "side": "baseline",
+    "mode": "count",
+    "ownership": "sequential",
+    "payload": "string",
+    "repeats": 1,
+    "control": "default",
+    "verified": true,
+    "barrier": false,
+    "binary_sha256": "d1c7fc8fba20ea1d2e7a3dc29dd50aa3db9f3c833286de8f8a4957986b151b8c",
+    "child_allocator_environment": {},
+    "rows": [
+      {
+        "allocator_counting": true,
+        "builder_len": 16384,
+        "copy_mode": "baseline",
+        "output_len": 18432,
+        "payload": "string",
+        "profile": "checkpoint_builder_vm_memory_verify",
+        "repeats": 1,
+        "tasks": 32,
+        "verified": true,
+        "workload_live_restored": true
+      }
+    ]
+  },
+  {
+    "side": "shared",
+    "mode": "time",
+    "ownership": "sequential",
+    "payload": "string",
+    "repeats": 1,
+    "control": "default",
+    "verified": true,
+    "barrier": false,
+    "binary_sha256": "1bd101e97094d169e019d362df47ec6c3777beaf57cb466ead2af15c38bbbe8a",
+    "child_allocator_environment": {},
+    "rows": [
+      {
+        "allocator_counting": false,
+        "builder_len": 16384,
+        "copy_mode": "shared",
+        "output_len": 18432,
+        "payload": "string",
+        "profile": "checkpoint_builder_vm_memory_verify",
+        "repeats": 1,
+        "tasks": 32,
+        "verified": true,
+        "workload_live_restored": false
+      }
+    ]
+  },
+  {
+    "side": "shared",
+    "mode": "count",
+    "ownership": "sequential",
+    "payload": "string",
+    "repeats": 1,
+    "control": "default",
+    "verified": true,
+    "barrier": false,
+    "binary_sha256": "53440142cbdfd72f414868f0cdeb819bf4353dbc13cc0b68290688230d176df2",
+    "child_allocator_environment": {},
+    "rows": [
+      {
+        "allocator_counting": true,
+        "builder_len": 16384,
+        "copy_mode": "shared",
+        "output_len": 18432,
+        "payload": "string",
+        "profile": "checkpoint_builder_vm_memory_verify",
+        "repeats": 1,
+        "tasks": 32,
+        "verified": true,
+        "workload_live_restored": true
+      }
+    ]
+  }
+]

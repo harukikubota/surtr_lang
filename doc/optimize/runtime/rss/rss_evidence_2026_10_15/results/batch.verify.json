@@ -1,0 +1,3998 @@
+[
+  {
+    "side": "before",
+    "n": 8,
+    "payload": "int",
+    "case": "map",
+    "verified": true,
+    "stdout_sha256": "d59784813bbf8e9a47929bbd4195498a43979c690f9e799cfe2e14522217c48d",
+    "execute_us": 981,
+    "total_us": 498985,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 497,
+        "duration_us": 497860,
+        "status": "executed"
+      },
+      "compile_total_us": 497860,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/8_int_map_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/8_int_map_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 1,
+          "duration_us": 1550,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 0,
+          "duration_us": 655,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 497,
+          "duration_us": 497860,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 1,
+          "duration_us": 1516,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 497,
+          "duration_us": 497860,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 0,
+          "duration_us": 981,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 0,
+          "duration_us": 61,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 0,
+          "duration_us": 60,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 2,
+          "duration_us": 2005,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 87,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 435,
+          "duration_us": 435581,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 498,
+          "duration_us": 498985,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 1,
+          "duration_us": 1860,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 498,
+        "duration_us": 498985,
+        "status": "executed"
+      },
+      "total_us": 498985
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "after",
+    "n": 8,
+    "payload": "int",
+    "case": "map",
+    "verified": true,
+    "stdout_sha256": "d59784813bbf8e9a47929bbd4195498a43979c690f9e799cfe2e14522217c48d",
+    "execute_us": 1030,
+    "total_us": 500030,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 498,
+        "duration_us": 498895,
+        "status": "executed"
+      },
+      "compile_total_us": 498895,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/8_int_map_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/8_int_map_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 1,
+          "duration_us": 1554,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 0,
+          "duration_us": 663,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 498,
+          "duration_us": 498895,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 1,
+          "duration_us": 1341,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 498,
+          "duration_us": 498895,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 1,
+          "duration_us": 1030,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 0,
+          "duration_us": 64,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 0,
+          "duration_us": 63,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 2,
+          "duration_us": 2063,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 63,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 437,
+          "duration_us": 437236,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 500,
+          "duration_us": 500030,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 1,
+          "duration_us": 1927,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 500,
+        "duration_us": 500030,
+        "status": "executed"
+      },
+      "total_us": 500030
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "before",
+    "n": 8,
+    "payload": "int",
+    "case": "flat_one",
+    "verified": true,
+    "stdout_sha256": "d59784813bbf8e9a47929bbd4195498a43979c690f9e799cfe2e14522217c48d",
+    "execute_us": 432,
+    "total_us": 464010,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 463,
+        "duration_us": 463520,
+        "status": "executed"
+      },
+      "compile_total_us": 463520,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/8_int_flat_one_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/8_int_flat_one_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 1,
+          "duration_us": 1498,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 0,
+          "duration_us": 654,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 463,
+          "duration_us": 463520,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 0,
+          "duration_us": 135,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 463,
+          "duration_us": 463520,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 0,
+          "duration_us": 432,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 0,
+          "duration_us": 68,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 0,
+          "duration_us": 68,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 2,
+          "duration_us": 2086,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 27,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 426,
+          "duration_us": 426684,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 464,
+          "duration_us": 464010,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 1,
+          "duration_us": 1899,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 464,
+        "duration_us": 464010,
+        "status": "executed"
+      },
+      "total_us": 464010
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "after",
+    "n": 8,
+    "payload": "int",
+    "case": "flat_one",
+    "verified": true,
+    "stdout_sha256": "d59784813bbf8e9a47929bbd4195498a43979c690f9e799cfe2e14522217c48d",
+    "execute_us": 455,
+    "total_us": 472049,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 471,
+        "duration_us": 471537,
+        "status": "executed"
+      },
+      "compile_total_us": 471537,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/8_int_flat_one_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/8_int_flat_one_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 1,
+          "duration_us": 1514,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 0,
+          "duration_us": 596,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 471,
+          "duration_us": 471537,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 0,
+          "duration_us": 140,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 471,
+          "duration_us": 471537,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 0,
+          "duration_us": 455,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 0,
+          "duration_us": 69,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 0,
+          "duration_us": 68,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 2,
+          "duration_us": 2046,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 26,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 434,
+          "duration_us": 434656,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 472,
+          "duration_us": 472049,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 1,
+          "duration_us": 1873,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 472,
+        "duration_us": 472049,
+        "status": "executed"
+      },
+      "total_us": 472049
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "before",
+    "n": 8,
+    "payload": "int",
+    "case": "flat_two",
+    "verified": true,
+    "stdout_sha256": "a3ceae5ceb7ea4b98984ec1d74399d2c978087c63560d2dffde9addeacb7a1fa",
+    "execute_us": 619,
+    "total_us": 471123,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 470,
+        "duration_us": 470449,
+        "status": "executed"
+      },
+      "compile_total_us": 470449,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/8_int_flat_two_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/8_int_flat_two_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 1,
+          "duration_us": 1518,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 0,
+          "duration_us": 593,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 470,
+          "duration_us": 470449,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 0,
+          "duration_us": 146,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 470,
+          "duration_us": 470449,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 0,
+          "duration_us": 619,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 0,
+          "duration_us": 68,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 0,
+          "duration_us": 67,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 2,
+          "duration_us": 2028,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 26,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 434,
+          "duration_us": 434277,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 471,
+          "duration_us": 471123,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 1,
+          "duration_us": 1851,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 471,
+        "duration_us": 471123,
+        "status": "executed"
+      },
+      "total_us": 471123
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "after",
+    "n": 8,
+    "payload": "int",
+    "case": "flat_two",
+    "verified": true,
+    "stdout_sha256": "a3ceae5ceb7ea4b98984ec1d74399d2c978087c63560d2dffde9addeacb7a1fa",
+    "execute_us": 629,
+    "total_us": 467969,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 467,
+        "duration_us": 467282,
+        "status": "executed"
+      },
+      "compile_total_us": 467282,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/8_int_flat_two_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/8_int_flat_two_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 1,
+          "duration_us": 1576,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 0,
+          "duration_us": 604,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 467,
+          "duration_us": 467282,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 0,
+          "duration_us": 139,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 467,
+          "duration_us": 467282,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 0,
+          "duration_us": 629,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 0,
+          "duration_us": 66,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 0,
+          "duration_us": 66,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 2,
+          "duration_us": 2042,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 28,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 430,
+          "duration_us": 430667,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 467,
+          "duration_us": 467969,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 1,
+          "duration_us": 1889,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 467,
+        "duration_us": 467969,
+        "status": "executed"
+      },
+      "total_us": 467969
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "before",
+    "n": 8,
+    "payload": "string",
+    "case": "map",
+    "verified": true,
+    "stdout_sha256": "917101313891a3b52b788ba94d08a2df736b6adb45b5fc1105730bff7a5321d8",
+    "execute_us": 535,
+    "total_us": 473944,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 473,
+        "duration_us": 473354,
+        "status": "executed"
+      },
+      "compile_total_us": 473354,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/8_string_map_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/8_string_map_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 1,
+          "duration_us": 1547,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 0,
+          "duration_us": 605,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 473,
+          "duration_us": 473354,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 0,
+          "duration_us": 133,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 473,
+          "duration_us": 473354,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 0,
+          "duration_us": 535,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 0,
+          "duration_us": 63,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 0,
+          "duration_us": 62,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 2,
+          "duration_us": 2016,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 26,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 437,
+          "duration_us": 437046,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 473,
+          "duration_us": 473944,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 1,
+          "duration_us": 1914,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 473,
+        "duration_us": 473944,
+        "status": "executed"
+      },
+      "total_us": 473944
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "after",
+    "n": 8,
+    "payload": "string",
+    "case": "map",
+    "verified": true,
+    "stdout_sha256": "917101313891a3b52b788ba94d08a2df736b6adb45b5fc1105730bff7a5321d8",
+    "execute_us": 567,
+    "total_us": 462592,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 461,
+        "duration_us": 461976,
+        "status": "executed"
+      },
+      "compile_total_us": 461976,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/8_string_map_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/8_string_map_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 1,
+          "duration_us": 1525,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 0,
+          "duration_us": 586,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 461,
+          "duration_us": 461976,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 0,
+          "duration_us": 133,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 461,
+          "duration_us": 461976,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 0,
+          "duration_us": 567,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 0,
+          "duration_us": 64,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 0,
+          "duration_us": 63,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 2,
+          "duration_us": 2026,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 22,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 425,
+          "duration_us": 425578,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 462,
+          "duration_us": 462592,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 1,
+          "duration_us": 1830,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 462,
+        "duration_us": 462592,
+        "status": "executed"
+      },
+      "total_us": 462592
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "before",
+    "n": 8,
+    "payload": "string",
+    "case": "flat_one",
+    "verified": true,
+    "stdout_sha256": "917101313891a3b52b788ba94d08a2df736b6adb45b5fc1105730bff7a5321d8",
+    "execute_us": 440,
+    "total_us": 468372,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 467,
+        "duration_us": 467878,
+        "status": "executed"
+      },
+      "compile_total_us": 467878,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/8_string_flat_one_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/8_string_flat_one_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 1,
+          "duration_us": 1504,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 0,
+          "duration_us": 631,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 467,
+          "duration_us": 467878,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 0,
+          "duration_us": 142,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 467,
+          "duration_us": 467878,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 0,
+          "duration_us": 440,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 0,
+          "duration_us": 61,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 0,
+          "duration_us": 60,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 2,
+          "duration_us": 2062,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 24,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 431,
+          "duration_us": 431600,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 468,
+          "duration_us": 468372,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 1,
+          "duration_us": 1892,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 468,
+        "duration_us": 468372,
+        "status": "executed"
+      },
+      "total_us": 468372
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "after",
+    "n": 8,
+    "payload": "string",
+    "case": "flat_one",
+    "verified": true,
+    "stdout_sha256": "917101313891a3b52b788ba94d08a2df736b6adb45b5fc1105730bff7a5321d8",
+    "execute_us": 470,
+    "total_us": 464598,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 464,
+        "duration_us": 464076,
+        "status": "executed"
+      },
+      "compile_total_us": 464076,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/8_string_flat_one_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/8_string_flat_one_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 1,
+          "duration_us": 1493,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 0,
+          "duration_us": 641,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 464,
+          "duration_us": 464076,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 0,
+          "duration_us": 134,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 464,
+          "duration_us": 464076,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 0,
+          "duration_us": 470,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 0,
+          "duration_us": 63,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 0,
+          "duration_us": 62,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 2,
+          "duration_us": 2020,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 24,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 427,
+          "duration_us": 427634,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 464,
+          "duration_us": 464598,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 1,
+          "duration_us": 1825,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 464,
+        "duration_us": 464598,
+        "status": "executed"
+      },
+      "total_us": 464598
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "before",
+    "n": 8,
+    "payload": "string",
+    "case": "flat_two",
+    "verified": true,
+    "stdout_sha256": "d5c7124181113341d6a51816775d186ffe9a10abde956d069345d220d72eb50e",
+    "execute_us": 599,
+    "total_us": 469315,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 468,
+        "duration_us": 468652,
+        "status": "executed"
+      },
+      "compile_total_us": 468652,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/8_string_flat_two_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/8_string_flat_two_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 1,
+          "duration_us": 1551,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 0,
+          "duration_us": 615,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 468,
+          "duration_us": 468652,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 0,
+          "duration_us": 135,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 468,
+          "duration_us": 468652,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 0,
+          "duration_us": 599,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 0,
+          "duration_us": 70,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 0,
+          "duration_us": 69,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 2,
+          "duration_us": 2045,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 34,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 432,
+          "duration_us": 432431,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 469,
+          "duration_us": 469315,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 1,
+          "duration_us": 1849,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 469,
+        "duration_us": 469315,
+        "status": "executed"
+      },
+      "total_us": 469315
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "after",
+    "n": 8,
+    "payload": "string",
+    "case": "flat_two",
+    "verified": true,
+    "stdout_sha256": "d5c7124181113341d6a51816775d186ffe9a10abde956d069345d220d72eb50e",
+    "execute_us": 645,
+    "total_us": 477405,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 476,
+        "duration_us": 476694,
+        "status": "executed"
+      },
+      "compile_total_us": 476694,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/8_string_flat_two_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/8_string_flat_two_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 1,
+          "duration_us": 1479,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 0,
+          "duration_us": 630,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 476,
+          "duration_us": 476694,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 0,
+          "duration_us": 141,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 476,
+          "duration_us": 476694,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 0,
+          "duration_us": 645,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 0,
+          "duration_us": 68,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 0,
+          "duration_us": 68,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 2,
+          "duration_us": 2073,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 38,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 440,
+          "duration_us": 440207,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 477,
+          "duration_us": 477405,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 1,
+          "duration_us": 1963,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 477,
+        "duration_us": 477405,
+        "status": "executed"
+      },
+      "total_us": 477405
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "before",
+    "n": 256,
+    "payload": "int",
+    "case": "map",
+    "verified": true,
+    "stdout_sha256": "41ea07541aac87524737b5c3c09ca137cd1d84c3483f0cb24da4656b157c9b40",
+    "execute_us": 8251,
+    "total_us": 472649,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 464,
+        "duration_us": 464343,
+        "status": "executed"
+      },
+      "compile_total_us": 464343,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/256_int_map_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/256_int_map_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 1,
+          "duration_us": 1520,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 0,
+          "duration_us": 796,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 464,
+          "duration_us": 464343,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 0,
+          "duration_us": 268,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 464,
+          "duration_us": 464343,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 8,
+          "duration_us": 8251,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 0,
+          "duration_us": 167,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 0,
+          "duration_us": 166,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 2,
+          "duration_us": 2087,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 23,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 427,
+          "duration_us": 427590,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 472,
+          "duration_us": 472649,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 2,
+          "duration_us": 2076,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 472,
+        "duration_us": 472649,
+        "status": "executed"
+      },
+      "total_us": 472649
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "after",
+    "n": 256,
+    "payload": "int",
+    "case": "map",
+    "verified": true,
+    "stdout_sha256": "41ea07541aac87524737b5c3c09ca137cd1d84c3483f0cb24da4656b157c9b40",
+    "execute_us": 8571,
+    "total_us": 470996,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 462,
+        "duration_us": 462368,
+        "status": "executed"
+      },
+      "compile_total_us": 462368,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/256_int_map_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/256_int_map_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 1,
+          "duration_us": 1641,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 0,
+          "duration_us": 738,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 462,
+          "duration_us": 462368,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 0,
+          "duration_us": 258,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 462,
+          "duration_us": 462368,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 8,
+          "duration_us": 8571,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 0,
+          "duration_us": 176,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 0,
+          "duration_us": 176,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 2,
+          "duration_us": 2135,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 25,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 425,
+          "duration_us": 425517,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 470,
+          "duration_us": 470996,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 2,
+          "duration_us": 2044,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 470,
+        "duration_us": 470996,
+        "status": "executed"
+      },
+      "total_us": 470996
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "before",
+    "n": 256,
+    "payload": "int",
+    "case": "flat_one",
+    "verified": true,
+    "stdout_sha256": "41ea07541aac87524737b5c3c09ca137cd1d84c3483f0cb24da4656b157c9b40",
+    "execute_us": 5671,
+    "total_us": 476111,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 470,
+        "duration_us": 470387,
+        "status": "executed"
+      },
+      "compile_total_us": 470387,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/256_int_flat_one_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/256_int_flat_one_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 1,
+          "duration_us": 1577,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 0,
+          "duration_us": 758,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 470,
+          "duration_us": 470387,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 0,
+          "duration_us": 272,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 470,
+          "duration_us": 470387,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 5,
+          "duration_us": 5671,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 0,
+          "duration_us": 172,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 1,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 0,
+          "duration_us": 171,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 2,
+          "duration_us": 2142,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 24,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 433,
+          "duration_us": 433449,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 476,
+          "duration_us": 476111,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 2,
+          "duration_us": 2124,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 476,
+        "duration_us": 476111,
+        "status": "executed"
+      },
+      "total_us": 476111
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "after",
+    "n": 256,
+    "payload": "int",
+    "case": "flat_one",
+    "verified": true,
+    "stdout_sha256": "41ea07541aac87524737b5c3c09ca137cd1d84c3483f0cb24da4656b157c9b40",
+    "execute_us": 5650,
+    "total_us": 477259,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 471,
+        "duration_us": 471554,
+        "status": "executed"
+      },
+      "compile_total_us": 471554,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/256_int_flat_one_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/256_int_flat_one_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 1,
+          "duration_us": 1624,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 0,
+          "duration_us": 755,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 471,
+          "duration_us": 471554,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 0,
+          "duration_us": 262,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 471,
+          "duration_us": 471554,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 5,
+          "duration_us": 5650,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 0,
+          "duration_us": 175,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 0,
+          "duration_us": 174,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 2,
+          "duration_us": 2111,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 23,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 433,
+          "duration_us": 433909,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 477,
+          "duration_us": 477259,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 2,
+          "duration_us": 2128,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 477,
+        "duration_us": 477259,
+        "status": "executed"
+      },
+      "total_us": 477259
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "before",
+    "n": 256,
+    "payload": "int",
+    "case": "flat_two",
+    "verified": true,
+    "stdout_sha256": "fac3f5fb820aee1d12798cbd4aec35a3ed3e35a4afd806dd62a50686d417acb1",
+    "execute_us": 11550,
+    "total_us": 476899,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 465,
+        "duration_us": 465296,
+        "status": "executed"
+      },
+      "compile_total_us": 465296,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/256_int_flat_two_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/256_int_flat_two_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 1,
+          "duration_us": 1610,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 0,
+          "duration_us": 743,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 465,
+          "duration_us": 465296,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 0,
+          "duration_us": 273,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 465,
+          "duration_us": 465296,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 11,
+          "duration_us": 11550,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 0,
+          "duration_us": 167,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 1,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 0,
+          "duration_us": 165,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 2,
+          "duration_us": 2111,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 25,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 428,
+          "duration_us": 428278,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 476,
+          "duration_us": 476899,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 2,
+          "duration_us": 2126,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 476,
+        "duration_us": 476899,
+        "status": "executed"
+      },
+      "total_us": 476899
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "after",
+    "n": 256,
+    "payload": "int",
+    "case": "flat_two",
+    "verified": true,
+    "stdout_sha256": "fac3f5fb820aee1d12798cbd4aec35a3ed3e35a4afd806dd62a50686d417acb1",
+    "execute_us": 10806,
+    "total_us": 479416,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 468,
+        "duration_us": 468555,
+        "status": "executed"
+      },
+      "compile_total_us": 468555,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/256_int_flat_two_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/256_int_flat_two_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 1,
+          "duration_us": 1610,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 0,
+          "duration_us": 733,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 468,
+          "duration_us": 468555,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 0,
+          "duration_us": 267,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 468,
+          "duration_us": 468555,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 10,
+          "duration_us": 10806,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 0,
+          "duration_us": 182,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 0,
+          "duration_us": 181,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 2,
+          "duration_us": 2113,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 26,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 431,
+          "duration_us": 431318,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 479,
+          "duration_us": 479416,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 2,
+          "duration_us": 2088,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 479,
+        "duration_us": 479416,
+        "status": "executed"
+      },
+      "total_us": 479416
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "before",
+    "n": 256,
+    "payload": "string",
+    "case": "map",
+    "verified": true,
+    "stdout_sha256": "efa67acb9cf2aa013415a4d1c2f47252b14eb296b6933a4c11ff96084c620727",
+    "execute_us": 8814,
+    "total_us": 467460,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 458,
+        "duration_us": 458589,
+        "status": "executed"
+      },
+      "compile_total_us": 458589,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/256_string_map_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/256_string_map_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 1,
+          "duration_us": 1561,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 0,
+          "duration_us": 738,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 458,
+          "duration_us": 458589,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 0,
+          "duration_us": 246,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 458,
+          "duration_us": 458589,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 8,
+          "duration_us": 8814,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 0,
+          "duration_us": 150,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 0,
+          "duration_us": 149,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 2,
+          "duration_us": 2110,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 27,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 421,
+          "duration_us": 421788,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 467,
+          "duration_us": 467460,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 2,
+          "duration_us": 2059,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 467,
+        "duration_us": 467460,
+        "status": "executed"
+      },
+      "total_us": 467460
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "after",
+    "n": 256,
+    "payload": "string",
+    "case": "map",
+    "verified": true,
+    "stdout_sha256": "efa67acb9cf2aa013415a4d1c2f47252b14eb296b6933a4c11ff96084c620727",
+    "execute_us": 8497,
+    "total_us": 482645,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 474,
+        "duration_us": 474095,
+        "status": "executed"
+      },
+      "compile_total_us": 474095,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/256_string_map_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/256_string_map_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 1,
+          "duration_us": 1572,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 0,
+          "duration_us": 743,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 474,
+          "duration_us": 474095,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 0,
+          "duration_us": 240,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 474,
+          "duration_us": 474095,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 8,
+          "duration_us": 8497,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 0,
+          "duration_us": 153,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 0,
+          "duration_us": 153,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 2,
+          "duration_us": 2083,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 24,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 436,
+          "duration_us": 436920,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 482,
+          "duration_us": 482645,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 2,
+          "duration_us": 2204,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 482,
+        "duration_us": 482645,
+        "status": "executed"
+      },
+      "total_us": 482645
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "before",
+    "n": 256,
+    "payload": "string",
+    "case": "flat_one",
+    "verified": true,
+    "stdout_sha256": "efa67acb9cf2aa013415a4d1c2f47252b14eb296b6933a4c11ff96084c620727",
+    "execute_us": 6318,
+    "total_us": 476151,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 469,
+        "duration_us": 469764,
+        "status": "executed"
+      },
+      "compile_total_us": 469764,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/256_string_flat_one_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/256_string_flat_one_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 1,
+          "duration_us": 1586,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 0,
+          "duration_us": 745,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 469,
+          "duration_us": 469764,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 0,
+          "duration_us": 248,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 469,
+          "duration_us": 469764,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 6,
+          "duration_us": 6318,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 0,
+          "duration_us": 151,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 0,
+          "duration_us": 151,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 2,
+          "duration_us": 2100,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 35,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 432,
+          "duration_us": 432946,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 476,
+          "duration_us": 476151,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 2,
+          "duration_us": 2130,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 476,
+        "duration_us": 476151,
+        "status": "executed"
+      },
+      "total_us": 476151
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "after",
+    "n": 256,
+    "payload": "string",
+    "case": "flat_one",
+    "verified": true,
+    "stdout_sha256": "efa67acb9cf2aa013415a4d1c2f47252b14eb296b6933a4c11ff96084c620727",
+    "execute_us": 6055,
+    "total_us": 476015,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 469,
+        "duration_us": 469909,
+        "status": "executed"
+      },
+      "compile_total_us": 469909,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/256_string_flat_one_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/256_string_flat_one_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 1,
+          "duration_us": 1598,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 0,
+          "duration_us": 748,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 469,
+          "duration_us": 469909,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 0,
+          "duration_us": 242,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 469,
+          "duration_us": 469909,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 6,
+          "duration_us": 6055,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 0,
+          "duration_us": 161,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 0,
+          "duration_us": 160,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 2,
+          "duration_us": 2093,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 24,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 432,
+          "duration_us": 432702,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 476,
+          "duration_us": 476015,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 2,
+          "duration_us": 2110,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 476,
+        "duration_us": 476015,
+        "status": "executed"
+      },
+      "total_us": 476015
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "before",
+    "n": 256,
+    "payload": "string",
+    "case": "flat_two",
+    "verified": true,
+    "stdout_sha256": "e0c4d35f6a64453e2708cd3c6c569313ff85d5fdd507fd13e672434f584ad507",
+    "execute_us": 11754,
+    "total_us": 477069,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 465,
+        "duration_us": 465258,
+        "status": "executed"
+      },
+      "compile_total_us": 465258,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/256_string_flat_two_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/256_string_flat_two_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 1,
+          "duration_us": 1590,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 0,
+          "duration_us": 731,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 465,
+          "duration_us": 465258,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 0,
+          "duration_us": 252,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 465,
+          "duration_us": 465258,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 11,
+          "duration_us": 11754,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 0,
+          "duration_us": 150,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 0,
+          "duration_us": 149,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 2,
+          "duration_us": 2065,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 26,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 428,
+          "duration_us": 428478,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 477,
+          "duration_us": 477069,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 2,
+          "duration_us": 2134,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 477,
+        "duration_us": 477069,
+        "status": "executed"
+      },
+      "total_us": 477069
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "after",
+    "n": 256,
+    "payload": "string",
+    "case": "flat_two",
+    "verified": true,
+    "stdout_sha256": "e0c4d35f6a64453e2708cd3c6c569313ff85d5fdd507fd13e672434f584ad507",
+    "execute_us": 11915,
+    "total_us": 489134,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 477,
+        "duration_us": 477168,
+        "status": "executed"
+      },
+      "compile_total_us": 477168,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/256_string_flat_two_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/256_string_flat_two_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 1,
+          "duration_us": 1578,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 0,
+          "duration_us": 752,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 477,
+          "duration_us": 477168,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 0,
+          "duration_us": 242,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 477,
+          "duration_us": 477168,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 11,
+          "duration_us": 11915,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 0,
+          "duration_us": 163,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 0,
+          "duration_us": 162,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 2,
+          "duration_us": 2310,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 23,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 439,
+          "duration_us": 439178,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 489,
+          "duration_us": 489134,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 2,
+          "duration_us": 2276,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 489,
+        "duration_us": 489134,
+        "status": "executed"
+      },
+      "total_us": 489134
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "before",
+    "n": 10000,
+    "payload": "int",
+    "case": "map",
+    "verified": true,
+    "stdout_sha256": "a658f34417004048e470697bf202006272fd1e2f99bf3b9051a56fbef15a586c",
+    "execute_us": 1130974,
+    "total_us": 1764699,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 633,
+        "duration_us": 633639,
+        "status": "executed"
+      },
+      "compile_total_us": 633639,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/10000_int_map_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/10000_int_map_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 3,
+          "duration_us": 3252,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 136,
+          "duration_us": 136999,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 633,
+          "duration_us": 633639,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 4,
+          "duration_us": 4733,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 633,
+          "duration_us": 633639,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 1130,
+          "duration_us": 1130974,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 4,
+          "duration_us": 4305,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 4,
+          "duration_us": 4305,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 5,
+          "duration_us": 5308,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 38,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 431,
+          "duration_us": 431831,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 1764,
+          "duration_us": 1764699,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 14,
+          "duration_us": 14595,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 1764,
+        "duration_us": 1764699,
+        "status": "executed"
+      },
+      "total_us": 1764699
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "after",
+    "n": 10000,
+    "payload": "int",
+    "case": "map",
+    "verified": true,
+    "stdout_sha256": "a658f34417004048e470697bf202006272fd1e2f99bf3b9051a56fbef15a586c",
+    "execute_us": 1134013,
+    "total_us": 1766004,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 631,
+        "duration_us": 631917,
+        "status": "executed"
+      },
+      "compile_total_us": 631917,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/10000_int_map_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/10000_int_map_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 3,
+          "duration_us": 3324,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 137,
+          "duration_us": 137099,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 631,
+          "duration_us": 631917,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 4,
+          "duration_us": 4612,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 631,
+          "duration_us": 631917,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 1134,
+          "duration_us": 1134013,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 4,
+          "duration_us": 4496,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 4,
+          "duration_us": 4495,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 5,
+          "duration_us": 5402,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 32,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 430,
+          "duration_us": 430235,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 1766,
+          "duration_us": 1766004,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 14,
+          "duration_us": 14770,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 1766,
+        "duration_us": 1766004,
+        "status": "executed"
+      },
+      "total_us": 1766004
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "before",
+    "n": 10000,
+    "payload": "int",
+    "case": "flat_one",
+    "verified": true,
+    "stdout_sha256": "a658f34417004048e470697bf202006272fd1e2f99bf3b9051a56fbef15a586c",
+    "execute_us": 1407632,
+    "total_us": 2030071,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 622,
+        "duration_us": 622353,
+        "status": "executed"
+      },
+      "compile_total_us": 622353,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/10000_int_flat_one_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/10000_int_flat_one_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 3,
+          "duration_us": 3319,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 136,
+          "duration_us": 136912,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 622,
+          "duration_us": 622353,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 4,
+          "duration_us": 4670,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 622,
+          "duration_us": 622353,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 1407,
+          "duration_us": 1407632,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 4,
+          "duration_us": 4343,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 4,
+          "duration_us": 4342,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 5,
+          "duration_us": 5318,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 40,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 420,
+          "duration_us": 420771,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 2030,
+          "duration_us": 2030071,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 14,
+          "duration_us": 14689,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 2030,
+        "duration_us": 2030071,
+        "status": "executed"
+      },
+      "total_us": 2030071
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "after",
+    "n": 10000,
+    "payload": "int",
+    "case": "flat_one",
+    "verified": true,
+    "stdout_sha256": "a658f34417004048e470697bf202006272fd1e2f99bf3b9051a56fbef15a586c",
+    "execute_us": 1412920,
+    "total_us": 2055874,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 642,
+        "duration_us": 642881,
+        "status": "executed"
+      },
+      "compile_total_us": 642881,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/10000_int_flat_one_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/10000_int_flat_one_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 3,
+          "duration_us": 3366,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 140,
+          "duration_us": 140801,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 642,
+          "duration_us": 642881,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 4,
+          "duration_us": 4647,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 642,
+          "duration_us": 642881,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 1412,
+          "duration_us": 1412920,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 4,
+          "duration_us": 4515,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 1,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 4,
+          "duration_us": 4514,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 5,
+          "duration_us": 5361,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 35,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 434,
+          "duration_us": 434486,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 2055,
+          "duration_us": 2055874,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 14,
+          "duration_us": 14690,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 2055,
+        "duration_us": 2055874,
+        "status": "executed"
+      },
+      "total_us": 2055874
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "before",
+    "n": 10000,
+    "payload": "int",
+    "case": "flat_two",
+    "verified": true,
+    "stdout_sha256": "16e56ed942949c71ad1aeaea107499acfd0aedbb6a95671e6ff5b6c42ab821e1",
+    "execute_us": 2420472,
+    "total_us": 3056032,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 635,
+        "duration_us": 635471,
+        "status": "executed"
+      },
+      "compile_total_us": 635471,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/10000_int_flat_two_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/10000_int_flat_two_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 3,
+          "duration_us": 3164,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 137,
+          "duration_us": 137034,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 635,
+          "duration_us": 635471,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 4,
+          "duration_us": 4764,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 635,
+          "duration_us": 635471,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 2420,
+          "duration_us": 2420472,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 4,
+          "duration_us": 4340,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 1,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 4,
+          "duration_us": 4339,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 5,
+          "duration_us": 5240,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 47,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 434,
+          "duration_us": 434677,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 3056,
+          "duration_us": 3056032,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 14,
+          "duration_us": 14623,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 3056,
+        "duration_us": 3056032,
+        "status": "executed"
+      },
+      "total_us": 3056032
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "after",
+    "n": 10000,
+    "payload": "int",
+    "case": "flat_two",
+    "verified": true,
+    "stdout_sha256": "16e56ed942949c71ad1aeaea107499acfd0aedbb6a95671e6ff5b6c42ab821e1",
+    "execute_us": 2420630,
+    "total_us": 3057070,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 636,
+        "duration_us": 636365,
+        "status": "executed"
+      },
+      "compile_total_us": 636365,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/10000_int_flat_two_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/10000_int_flat_two_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 3,
+          "duration_us": 3321,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 136,
+          "duration_us": 136977,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 636,
+          "duration_us": 636365,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 4,
+          "duration_us": 4593,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 636,
+          "duration_us": 636365,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 2420,
+          "duration_us": 2420630,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 4,
+          "duration_us": 4361,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 4,
+          "duration_us": 4360,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 5,
+          "duration_us": 5288,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 39,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 434,
+          "duration_us": 434096,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 3057,
+          "duration_us": 3057070,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 14,
+          "duration_us": 14729,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 3057,
+        "duration_us": 3057070,
+        "status": "executed"
+      },
+      "total_us": 3057070
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "before",
+    "n": 10000,
+    "payload": "string",
+    "case": "map",
+    "verified": true,
+    "stdout_sha256": "c080de977644a439a4042ae84853e05d6a7b69611ef31da2b0c538752972fe9a",
+    "execute_us": 1678920,
+    "total_us": 2317869,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 638,
+        "duration_us": 638845,
+        "status": "executed"
+      },
+      "compile_total_us": 638845,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/10000_string_map_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/10000_string_map_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 2,
+          "duration_us": 2593,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 137,
+          "duration_us": 137568,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 638,
+          "duration_us": 638845,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 4,
+          "duration_us": 4090,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 638,
+          "duration_us": 638845,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 1678,
+          "duration_us": 1678920,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 3,
+          "duration_us": 3759,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 3,
+          "duration_us": 3758,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 5,
+          "duration_us": 5353,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 63,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 437,
+          "duration_us": 437381,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 2317,
+          "duration_us": 2317869,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 14,
+          "duration_us": 14751,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 2317,
+        "duration_us": 2317869,
+        "status": "executed"
+      },
+      "total_us": 2317869
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "after",
+    "n": 10000,
+    "payload": "string",
+    "case": "map",
+    "verified": true,
+    "stdout_sha256": "c080de977644a439a4042ae84853e05d6a7b69611ef31da2b0c538752972fe9a",
+    "execute_us": 1679317,
+    "total_us": 2310472,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 631,
+        "duration_us": 631068,
+        "status": "executed"
+      },
+      "compile_total_us": 631068,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/10000_string_map_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/10000_string_map_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 2,
+          "duration_us": 2641,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 138,
+          "duration_us": 138191,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 631,
+          "duration_us": 631068,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 4,
+          "duration_us": 4000,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 631,
+          "duration_us": 631068,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 1679,
+          "duration_us": 1679317,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 3,
+          "duration_us": 3919,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 3,
+          "duration_us": 3918,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 5,
+          "duration_us": 5336,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 38,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 429,
+          "duration_us": 429766,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 2310,
+          "duration_us": 2310472,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 14,
+          "duration_us": 14709,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 2310,
+        "duration_us": 2310472,
+        "status": "executed"
+      },
+      "total_us": 2310472
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "before",
+    "n": 10000,
+    "payload": "string",
+    "case": "flat_one",
+    "verified": true,
+    "stdout_sha256": "c080de977644a439a4042ae84853e05d6a7b69611ef31da2b0c538752972fe9a",
+    "execute_us": 2222077,
+    "total_us": 2843441,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 621,
+        "duration_us": 621267,
+        "status": "executed"
+      },
+      "compile_total_us": 621267,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/10000_string_flat_one_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/10000_string_flat_one_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 2,
+          "duration_us": 2660,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 137,
+          "duration_us": 137513,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 621,
+          "duration_us": 621267,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 4,
+          "duration_us": 4070,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 621,
+          "duration_us": 621267,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 2222,
+          "duration_us": 2222077,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 3,
+          "duration_us": 3754,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 3,
+          "duration_us": 3754,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 5,
+          "duration_us": 5402,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 55,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 421,
+          "duration_us": 421607,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 2843,
+          "duration_us": 2843441,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 14,
+          "duration_us": 14531,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 2843,
+        "duration_us": 2843441,
+        "status": "executed"
+      },
+      "total_us": 2843441
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "after",
+    "n": 10000,
+    "payload": "string",
+    "case": "flat_one",
+    "verified": true,
+    "stdout_sha256": "c080de977644a439a4042ae84853e05d6a7b69611ef31da2b0c538752972fe9a",
+    "execute_us": 2223116,
+    "total_us": 2856046,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 632,
+        "duration_us": 632847,
+        "status": "executed"
+      },
+      "compile_total_us": 632847,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/10000_string_flat_one_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/10000_string_flat_one_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 2,
+          "duration_us": 2713,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 137,
+          "duration_us": 137669,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 632,
+          "duration_us": 632847,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 4,
+          "duration_us": 4412,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 632,
+          "duration_us": 632847,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 2223,
+          "duration_us": 2223116,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 3,
+          "duration_us": 3792,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 3,
+          "duration_us": 3791,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 5,
+          "duration_us": 5457,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 45,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 431,
+          "duration_us": 431407,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 2856,
+          "duration_us": 2856046,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 14,
+          "duration_us": 14767,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 2856,
+        "duration_us": 2856046,
+        "status": "executed"
+      },
+      "total_us": 2856046
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "before",
+    "n": 10000,
+    "payload": "string",
+    "case": "flat_two",
+    "verified": true,
+    "stdout_sha256": "88254b8f2086772ebde23188b791e9d5df95346cf22558427c4bec11f132dea6",
+    "execute_us": 3780991,
+    "total_us": 4410698,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 629,
+        "duration_us": 629602,
+        "status": "executed"
+      },
+      "compile_total_us": 629602,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/10000_string_flat_two_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/10000_string_flat_two_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 2,
+          "duration_us": 2706,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 137,
+          "duration_us": 137560,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 629,
+          "duration_us": 629602,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 4,
+          "duration_us": 4130,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 629,
+          "duration_us": 629602,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 3780,
+          "duration_us": 3780991,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 3,
+          "duration_us": 3669,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 3,
+          "duration_us": 3668,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 5,
+          "duration_us": 5270,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 57,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 430,
+          "duration_us": 430028,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 4410,
+          "duration_us": 4410698,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 14,
+          "duration_us": 14719,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 4410,
+        "duration_us": 4410698,
+        "status": "executed"
+      },
+      "total_us": 4410698
+    },
+    "process_peak_rss_bytes": null
+  },
+  {
+    "side": "after",
+    "n": 10000,
+    "payload": "string",
+    "case": "flat_two",
+    "verified": true,
+    "stdout_sha256": "88254b8f2086772ebde23188b791e9d5df95346cf22558427c4bec11f132dea6",
+    "execute_us": 3782377,
+    "total_us": 4414161,
+    "phase_timing": {
+      "cache": {
+        "artifact": "miss",
+        "artifact_store": "stored",
+        "stdlib": "cold"
+      },
+      "compile_total": {
+        "duration_ms": 631,
+        "duration_us": 631700,
+        "status": "executed"
+      },
+      "compile_total_us": 631700,
+      "input": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/10000_string_flat_two_True.srt",
+      "input_path": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-builder-batch-kyknxekd/10000_string_flat_two_True.srt",
+      "phases": {
+        "bytecode_encode": {
+          "duration_ms": 2,
+          "duration_us": 2735,
+          "status": "executed"
+        },
+        "codegen": {
+          "duration_ms": 137,
+          "duration_us": 137539,
+          "status": "executed"
+        },
+        "compile": {
+          "duration_ms": 631,
+          "duration_us": 631700,
+          "status": "executed"
+        },
+        "compile_plan": {
+          "duration_ms": 3,
+          "duration_us": 3999,
+          "status": "executed"
+        },
+        "compile_total": {
+          "duration_ms": 631,
+          "duration_us": 631700,
+          "status": "executed"
+        },
+        "decode": {
+          "status": "skipped"
+        },
+        "execute": {
+          "duration_ms": 3782,
+          "duration_us": 3782377,
+          "status": "executed"
+        },
+        "output_write": {
+          "status": "skipped"
+        },
+        "parse": {
+          "duration_ms": 3,
+          "duration_us": 3769,
+          "status": "executed"
+        },
+        "parse_modules": {
+          "duration_ms": 0,
+          "duration_us": 0,
+          "status": "executed"
+        },
+        "parse_user": {
+          "duration_ms": 3,
+          "duration_us": 3768,
+          "status": "executed"
+        },
+        "resolve": {
+          "duration_ms": 5,
+          "duration_us": 5337,
+          "status": "executed"
+        },
+        "source_read": {
+          "duration_ms": 0,
+          "duration_us": 46,
+          "status": "executed"
+        },
+        "stdlib_load": {
+          "duration_ms": 432,
+          "duration_us": 432911,
+          "status": "executed"
+        },
+        "total": {
+          "duration_ms": 4414,
+          "duration_us": 4414161,
+          "status": "executed"
+        },
+        "typecheck": {
+          "duration_ms": 14,
+          "duration_us": 14396,
+          "status": "executed"
+        }
+      },
+      "schema_version": 1,
+      "total": {
+        "duration_ms": 4414,
+        "duration_us": 4414161,
+        "status": "executed"
+      },
+      "total_us": 4414161
+    },
+    "process_peak_rss_bytes": null
+  }
+]

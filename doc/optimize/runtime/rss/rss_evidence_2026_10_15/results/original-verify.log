@@ -1,0 +1,16 @@
+baseline counted=False int repeats=1 sample=0
+shared counted=False int repeats=1 sample=0
+baseline counted=True int repeats=1 sample=0
+shared counted=True int repeats=1 sample=0
+baseline counted=False int repeats=8 sample=0
+shared counted=False int repeats=8 sample=0
+baseline counted=True int repeats=8 sample=0
+shared counted=True int repeats=8 sample=0
+baseline counted=False string repeats=1 sample=0
+shared counted=False string repeats=1 sample=0
+baseline counted=True string repeats=1 sample=0
+shared counted=True string repeats=1 sample=0
+baseline counted=False string repeats=8 sample=0
+shared counted=False string repeats=8 sample=0
+baseline counted=True string repeats=8 sample=0
+shared counted=True string repeats=8 sample=0

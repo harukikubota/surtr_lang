@@ -1,0 +1,58 @@
+--- a/crates/eldr/src/vm/list_flat_map_tests/memory_profile.rs
++++ b/crates/eldr/src/vm/list_flat_map_tests/memory_profile.rs
+@@ -11,6 +11,7 @@
+ const COUNTED: bool = cfg!(feature = "vm-memory-count");
+ 
+ struct Options {
++    mode: u8,
+     tasks: usize,
+     length: usize,
+     payload: String,
+@@ -47,7 +48,12 @@
+             std::env::var("SURTR_VM_MEMORY_COPY_MODE").unwrap_or_else(|_| "shared".into());
+         assert!(matches!(payload.as_str(), "int" | "string"));
+         assert!(matches!(copy_mode.as_str(), "baseline" | "shared"));
++        let mode = match std::env::var("SURTR_VM_MEMORY_OWNERSHIP").as_deref() {
++            Ok("shared") => 1, Ok("unique") => 2, Ok("sequential") | Err(std::env::VarError::NotPresent) => 0,
++            other => panic!("invalid ownership: {other:?}"),
++        };
+         let options = Self {
++            mode,
+             tasks: if profile {
+                 positive("SURTR_VM_MEMORY_TASKS", 32)
+             } else {
+@@ -268,6 +274,8 @@
+ 
+ fn repeat(options: &Options, records: &mut Vec<Record>, barrier: &mut Barrier, index: usize) {
+     let baseline = metrics::snapshot();
++    let total = options.length + 2048;
++    if options.mode != 2 {
+     let (mut vm, futures, total) =
+         phase(options, records, barrier, index, "prepare_shared", || {
+             prepare(options.tasks, options.length, &options.payload)
+@@ -345,6 +353,8 @@
+     assert_record(records.last().unwrap(), 0, 0, 0, 0);
+     metrics::restored(baseline, metrics::snapshot());
+ 
++    }
++    if options.mode != 1 {
+     let unique_baseline = metrics::snapshot();
+     let (mut unique, unique_futures, unique_total) =
+         phase(options, records, barrier, index, "prepare_unique", || {
+@@ -378,6 +388,7 @@
+     });
+     assert_record(records.last().unwrap(), 0, 0, 0, 0);
+     metrics::restored(unique_baseline, metrics::snapshot());
++    }
+     metrics::restored(baseline, metrics::snapshot());
+ }
+ 
+@@ -402,7 +413,7 @@
+         repeat(&options, &mut records, &mut barrier, index);
+     }
+     metrics::restored(baseline, metrics::snapshot());
+-    assert_eq!(records.len(), options.repeats * PHASES);
++    assert_eq!(records.len(), options.repeats * match options.mode { 1 => 12, 2 => 3, _ => PHASES });
+     // All JSON construction, writing and record destruction follow all VM drops.
+     if options.verify {
+         writeln!(barrier.output, "{}", serde_json::json!({

@@ -1,0 +1,16 @@
+{
+  "command": [
+    "python3",
+    "/Users/haruca/work/rust/surtr/tests/profile/runtime_rss_recheck/batch.py",
+    "--before",
+    "/tmp/surtr-runtime-six/rss-cli-before/builds.json",
+    "--after",
+    "/tmp/surtr-runtime-six/rss-cli-after/builds.json",
+    "--output",
+    "/tmp/surtr-runtime-six/rss-results/batch",
+    "--samples",
+    "6"
+  ],
+  "exit_code": 0,
+  "wall_seconds": 106.1543617080024
+}

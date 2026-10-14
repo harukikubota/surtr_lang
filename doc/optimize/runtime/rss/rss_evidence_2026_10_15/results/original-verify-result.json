@@ -1,0 +1,32 @@
+{
+  "command": [
+    "python3",
+    "/tmp/surtr-runtime-six/rss-historical/shared/tests/profile/checkpoint_builder_vm_memory/run.py",
+    "run",
+    "--build",
+    "/tmp/surtr-runtime-six/rss-rebuilt/baseline-time/build.json",
+    "--build",
+    "/tmp/surtr-runtime-six/rss-rebuilt/shared-time/build.json",
+    "--build",
+    "/tmp/surtr-runtime-six/rss-rebuilt/baseline-count/build.json",
+    "--build",
+    "/tmp/surtr-runtime-six/rss-rebuilt/shared-count/build.json",
+    "--output",
+    "/tmp/surtr-runtime-six/rss-results/original-verify",
+    "--samples",
+    "1",
+    "--tasks",
+    "32",
+    "--length",
+    "16384",
+    "--repeats",
+    "1",
+    "8",
+    "--payloads",
+    "int",
+    "string",
+    "--verify"
+  ],
+  "exit_code": 0,
+  "wall_seconds": 37.09828416699747
+}

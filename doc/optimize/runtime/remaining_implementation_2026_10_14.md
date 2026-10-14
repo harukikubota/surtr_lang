@@ -46,8 +46,10 @@ crate-localの直接テストから始め、通常入口の成功・拒否とfai
 ## 進捗: 2026-10-15
 
 - Packed: [製品採用と検証](list/packed_chunk_adoption_2026_10_15.md)を完了。独立レビューの指摘を修正し、CI 2,576件・標準1,124件成功。保持量・構築・RSSの交換条件を採用記録へ残した。
-- Builder: 有界segmentと完成処理をPackedに接続し、実VMの前後測定を完了。通常CLI・旧Vec基準への時間差・allocator / OS原因は継続。
+- Builder: 有界segmentと完成処理をPackedに接続し、実VMの前後測定を完了。[通常CLI・旧Vec基準・解放境界の追試](rss/builder_rss_and_cli_recheck_2026_10_15.md)も完了。約22 MiBのRSS増は同一processの保存付き→通常完成へ絞れた。通常費用とallocator細部は継続。
 - HashMap: [前処理と構築の分割](hashmap/hashmap_preparation_split_2026_10_15.md)を実装し、所有entryの全cloneを削減。全内容と時間・確保系列を確認し、CI 2,581件成功。OI-038のRSS原因は継続。
 - Regex: [探索・収集の分割](regex/regex_collection_split_2026_10_15.md)と全検証を完了。通常CLIの速度改善は未確認、RSS小幅増を記録。
 - Future: [cleanup表の一括検索と小さい収集内cache](value/future_cleanup_snapshot_2026_10_15.md)を実装・検証。CI 2,586件・標準1,124件成功。条件ごとの追加費用・通常CLIの未確認の速度改善を記録し、OI-037は継続。
 - FileOut: [第一段階のctx capture](file-out/file_out_handler_implementation_2026_10_15.md)を実装し、CI 2,588件・標準1,124件と独立レビュー成功。構造化binding・init前取得・descriptor / owner・FIFO・snapshot復帰を実装。最終CI 2,614件・標準1,124件成功。最終製品差分・検証記録の独立レビュー完了。OI-040を解決。FileOutの仕様段階レビューで、escaping closureのctx captureとTask bindingの所有接続を確認した。普通のPIDやclosureの保持だけでactive owner数を増やさず、process / init / Task / 未完了writeの所有と保存leaseを分ける。
+
+6分野すべての実装・検証または指定された調査を実施した。[RSSの履歴追試](rss/native_rss_recheck_2026_10_15.md)と[Builderの所有条件・通常CLI](rss/builder_rss_and_cli_recheck_2026_10_15.md)を保存。OI-040は解決し、OI-037 / 038 / 039の原因・追加費用の残りは未解決として明示する。性能未改善の条件を解決扱いにせず、製品へのコピー復活・allocator強制変更は採用しない。

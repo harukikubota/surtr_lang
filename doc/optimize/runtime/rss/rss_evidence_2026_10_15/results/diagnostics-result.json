@@ -1,0 +1,17 @@
+{
+  "command": [
+    "python3",
+    "/Users/haruca/work/rust/surtr/tests/profile/runtime_rss_recheck/builder.py",
+    "--builds",
+    "/tmp/surtr-runtime-six/rss-rebuilt",
+    "--runner",
+    "/tmp/surtr-runtime-six/rss-historical/shared/tests/profile/checkpoint_builder_vm_memory/run.py",
+    "--output",
+    "/tmp/surtr-runtime-six/rss-results/diagnostics",
+    "--samples",
+    "2",
+    "--diagnose"
+  ],
+  "exit_code": 0,
+  "wall_seconds": 25.498728458002006
+}

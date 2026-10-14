@@ -1,0 +1,11 @@
+   Compiling sindr v0.1.0 (/private/tmp/surtr-runtime-six/rss-historical/future-before/crates/sindr)
+   Compiling xldr v0.1.0 (/private/tmp/surtr-runtime-six/rss-historical/future-before/crates/xldr)
+   Compiling spire v0.1.0 (/private/tmp/surtr-runtime-six/rss-historical/future-before/crates/spire)
+   Compiling diagnostics v0.1.0 (/private/tmp/surtr-runtime-six/rss-historical/future-before/crates/diagnostics)
+   Compiling sigil v0.1.0 (/private/tmp/surtr-runtime-six/rss-historical/future-before/crates/sigil)
+   Compiling eldr v0.1.0 (/private/tmp/surtr-runtime-six/rss-historical/future-before/crates/eldr)
+   Compiling scar v0.1.0 (/private/tmp/surtr-runtime-six/rss-historical/future-before/crates/scar)
+   Compiling forge v0.1.0 (/private/tmp/surtr-runtime-six/rss-historical/future-before/crates/forge)
+   Compiling surtr-analysis v0.1.0 (/private/tmp/surtr-runtime-six/rss-historical/future-before/crates/surtr-analysis)
+   Compiling list-value-cost-probe v0.0.0 (/private/tmp/surtr-runtime-six/rss-historical/future-before/tests/profile/list_value_cost)
+    Finished `release` profile [optimized] target(s) in 48.22s
