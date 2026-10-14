@@ -281,7 +281,7 @@
 
 ### OI-036 Future表が非空のoperand stack走査
 
-- 状態: 未解決Futureの位置追跡・通常経路の費用削減・PendingFutureなしの表参照削減をmainへコミット済み。通常値の全走査は除いた。追跡slotのready / cleanup検索と、通常経路の小さい差は残る。
+- 状態: 未解決Futureの位置追跡・通常経路の費用削減・PendingFutureなしの表参照削減をmainへコミット済み。通常値の全走査は除き、同一IDの連続区間はready確認を一回にした。各連続区間のready / cleanup検索と、通常経路の小さい差は残る。
 - 背景:
   - [従来のRT-3改善](optimize/runtime/value/list_runtime_rt3_optimization_2026_10_11.md)はFuture表が空なら走査を省く。[件数追跡](optimize/runtime/value/future_stack_nonempty_optimization_2026_10_13.md)で非空表でもPendingFutureなしの走査を除いたが、未解決Futureが一つ残る条件は全走査だった。
   - [位置追跡](optimize/runtime/value/future_stack_index_optimization_2026_10_13.md)と[通常経路の費用削減](optimize/runtime/value/future_stack_metadata_optimization_2026_10_13.md)では、top-level PendingFutureの昇順slot位置を追跡し、そのslotだけを読む。当時は必要時だけBoxへ位置bufferを確保し、stack内の追加metadataを1 pointer幅以内に抑えた。
@@ -289,15 +289,16 @@
   - [追加のガード改善](optimize/runtime/value/future_stack_guard_optimization_2026_10_13.md)で、PendingFutureなしの10,000要素入力の表の空判定を10,002→0回にした。通常CLIのTaskなしは1.432→1.424ms、Taskありは1.684→1.688ms。実時間のばらつきが重なり、追加費用の解消は主張しない。
   - [空位置bufferのclone削減](optimize/runtime/value/future_stack_empty_clone_2026_10_14.md)で、元の予約容量を維持しつつ、位置が空のclone先へBoxを確保しなくした。独立ownerの1,000 cloneで1,000回・24,000 bytesの確保要求を省いた。未解決位置と値Vecのコピーは残る。
   - [非空位置表の共有](optimize/runtime/value/future_stack_position_sharing_2026_10_14.md)で、Cloneの位置表確保・全コピーを除いた。位置4,096件の32 cloneは1,049,344 bytesの要求を省く。保存後の初回追加ではコピーが変更時へ移り、同32枝のclone＋変更要求は512 bytes増えた。単一表のRc構築は16 bytes増える。
+  - [連続する同一IDのready確認](optimize/runtime/value/future_stack_lookup_runs_2026_10_14.md)をまとめ、同一IDの4,096位置では判定呼出しを4,096→1回にした。普通値を挟む同一IDも対象にし、別IDを挟む場合は再確認する。実時間・allocator要求・RSSは未測定。
 - 維持した受入条件:
   - 同一Futureを持つ全slot、Futureを返すFuture、context切替え、待機・取消・cleanup完了・checkpoint / rollbackを保つ。入れ子Value内のFutureは対象に含めない。
   - 値と位置を一緒に移動・保存し、任意の可変Value参照と位置不一致時の全走査fallbackを設けない。速度閾値はcorrectness testに加えない。
 - 残件:
-  - 追跡slotごとのFuture表とdetached Task cleanup検索、固定幅metadata、実Future slotのRc / 位置buffer確保、保存後の部分変更の位置コピー、独占した使用済みbuffer保持。
+  - 各ID連続区間のFuture表とdetached Task cleanup検索、異なるIDを挟んだ再確認、非重複入力へ加わるID比較、固定幅metadata、実Future slotのRc / 位置buffer確保、保存後の部分変更の位置コピー、独占した使用済みbuffer保持。
   - Futureなしの通常入口で前回の件数版・追跡前のVec版との小さい時間差が残る。入力やbinary配置の寄与を一般化しない。
 - 検証:
-  - crate-local 19件、workspace CI 2,562件、標準Surtr 1,124件が成功。[最新の検証記録](optimize/runtime/value/future_stack_position_sharing_2026_10_14_validation.json)。
-  - [10月13日の内部VM原本](optimize/runtime/value/future_stack_fast_2026_10_13.jsonl)・[通常入口原本](optimize/runtime/value/future_stack_count_fast_batch_2026_10_13.jsonl)。AB/BA同数で測り、内部VMの全内容検証は別processにした。最新の位置表共有は[独立owner原本](optimize/runtime/value/future_stack_position_sharing_2026_10_14.jsonl)と[再開原本](optimize/runtime/value/future_stack_position_resume_2026_10_14.jsonl)に記録し、通常CLIは再測定していない。
+  - crate-local 22件、workspace CI 2,565件、標準Surtr 1,124件が成功。[最新の検証記録](optimize/runtime/value/future_stack_lookup_runs_2026_10_14_validation.json)。
+  - [10月13日の内部VM原本](optimize/runtime/value/future_stack_fast_2026_10_13.jsonl)・[通常入口原本](optimize/runtime/value/future_stack_count_fast_batch_2026_10_13.jsonl)。AB/BA同数で測り、内部VMの全内容検証は別processにした。最新の位置表共有は[独立owner原本](optimize/runtime/value/future_stack_position_sharing_2026_10_14.jsonl)と[再開原本](optimize/runtime/value/future_stack_position_resume_2026_10_14.jsonl)に記録し、通常CLIは再測定していない。同一IDの確認削減は[操作数原本](optimize/runtime/value/future_stack_lookup_runs_2026_10_14.jsonl)の144 processで全値を確認した。
 
 ### OI-037 RT-3のHashMap測定におけるprocess RSS差
 

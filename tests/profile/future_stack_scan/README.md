@@ -56,3 +56,20 @@ The flag requires table-first baseline and stack-first candidate source states.
 It checks exact table-empty-check counts independently of stack slot visits.
 The CLI binary has no cfg(test) counters; compare it separately with batch.py.
 See [table guard scope and results](../../../doc/optimize/runtime/value/future_stack_guard_optimization_2026_10_13.md).
+
+## 連続する同一IDのready確認
+
+`lookup_build.py`はCargoが返すdebug Eldr test executableを保存し、Eldr・Sindr・diagnosticsのRust sourceとmanifest / lock、binary hashを記録する。保存先は新しいディレクトリを指定する。前後のsource状態でそれぞれbuildし、保存したbinaryを比較する。同じtargetの逐次rebuildも使用できるが、前のbinaryを保存し、検証中のbuildは避ける。
+
+```sh
+python3 tests/profile/future_stack_scan/lookup_build.py --target-dir /absolute/target --output-dir /absolute/before
+# 対象の製品変更後
+python3 tests/profile/future_stack_scan/lookup_build.py --target-dir /absolute/target --output-dir /absolute/after
+python3 tests/profile/future_stack_scan/lookup_runs.py --before /absolute/before/builds.json --after /absolute/after/builds.json --output /absolute/new_run
+```
+
+`lookup_runs.py`は1 / 256 / 4,096追跡位置に普通値を挟み、反復IDと交互ID、Running / Ready / Cancelled / unknown / Futureを返すFuture / PendingFutureなしを前後2 sample、AB / BAの144 fresh processで比較する。実際の`resolve_ready_pending_stack_values`の呼出しcounterを読み、全slotの値と一段ずつのFuture解決も検証する。cleanup待ち、context切替え、checkpoint / rollbackはcrate-local受入テストで確認する。
+
+操作数だけの系列であり、実時間・allocator要求・live・RSS・通常CLIを測らない。反復IDのready確認は位置数→1、交互IDは位置数のままである。read / write visitsは前後同じとし、counterとbinary hashが想定どおりでなければ停止する。既存の時間系列とは集計しない。
+
+[仕様と結果](../../../doc/optimize/runtime/value/future_stack_lookup_runs_2026_10_14.md)の基準patchを`0288964c`へ適用すると、counterとmanual testを持つ変更前sourceを再現できる。受入テスト3件は変更前に期待どおり失敗するため、操作数の検証ではmanual testだけを指定する。

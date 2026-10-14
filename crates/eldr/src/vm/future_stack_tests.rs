@@ -5,6 +5,15 @@ use std::cell::Cell;
 thread_local! {
     static TABLE_EMPTY_CHECKS: Cell<usize> = const { Cell::new(0) };
     static SCANNED_VALUES: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
+    static READY_LOOKUPS: Cell<usize> = const { Cell::new(0) };
+}
+
+pub(super) fn record_ready_lookup() {
+    READY_LOOKUPS.with(|count| count.set(count.get() + 1));
+}
+
+fn ready_lookups() -> usize {
+    READY_LOOKUPS.with(Cell::get)
 }
 
 pub(super) fn record_table_empty_check() {
@@ -32,6 +41,7 @@ pub(super) fn record_write_scan(n: usize) {
 fn reset_scans() {
     TABLE_EMPTY_CHECKS.with(|count| count.set(0));
     SCANNED_VALUES.with(|counts| counts.set((0, 0)));
+    READY_LOOKUPS.with(|count| count.set(0));
 }
 
 fn scans() -> (usize, usize) {
@@ -346,16 +356,19 @@ fn pending_slot_waits_until_its_producer_cleanup_record_is_removed() {
         panic!("expected async completion")
     };
     vm.process_runtime.resolve_future(id, Value::Int(int(13)));
-    vm.stack.push(Value::PendingFuture(id));
+    vm.stack = vec![Value::PendingFuture(id); 256].into();
     reset_scans();
     vm.resolve_ready_pending_stack_values();
     assert_eq!(vm.stack.last(), Some(&Value::PendingFuture(id)));
-    assert_eq!(scans(), (1, 0));
+    assert_eq!(scans(), (256, 0));
+    assert_eq!(ready_lookups(), 1);
     vm.process_runtime.detached_tasks.take(&task_id).unwrap();
     reset_scans();
     vm.resolve_ready_pending_stack_values();
     assert_eq!(vm.stack.last(), Some(&Value::Int(int(13))));
-    assert_eq!(scans(), (1, 1));
+    assert_eq!(vm.stack, vec![Value::Int(int(13)); 256]);
+    assert_eq!(scans(), (256, 256));
+    assert_eq!(ready_lookups(), 1);
     reset_scans();
     vm.resolve_ready_pending_stack_values();
     assert_eq!(scans(), (0, 0));
@@ -409,4 +422,185 @@ fn ready_delivery_visits_only_pending_slots_among_ordinary_values() {
     reset_scans();
     vm.resolve_ready_pending_stack_values();
     assert_eq!(scans(), (1, 0));
+}
+
+#[test]
+fn repeated_future_ids_share_one_ready_check_even_across_ordinary_values() {
+    for case in ["running", "ready", "cancelled", "unknown"] {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        let allocated = vm.process_runtime.allocate_future(None, None, false);
+        let id = if case == "unknown" {
+            u64::MAX
+        } else {
+            allocated
+        };
+        match case {
+            "ready" => {
+                vm.process_runtime.resolve_future(id, Value::Unit);
+            }
+            "cancelled" => {
+                vm.process_runtime.futures.get_mut(&id).unwrap().state =
+                    FutureState::Cancelled(Value::Unit);
+            }
+            _ => {}
+        }
+        vm.stack = (0..256)
+            .flat_map(|_| [Value::PendingFuture(id), Value::Unit])
+            .collect();
+        reset_scans();
+        vm.resolve_ready_pending_stack_values();
+        assert_eq!(ready_lookups(), 1, "{case}: one check for the repeated ID");
+        let resolved = matches!(case, "ready" | "cancelled");
+        assert_eq!(scans(), (256, if resolved { 256 } else { 0 }));
+        for pair in vm.stack.chunks_exact(2) {
+            assert_eq!(
+                pair[0],
+                if resolved {
+                    Value::Unit
+                } else {
+                    Value::PendingFuture(id)
+                }
+            );
+            assert_eq!(pair[1], Value::Unit);
+        }
+    }
+}
+
+#[test]
+fn lookup_runs_reset_at_other_ids_and_each_collection_without_cascading() {
+    let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+    let first = vm.process_runtime.allocate_future(None, None, false);
+    let second = vm.process_runtime.allocate_future(None, None, false);
+    vm.process_runtime
+        .resolve_future(first, Value::PendingFuture(second));
+    vm.process_runtime.resolve_future(second, Value::Unit);
+    vm.stack = [first, first, second, first, first]
+        .into_iter()
+        .map(Value::PendingFuture)
+        .collect();
+    reset_scans();
+    vm.resolve_ready_pending_stack_values();
+    assert_eq!(ready_lookups(), 3);
+    assert_eq!(
+        vm.stack,
+        vec![
+            Value::PendingFuture(second),
+            Value::PendingFuture(second),
+            Value::Unit,
+            Value::PendingFuture(second),
+            Value::PendingFuture(second),
+        ]
+    );
+    reset_scans();
+    vm.resolve_ready_pending_stack_values();
+    assert_eq!(
+        ready_lookups(),
+        1,
+        "recheck the returned Future on the next pass"
+    );
+    assert_eq!(vm.stack, vec![Value::Unit; 5]);
+    vm.stack.push(Value::PendingFuture(second));
+    reset_scans();
+    vm.resolve_ready_pending_stack_values();
+    assert_eq!(
+        ready_lookups(),
+        1,
+        "a previous pass does not cache its result"
+    );
+    assert_eq!(vm.stack.last(), Some(&Value::Unit));
+}
+
+// Operation counts only: deliberately omit elapsed time, allocator and RSS.
+#[test]
+fn repeated_future_lookup_profile() {
+    let profile = std::env::var("OI036_LOOKUP_PROFILE").as_deref() == Ok("1");
+    let n: usize = if profile {
+        std::env::var("OI036_N").unwrap().parse().unwrap()
+    } else {
+        16
+    };
+    assert!(n > 0);
+    let case = std::env::var("OI036_CASE").unwrap_or_else(|_| "ready".into());
+    let alternating = std::env::var("OI036_ALTERNATING").as_deref() == Ok("1");
+    let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+    let first = vm.process_runtime.allocate_future(None, None, false);
+    let second = vm.process_runtime.allocate_future(None, None, false);
+    let ids = if case == "unknown" {
+        [u64::MAX, u64::MAX - 1]
+    } else {
+        [first, second]
+    };
+    match case.as_str() {
+        "running" | "unknown" | "empty_slots" => {}
+        "ready" => {
+            for id in ids {
+                vm.process_runtime.resolve_future(id, Value::Unit);
+            }
+        }
+        "cancelled" => {
+            for id in ids {
+                vm.process_runtime.futures.get_mut(&id).unwrap().state =
+                    FutureState::Cancelled(Value::Unit);
+            }
+        }
+        "future_result" => {
+            vm.process_runtime
+                .resolve_future(first, Value::PendingFuture(second));
+            vm.process_runtime.resolve_future(second, Value::Unit);
+        }
+        _ => panic!("unknown OI036_CASE"),
+    }
+    vm.stack = (0..n)
+        .flat_map(|i| {
+            [
+                if case == "empty_slots" {
+                    Value::Unit
+                } else {
+                    Value::PendingFuture(ids[usize::from(alternating) * (i % 2)])
+                },
+                Value::Unit,
+            ]
+        })
+        .collect();
+    reset_scans();
+    vm.resolve_ready_pending_stack_values();
+    let (read, write) = scans();
+    let lookups = ready_lookups();
+    let empty_checks = table_empty_checks();
+    for (i, pair) in vm.stack.chunks_exact(2).enumerate() {
+        let id = ids[usize::from(alternating) * (i % 2)];
+        let expected = match case.as_str() {
+            "running" | "unknown" => Value::PendingFuture(id),
+            "future_result" if id == first => Value::PendingFuture(second),
+            _ => Value::Unit,
+        };
+        assert_eq!(pair[0], expected);
+        assert_eq!(pair[1], Value::Unit);
+    }
+    assert_eq!(vm.stack.len(), 2 * n);
+    assert_eq!(read, if case == "empty_slots" { 0 } else { n });
+    assert_eq!(
+        write,
+        if matches!(case.as_str(), "ready" | "cancelled" | "future_result") {
+            n
+        } else {
+            0
+        }
+    );
+    if case == "future_result" {
+        vm.resolve_ready_pending_stack_values();
+        assert!(vm.stack.iter().all(|v| *v == Value::Unit));
+    }
+    if profile {
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "profile":"oi036_lookup_runs", "case":case, "n":n,
+                "alternating":alternating, "ready_lookups":lookups,
+                "read_visits":read, "write_visits":write, "table_empty_checks":empty_checks,
+                "context_bytes":std::mem::size_of::<ExecutionContext>(),
+                "vm_bytes":std::mem::size_of::<VM>(), "verified":true,
+            })
+        );
+    }
 }

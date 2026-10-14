@@ -7,7 +7,7 @@
 
 RT-3のValue測定・方式選定・Future表が空の場合の製品最適化は
 [最適化レポート](value/list_runtime_rt3_optimization_2026_10_11.md) に記録した。
-Future表が非空でも、[位置追跡](value/future_stack_index_optimization_2026_10_13.md)により未解決Futureのslotだけを読み、[通常経路の費用](value/future_stack_metadata_optimization_2026_10_13.md)も減らした。[表の空判定削減](value/future_stack_guard_optimization_2026_10_13.md)でPendingFutureなしの表参照も省いた。[空位置bufferのclone削減](value/future_stack_empty_clone_2026_10_14.md)も反映した。[非空位置表の共有](value/future_stack_position_sharing_2026_10_14.md)により保存時の位置コピーも省いた。値Vec、保存後の部分変更の位置コピー、ready / cleanup検索と通常経路の小さい差は[OI-036](../../open-issues.md#oi-036-future表が非空のoperand-stack走査)に残る。
+Future表が非空でも、[位置追跡](value/future_stack_index_optimization_2026_10_13.md)により未解決Futureのslotだけを読み、[通常経路の費用](value/future_stack_metadata_optimization_2026_10_13.md)も減らした。[表の空判定削減](value/future_stack_guard_optimization_2026_10_13.md)でPendingFutureなしの表参照も省いた。[空位置bufferのclone削減](value/future_stack_empty_clone_2026_10_14.md)も反映した。[非空位置表の共有](value/future_stack_position_sharing_2026_10_14.md)により保存時の位置コピーも省いた。[同一IDの連続区間のready確認](value/future_stack_lookup_runs_2026_10_14.md)もまとめた。値Vec、保存後の部分変更の位置コピー、各連続区間のready / cleanup検索と通常経路の小さい差は[OI-036](../../open-issues.md#oi-036-future表が非空のoperand-stack走査)に残る。
 
 ## 集約資料とその後の作業
 
