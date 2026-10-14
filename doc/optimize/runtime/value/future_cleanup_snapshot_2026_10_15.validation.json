@@ -1,0 +1,71 @@
+{
+  "level": 2,
+  "base": "8a5f7505",
+  "checks": {
+    "ci": {
+      "command": [
+        "rtk",
+        "cargo",
+        "nextest",
+        "run",
+        "--locked",
+        "--profile",
+        "ci",
+        "--workspace"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 148.95949174999987
+    },
+    "stdlib": {
+      "command": [
+        "rtk",
+        "proxy",
+        "cargo",
+        "run",
+        "--locked",
+        "--",
+        "test",
+        "--quiet",
+        "--all",
+        "--format=json"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 22.45846608299871
+    }
+  },
+  "ci_passed": 2586,
+  "stdlib": {
+    "discovered": 1124,
+    "executed": 1124,
+    "failed": 0,
+    "filtered": 0,
+    "passed": 1124,
+    "pending": 0,
+    "policy_errors": 0,
+    "runnable": 0,
+    "scope_failures": 0,
+    "script_errors": 0,
+    "selected": 1124,
+    "skipped": 0
+  },
+  "focused_future_passed": 43,
+  "red": "missing ID lookup 3 vs expected 2; cleanup table visits 8448 vs expected 33, exit 100",
+  "quality": [
+    "cargo fmt --all --check",
+    "git diff --check",
+    "Python compile"
+  ],
+  "source_binary_hashes_verified": true,
+  "manual_processes": 1976,
+  "manual_verify_processes": 152,
+  "manual_measurement_processes": 1824,
+  "ordinary_cli_processes": 48,
+  "ordinary_scope": "cached batch empty/unawaited Task, 1000/10000 List items",
+  "no_persistent_metadata_added": true,
+  "tradeoffs": [
+    "all-blocked raw-ready snapshots allocate a temporary map",
+    "repeated and distinct all-Running internal time increases in sampled conditions",
+    "ordinary CLI speed improvement not established",
+    "OI-037 allocator cause pending"
+  ]
+}

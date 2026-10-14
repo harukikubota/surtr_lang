@@ -1,0 +1,251 @@
+diff --git a/crates/eldr/src/vm.rs b/crates/eldr/src/vm.rs
+index 5a3ec21b..512f789b 100644
+--- a/crates/eldr/src/vm.rs
++++ b/crates/eldr/src/vm.rs
+@@ -931,15 +931,16 @@ impl ProcessRuntime {
+     fn ready_future_value_ref(&self, future_id: FutureId) -> Option<&Value> {
+         use process_continuation::DetachedCompletion;
+         let value = self.raw_ready_future_value(future_id)?;
+-        let cleanup_pending = self
+-            .detached_tasks
+-            .values()
+-            .any(|task| match task.completion {
++        let cleanup_pending = self.detached_tasks.values().any(|task| {
++            #[cfg(test)]
++            future_stack_tests::record_cleanup_visit();
++            match task.completion {
+                 DetachedCompletion::Future(Some(id)) | DetachedCompletion::ErrorFuture(id) => {
+                     id == future_id
+                 }
+                 DetachedCompletion::Future(None) | DetachedCompletion::Process { .. } => false,
+-            });
++            }
++        });
+         (!cleanup_pending).then_some(value)
+     }
+ 
+diff --git a/crates/eldr/src/vm/future_stack_tests.rs b/crates/eldr/src/vm/future_stack_tests.rs
+index 78ce7fa5..60b08cf2 100644
+--- a/crates/eldr/src/vm/future_stack_tests.rs
++++ b/crates/eldr/src/vm/future_stack_tests.rs
+@@ -5,6 +5,7 @@ use std::cell::Cell;
+ thread_local! {
+     static TABLE_EMPTY_CHECKS: Cell<usize> = const { Cell::new(0) };
+     static SCANNED_VALUES: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
++    static CLEANUP_VISITS: Cell<usize> = const { Cell::new(0) };
+     static READY_LOOKUPS: Cell<usize> = const { Cell::new(0) };
+     static READY_VALUE_CLONES: Cell<usize> = const { Cell::new(0) };
+     static SLOT_VALUE_CLONES: Cell<usize> = const { Cell::new(0) };
+@@ -27,6 +28,14 @@ fn ready_value_clones() -> usize {
+     READY_VALUE_CLONES.with(Cell::get)
+ }
+ 
++pub(super) fn record_cleanup_visit() {
++    CLEANUP_VISITS.with(|count| count.set(count.get() + 1));
++}
++
++fn cleanup_visits() -> usize {
++    CLEANUP_VISITS.with(Cell::get)
++}
++
+ pub(super) fn record_ready_lookup() {
+     READY_LOOKUPS.with(|count| count.set(count.get() + 1));
+ }
+@@ -58,6 +67,7 @@ pub(super) fn record_write_scan(n: usize) {
+ }
+ 
+ fn reset_scans() {
++    CLEANUP_VISITS.with(|count| count.set(0));
+     TABLE_EMPTY_CHECKS.with(|count| count.set(0));
+     SCANNED_VALUES.with(|counts| counts.set((0, 0)));
+     READY_LOOKUPS.with(|count| count.set(0));
+@@ -846,7 +856,7 @@ fn ready_snapshot_reuses_ids_and_resets_each_collection_without_cascading() {
+ }
+ 
+ #[test]
+-fn ready_snapshot_keeps_missing_results_uncached_and_slot_copies_independent() {
++fn ready_snapshot_reuses_missing_results_within_the_pass_and_keeps_slot_copies_independent() {
+     for case in ["running", "unknown", "cleanup"] {
+         let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+         let first = vm.process_runtime.allocate_future(None, None, false);
+@@ -871,8 +881,8 @@ fn ready_snapshot_keeps_missing_results_uncached_and_slot_copies_independent() {
+         vm.resolve_ready_pending_stack_values();
+         assert_eq!(
+             (ready_lookups(), ready_value_clones()),
+-            (3, 0),
+-            "{case}: ready once, missing result twice"
++            (2, 0),
++            "{case}: ready and missing ID each checked once in this pass"
+         );
+         assert_eq!(scans(), (5, 5));
+         assert_eq!(SLOT_VALUE_CLONES.with(Cell::get), 3);
+@@ -1050,16 +1060,43 @@ fn ready_snapshot_cost_profile() {
+     let case = std::env::var("OI036_CASE").unwrap_or_else(|_| "ready".into());
+     let pattern = std::env::var("OI036_PATTERN").unwrap_or_else(|_| "distinct".into());
+     let mode = std::env::var("OI036_MODE").unwrap_or_else(|_| "verify".into());
++    let cleanup: usize = std::env::var("OI036_CLEANUP")
++        .map(|v| v.parse().unwrap())
++        .unwrap_or(0);
+     assert!(n > 0);
+-    assert!(matches!(case.as_str(), "ready" | "running" | "ordinary"));
+-    assert!(matches!(pattern.as_str(), "repeated" | "distinct"));
++    assert!(matches!(
++        case.as_str(),
++        "ready" | "running" | "ordinary" | "blocked" | "unknown"
++    ));
++    assert!(matches!(
++        pattern.as_str(),
++        "repeated" | "alternating" | "distinct"
++    ));
+     assert!(matches!(mode.as_str(), "allocation" | "time" | "verify"));
+     let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+     let value = Value::Tuple(vec![Value::Unit; width]);
+-    let ids: Vec<_> = (0..if pattern == "distinct" { n } else { 1 })
+-        .map(|_| {
+-            let id = vm.process_runtime.allocate_future(None, None, false);
+-            if case != "running" {
++    for _ in 0..cleanup {
++        future_with_cleanup_record(&mut vm);
++    }
++    // A nonempty unrelated table ensures unknown IDs exercise the lookup path.
++    if case == "unknown" {
++        vm.process_runtime.allocate_future(None, None, false);
++    }
++    let id_count = match pattern.as_str() {
++        "distinct" => n,
++        "alternating" => 2,
++        _ => 1,
++    };
++    let ids: Vec<_> = (0..id_count)
++        .map(|i| {
++            let id = if case == "unknown" {
++                u64::MAX - i as u64
++            } else if case == "blocked" {
++                future_with_cleanup_record(&mut vm).1
++            } else {
++                vm.process_runtime.allocate_future(None, None, false)
++            };
++            if matches!(case.as_str(), "ready" | "ordinary" | "blocked") {
+                 vm.process_runtime.resolve_future(id, value.clone());
+             }
+             id
+@@ -1071,7 +1108,7 @@ fn ready_snapshot_cost_profile() {
+                 if case == "ordinary" {
+                     Value::Unit
+                 } else {
+-                    Value::PendingFuture(ids[if pattern == "distinct" { i } else { 0 }])
++                    Value::PendingFuture(ids[i % id_count])
+                 },
+                 Value::Unit,
+             ]
+@@ -1100,17 +1137,21 @@ fn ready_snapshot_cost_profile() {
+     assert_eq!(vm.stack.len(), 2 * n);
+     assert_eq!(
+         vm.stack.pending_slot_count(),
+-        if case == "running" { n } else { 0 }
++        if matches!(case.as_str(), "running" | "blocked" | "unknown") {
++            n
++        } else {
++            0
++        }
+     );
+     if mode == "verify" {
+         for (i, pair) in vm.stack.chunks_exact(2).enumerate() {
+-            let id = ids[if pattern == "distinct" { i } else { 0 }];
++            let id = ids[i % id_count];
+             match case.as_str() {
+                 "ready" => {
+                     assert_eq!(&pair[0], &value);
+                     assert_eq!(vm.raw_ready_future_value(id), Some(&value));
+                 }
+-                "running" => assert_eq!(pair[0], Value::PendingFuture(id)),
++                "running" | "blocked" | "unknown" => assert_eq!(pair[0], Value::PendingFuture(id)),
+                 "ordinary" => assert_eq!(pair[0], Value::Unit),
+                 _ => unreachable!(),
+             }
+@@ -1120,7 +1161,8 @@ fn ready_snapshot_cost_profile() {
+     if profile {
+         let mut row = serde_json::json!({
+             "profile":"oi036_snapshot_cost", "n":n, "width":width,
+-            "case":case, "pattern":pattern, "mode":mode,
++            "case":case, "pattern":pattern, "mode":mode, "cleanup":cleanup,
++            "cleanup_visits":cleanup_visits(),
+             "read_visits":read, "write_visits":write,
+             "ready_lookups":ready_lookups(), "source_value_clones":ready_value_clones(),
+             "value_bytes":std::mem::size_of::<Value>(),
+@@ -1139,3 +1181,75 @@ fn ready_snapshot_cost_profile() {
+         eprintln!("{row}");
+     }
+ }
++
++#[test]
++fn ready_snapshot_visits_cleanup_tasks_once_for_many_distinct_ready_ids() {
++    let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
++    for _ in 0..32 {
++        future_with_cleanup_record(&mut vm);
++    }
++    let (blocked_task, blocked) = future_with_cleanup_record(&mut vm);
++    vm.process_runtime.resolve_future(blocked, Value::Unit);
++    let ready: Vec<_> = (0..128)
++        .map(|i| {
++            let id = vm.process_runtime.allocate_future(None, None, false);
++            vm.process_runtime.resolve_future(id, Value::Int(int(i)));
++            id
++        })
++        .collect();
++    vm.stack = ready
++        .iter()
++        .flat_map(|&id| [Value::PendingFuture(id), Value::PendingFuture(blocked)])
++        .collect();
++    reset_scans();
++    vm.resolve_ready_pending_stack_values();
++    assert_eq!(
++        cleanup_visits(),
++        33,
++        "one cleanup table pass for the entire snapshot"
++    );
++    assert_eq!(
++        ready_lookups(),
++        129,
++        "blocked raw-ready ID also belongs to the snapshot"
++    );
++    for (i, pair) in vm.stack.chunks_exact(2).enumerate() {
++        assert_eq!(pair[0], Value::Int(int(i)));
++        assert_eq!(pair[1], Value::PendingFuture(blocked));
++    }
++    vm.process_runtime.detached_tasks.remove(&blocked_task);
++    reset_scans();
++    vm.resolve_ready_pending_stack_values();
++    assert_eq!(ready_lookups(), 1, "recheck cleanup on the next collection");
++    assert_eq!(vm.stack.pending_slot_count(), 0);
++}
++
++#[test]
++fn unresolved_snapshot_cache_eviction_and_next_pass_keep_ids_unresolved() {
++    let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
++    let ids: Vec<_> = (0..3)
++        .map(|_| vm.process_runtime.allocate_future(None, None, false))
++        .collect();
++    vm.stack = ids
++        .iter()
++        .cycle()
++        .take(30)
++        .map(|&id| Value::PendingFuture(id))
++        .collect();
++    let before = vm.stack.clone();
++    vm.resolve_ready_pending_stack_values();
++    assert_eq!(vm.stack, before);
++    vm.process_runtime
++        .resolve_future(ids[1], Value::Int(int(7)));
++    vm.resolve_ready_pending_stack_values();
++    for (i, value) in vm.stack.iter().enumerate() {
++        assert_eq!(
++            value,
++            &if i % 3 == 1 {
++                Value::Int(int(7))
++            } else {
++                Value::PendingFuture(ids[i % 3])
++            }
++        );
++    }
++}

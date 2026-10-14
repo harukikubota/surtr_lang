@@ -133,3 +133,9 @@ python3 tests/profile/future_stack_scan/snapshot_cost.py --before /absolute/befo
 256 / 4,096位置、0 / 64要素Tuple、反復 / 全ID別、Ready / Running / Futureなしを使う。両版とも同じtest専用System wrapperを通し、確保系列では測定threadの明示scope内の要求layout bytes・解放bytes・回数を記録する。reallocは新しい要求全量を数える。時間系列は確保の記録を無効にし、Instant区間を測る。両系列とも準備を含まず、時間には既存の論理counterとwrapperの判定が残る。両版に同じslot clone / map型サイズのcounter hookを加える。
 
 全内容を別の48 verify processで確認し、確保・時間を前後6 sampleずつAB / BA同数の576 processで測る。計624 process。要求と解放の差が配送先Tupleの要素bufferと一致することも照合する。この差はscope内の要求layoutの純増であり、VM全体のlive / peak保持量ではない。RSS・allocator usable size・通常CLI・cleanup Taskの費用を測らず、速度閾値をCIへ追加しない。測定中はbuild・他のtestを実行しない。runnerは既存の原本への上書きを拒否する。
+
+## Cleanup表の一括検索と小さい未解決cache
+
+`cleanup_cost.py`は`lookup_build.py --release`の前後metadataを使う。8a5f7505へ[基準の観測patch](../../../doc/optimize/runtime/value/future_cleanup_snapshot_2026_10_15_baseline.patch)を適用し、同じfixture/counterを持つ旧binaryを別targetへ保存する。76条件で全内容確認152 process、確保と時間各912 processをAB / BA同数で記録する。cleanup表訪問・ID確認・一段配送・全値とscope内live収支を検証し、Running / unknown / 普通値の確保0も確認する。時間にはcfg(test)counterとwrapper判定が残る。all-blockedの新しい一時map確保を記録し、全条件の時間改善を要求しない。RSSと通常CLIは別系列。
+
+`../runtime_adoption_build.py`は通常Rune release artifactと全compiler/runtime/lib sourceを保存する。既存`batch.py`でFutureなしと未await Taskのcached普通入口を別に比較する。全build/test終了後に測り、原本は新しいprefixへ保存する。[結果と限界](../../../doc/optimize/runtime/value/future_cleanup_snapshot_2026_10_15.md)。
