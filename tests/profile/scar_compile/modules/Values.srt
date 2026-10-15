@@ -1,0 +1,15 @@
+defstruct CompilePacket {
+  value: Int,
+}
+
+impl CompilePacket {
+  def new(value: Int) -> Self {
+    CompilePacket { value }
+  }
+}
+
+impl CompileMeasure for CompilePacket {
+  def measure(self: Self) -> Int {
+    self.value
+  }
+}

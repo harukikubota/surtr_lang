@@ -1,0 +1,27 @@
+{
+  "timestamp": "2026-10-15T06:26:06.882197+00:00",
+  "commit": "a0d430a609da73f7f35bbba7a01f41f9b28dfc09",
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "machine": "arm64",
+  "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)\nbinary: rustc\ncommit-hash: e408947bfd200af42db322daf0fadfe7e26d3bd1\ncommit-date: 2026-03-25\nhost: aarch64-apple-darwin\nrelease: 1.94.1\nLLVM version: 21.1.8\n",
+  "binary": "/tmp/surtr-scar-investigation-a0d430a6/release/surtr",
+  "binary_sha256": "4c903db2ba2f9a99514b901d196d40efc52d4427c887ca28d4c1c636fe71be79",
+  "build_command": "cargo build --release -p rune --bin surtr --target-dir /tmp/surtr-scar-investigation-a0d430a6",
+  "build_exit_code": 0,
+  "work_directory": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-scar-baseline-hubyboi_",
+  "inputs": {
+    "tests/profile/stdlib_prewarm.srt": "99b203f95ce3b4f31fe720b7da60d098099ab41629f1642dc83fe1cd12e2b0e0",
+    "tests/profile/heavy_compile.srt": "9ae4b0c888757cfcefdbe359a72d48f5b5054a4c34f14c921e09fe202a3d9bbf"
+  },
+  "samples_per_condition": 5,
+  "profile_in_timing": false,
+  "source_changes": "none",
+  "measured_inputs": {
+    "tests/profile/stdlib_prewarm.srt": "99b203f95ce3b4f31fe720b7da60d098099ab41629f1642dc83fe1cd12e2b0e0",
+    "tests/fixtures/script/pass/stdmod/monad_fail_priority.srt": "c0b0ce7a69eeac9ee2b55f08d8c05c4c7413d2796186395af8213270d0e8ede6",
+    "tests/fixtures/script/pass/patterns/generic_extractor_specialization.srt": "372bd3344551a9924e7d841f7e766fb57fbcb7de8b4b026b1807f1269d5457eb"
+  },
+  "excluded_input": "tests/profile/heavy_compile.srt: exit 1, Err(NoneError) requires Error value (line 8); see initial_attempt.jsonl",
+  "execution_cwd": "/Users/haruca/work/rust/surtr",
+  "work_directory_role": "measurement outputs and isolated stdlib caches"
+}

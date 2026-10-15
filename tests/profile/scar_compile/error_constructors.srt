@@ -1,0 +1,26 @@
+# Error constructor bodies, payloads, ErrorKind identity and payload patterns.
+# Fixed-size complement to generated/error_definitions_*.srt.
+deferror ProfileEmpty { "empty" }
+deferror ProfilePayload(code: Int, detail: String) {
+  |code: Int, detail: String|
+  Self(message: "#{code}:#{detail}", code, detail)
+}
+deferror ProfileWrapped(code: Int) {
+  |code: Int|
+  text = to_string(code)
+  Self(message: text, code)
+}
+
+def preserve(value: Error) -> Error { value }
+def classify(value: Error) -> String {
+  match value {
+    ProfilePayload(code, detail) => "#{code}:#{detail}",
+    ProfileWrapped(code) => to_string(code),
+    _ => Error::message(value),
+  }
+}
+
+print(classify(preserve(ProfilePayload(7, "payload"))))
+print(classify(ProfileWrapped(9)))
+print(classify(ProfileEmpty()))
+print(inspect(Error::is_kind(ProfilePayload(1, "kind"), ProfilePayload)))

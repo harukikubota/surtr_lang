@@ -1,0 +1,173 @@
+[
+  {
+    "id": "stdlib_prewarm",
+    "entry": "tests/profile/stdlib_prewarm.srt",
+    "group": "control",
+    "scale": null,
+    "dependencies": []
+  },
+  {
+    "id": "heavy_compile",
+    "entry": "tests/profile/heavy_compile.srt",
+    "group": "concrete",
+    "scale": null,
+    "dependencies": []
+  },
+  {
+    "id": "error_constructors",
+    "entry": "tests/profile/scar_compile/error_constructors.srt",
+    "group": "features",
+    "scale": null,
+    "dependencies": []
+  },
+  {
+    "id": "closures_lazy",
+    "entry": "tests/profile/scar_compile/features/closures_lazy.srt",
+    "group": "features",
+    "scale": null,
+    "dependencies": []
+  },
+  {
+    "id": "facet_paths",
+    "entry": "tests/profile/scar_compile/features/facet_paths.srt",
+    "group": "features",
+    "scale": null,
+    "dependencies": []
+  },
+  {
+    "id": "generic_calls",
+    "entry": "tests/profile/scar_compile/features/generic_calls.srt",
+    "group": "features",
+    "scale": null,
+    "dependencies": []
+  },
+  {
+    "id": "monad_carriers",
+    "entry": "tests/profile/scar_compile/features/monad_carriers.srt",
+    "group": "features",
+    "scale": null,
+    "dependencies": []
+  },
+  {
+    "id": "patterns",
+    "entry": "tests/profile/scar_compile/features/patterns.srt",
+    "group": "features",
+    "scale": null,
+    "dependencies": []
+  },
+  {
+    "id": "error_definitions_064",
+    "entry": "tests/profile/scar_compile/generated/error_definitions_064.srt",
+    "group": "error_definitions",
+    "scale": 64,
+    "dependencies": []
+  },
+  {
+    "id": "error_definitions_128",
+    "entry": "tests/profile/scar_compile/generated/error_definitions_128.srt",
+    "group": "error_definitions",
+    "scale": 128,
+    "dependencies": []
+  },
+  {
+    "id": "error_definitions_256",
+    "entry": "tests/profile/scar_compile/generated/error_definitions_256.srt",
+    "group": "error_definitions",
+    "scale": 256,
+    "dependencies": []
+  },
+  {
+    "id": "generic_chain_016",
+    "entry": "tests/profile/scar_compile/generated/generic_chain_016.srt",
+    "group": "generic_chain",
+    "scale": 16,
+    "dependencies": []
+  },
+  {
+    "id": "generic_chain_032",
+    "entry": "tests/profile/scar_compile/generated/generic_chain_032.srt",
+    "group": "generic_chain",
+    "scale": 32,
+    "dependencies": []
+  },
+  {
+    "id": "generic_chain_064",
+    "entry": "tests/profile/scar_compile/generated/generic_chain_064.srt",
+    "group": "generic_chain",
+    "scale": 64,
+    "dependencies": []
+  },
+  {
+    "id": "nominal_chain_016",
+    "entry": "tests/profile/scar_compile/generated/nominal_chain_016.srt",
+    "group": "nominal_chain",
+    "scale": 16,
+    "dependencies": []
+  },
+  {
+    "id": "nominal_chain_032",
+    "entry": "tests/profile/scar_compile/generated/nominal_chain_032.srt",
+    "group": "nominal_chain",
+    "scale": 32,
+    "dependencies": []
+  },
+  {
+    "id": "nominal_chain_064",
+    "entry": "tests/profile/scar_compile/generated/nominal_chain_064.srt",
+    "group": "nominal_chain",
+    "scale": 64,
+    "dependencies": []
+  },
+  {
+    "id": "trait_impls_016",
+    "entry": "tests/profile/scar_compile/generated/trait_impls_016.srt",
+    "group": "trait_impls",
+    "scale": 16,
+    "dependencies": []
+  },
+  {
+    "id": "trait_impls_032",
+    "entry": "tests/profile/scar_compile/generated/trait_impls_032.srt",
+    "group": "trait_impls",
+    "scale": 32,
+    "dependencies": []
+  },
+  {
+    "id": "trait_impls_064",
+    "entry": "tests/profile/scar_compile/generated/trait_impls_064.srt",
+    "group": "trait_impls",
+    "scale": 64,
+    "dependencies": []
+  },
+  {
+    "id": "modules",
+    "entry": "tests/profile/scar_compile/modules/entry.srt",
+    "group": "modules",
+    "scale": null,
+    "dependencies": [
+      "tests/profile/scar_compile/modules/Operations.srt",
+      "tests/profile/scar_compile/modules/Values.srt"
+    ]
+  },
+  {
+    "id": "generic_chain_reverse_016",
+    "entry": "tests/profile/scar_compile/generated/generic_chain_reverse_016.srt",
+    "group": "generic_chain_reverse",
+    "scale": 16,
+    "dependencies": []
+  },
+  {
+    "id": "generic_chain_reverse_032",
+    "entry": "tests/profile/scar_compile/generated/generic_chain_reverse_032.srt",
+    "group": "generic_chain_reverse",
+    "scale": 32,
+    "dependencies": []
+  },
+  {
+    "id": "generic_chain_reverse_064",
+    "entry": "tests/profile/scar_compile/generated/generic_chain_reverse_064.srt",
+    "group": "generic_chain_reverse",
+    "scale": 64,
+    "dependencies": []
+  }
+]

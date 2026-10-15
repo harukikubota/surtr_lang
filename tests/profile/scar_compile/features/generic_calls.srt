@@ -1,0 +1,40 @@
+# Compile-only input: reuse and separate generic specializations across payload types.
+# Includes explicit/inferred return type arguments, returned captures, and trait dispatch.
+defstruct CompileBox<$T> { value: $T }
+impl CompileBox {
+  def new(value: $T) -> CompileBox<$T> { CompileBox { value: value } }
+}
+
+def identity(value: $T) -> $T { value }
+def transform(value: $A, mapper: ($A -> $B)) -> $B { mapper(value) }
+def empty::<$T>() -> List<$T> { [] }
+def factory::<$T>() -> (-> List<$T>) { &empty }
+def relay(source: Result<$A>, next: ($A -> Result<$B>)) -> Result<$B> {
+  Monad::bind(source, next)
+}
+def keep_box(value: CompileBox<$T>) -> CompileBox<$T> { identity(value) }
+
+a: Int = identity(3)
+b: String = identity("source")
+c: List<Int> = identity([1, 2, 3])
+d: (Int, String) = identity((4, "pair"))
+e: Int = identity(5)
+f: String = transform(a, {|value| inspect(value)})
+g: Int = transform(b, {|_| 7})
+h: List<String> = transform(["a", "b"], {|values| identity(values)})
+box_int = keep_box(CompileBox::new(9))
+box_text = keep_box(CompileBox::new("box"))
+box_again = keep_box(CompileBox::new(10))
+int_empty = empty::<Int>()
+text_empty: List<String> = empty()
+int_factory: (-> List<Int>) = factory::<Int>()
+text_factory: (-> List<String>) = &empty::<String>
+int_capture: (Int -> Int) = &identity
+text_capture: (String -> String) = &identity
+captured_a = int_capture(a)
+captured_b = text_capture(b)
+result_a = relay(Ok(a), {|value| Ok(value + 1)})
+result_b = relay(Ok(b), {|value| Ok(value ++ "!")})
+result_c = relay(Ok(a), {|value| Ok(inspect(value))})
+result_again = relay(Ok(e), {|value| Ok(value + 2)})
+print(inspect((box_int, box_text, box_again, result_a, result_b, result_c, result_again)))

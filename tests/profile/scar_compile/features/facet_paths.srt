@@ -1,0 +1,31 @@
+# Compile-only input: structural, container, composed, and case Facet paths.
+# Includes capture inference, dynamic indexes, and Result-returning updates.
+defrecord CompileBook(scores: List<Int>, labels: HashMap<String>, nick: Option<String>)
+
+def increase(value: Int) -> Result<Int> { Ok(value + 1) }
+def decorate(value: String) -> Result<String> { Ok(value ++ "!") }
+def at(index: Int, values: List<Int>) -> Result<Int> {
+  Facet::view(List.[index], values)
+}
+
+book = CompileBook([10, 20, 30], hash!["first" => "alpha"], Option::Some("guest"))
+first_score = Facet::view(CompileBook.scores.[0], book)
+label = Facet::view(CompileBook.labels.["first"], book)
+composed = Facet::view(CompileBook.scores -> List.[1], book)
+nickname = Facet::view(CompileBook.nick.Some, book)
+read_at: (Int, List<Int> -> Result<Int>) = &Facet::view(List.[&1], &2)
+read_nested: (Int, (List<Int>, String) -> Result<Int>) = &Facet::view(Tuple._0 -> List.[&1], &2)
+read_label: (String, HashMap<String> -> Result<String>) = &Facet::view(HashMap.[&1], &2)
+captured_score = read_at(1, book.scores)
+captured_nested = read_nested(2, (book.scores, "context"))
+captured_label = read_label("first", book.labels)
+updated =? Facet::set(CompileBook.scores.[0], book, 40)
+increased =? Facet::over(CompileBook.scores.[1], updated, &increase)
+renamed =? Facet::case_over(CompileBook.nick.Some, increased, &decorate)
+bulk =? Facet::bulk_update(renamed) {
+  scores.[2] <- over(&increase)
+  labels.["first"] <- over(&decorate)
+  nick.Some <- case_over(&decorate)
+}
+print(inspect((first_score, label, composed, nickname)))
+print(inspect((captured_score, captured_nested, captured_label, at(0, bulk.scores))))

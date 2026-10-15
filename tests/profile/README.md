@@ -2,6 +2,16 @@
 
 `tests/profile/**` is for manual measurement. These inputs are not part of the normal nextest gate.
 
+## Scar Compile Inputs
+
+[`scar_compile/`](scar_compile/README.md) contains current feature combinations and
+scaling inputs for Error declarations, generic call depth and declaration order,
+Trait implementations, nominal dependencies, and additional modules. Its explicit
+inventory includes the small stdlib control and the earlier `heavy_compile.srt`.
+Use `build --phase-times-json` for cold/disk-cache comparisons without executing
+the generated program. The heavy input remains a concrete-type control, not a
+representative sample of every current language feature.
+
 ## Heavy Compile
 
 `heavy_compile.srt` is a compile-heavy script fixture for checking compile/cache behavior outside the fixture runner.

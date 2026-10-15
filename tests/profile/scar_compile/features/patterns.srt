@@ -1,0 +1,46 @@
+# Compile-only input: generic Extractor specialization and pattern consumers.
+# Covers match, SafeBind, apply_pattern, tuple/list payloads, and do-bound extraction.
+defrecord CompilePacket(value: Result<Int>)
+
+impl Int {
+  defextractor compile_relay(source: Result<$T>) -> MatchResult<$T> {
+    value =? source
+    MatchResult::Ok(value)
+  }
+  defextractor compile_offset(amount: Int, source: Int) -> MatchResult<Int> {
+    MatchResult::Ok(amount + source)
+  }
+}
+
+def unpack(source: Result<Result<Int>>) -> Result<Int> {
+  Int::compile_relay(value) =? source
+  Ok(value + 1)
+}
+def offset_match(source: Int) -> Int {
+  match source {
+    Int::compile_offset(2, value) => value,
+    _ => 0,
+  }
+}
+def packet_value(packet: CompilePacket) -> Int {
+  match packet {
+    CompilePacket(value: Int::compile_relay(value)) => value,
+    _ => 0,
+  }
+}
+def first(values: List<Int>) -> Int {
+  match values { [] => 0, [head, ..tail] => head }
+}
+
+number = apply_pattern(Ok(11), Int::compile_relay(_1))
+text = apply_pattern(Ok("value"), Int::compile_relay(_1))
+pair = apply_pattern(Ok((12, "pair")), Int::compile_relay(_1, _2))
+items = apply_pattern(Ok([1, 2]), Int::compile_relay(_1))
+number_again = apply_pattern(Ok(13), Int::compile_relay(_1))
+matched = match Ok(14) { Int::compile_relay(value) => value, _ => 0 }
+bound = unpack(Ok(Ok(15)))
+projected: Result<Int> = do { Int::compile_relay(value) <- Ok(Ok(16)); Ok(value) }
+consumer: (Result<Int> -> Result<Int>) = &apply_pattern(&1, Int::compile_relay(_1))
+captured = consumer(Ok(17))
+print(inspect((number, text, pair, items, number_again, matched, bound, projected, captured)))
+print(inspect((offset_match(18), packet_value(CompilePacket(Ok(19))), first([20, 21]))))

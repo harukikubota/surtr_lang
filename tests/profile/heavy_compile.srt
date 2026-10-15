@@ -1,3 +1,5 @@
+# Early concrete-type workload. Compile only: repeated squaring is expensive at runtime.
+# Use scar_compile/ for current feature and scaling workloads.
 def inc(x: Int) -> Int { x + 1 }
 def dec(x: Int) -> Int { x - 1 }
 def double(x: Int) -> Int { x * 2 }
@@ -5,7 +7,7 @@ def add3(x: Int) -> Int { x + 3 }
 def add5(x: Int) -> Int { x + 5 }
 def square(x: Int) -> Int { x * x }
 def clamp_positive(x: Int) -> Result<Int> {
-  if(x < 0, Err(NoneError), Ok(x))
+  if(x < 0, Err(NoneError()), Ok(x))
 }
 def render(x: Int) -> String { to_string(x) }
 def parse_ok(text: String) -> Result<Int> { Ok(42) }

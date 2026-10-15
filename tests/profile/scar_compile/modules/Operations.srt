@@ -1,0 +1,17 @@
+deftrait CompileMeasure {
+  def measure(self: Self) -> Int
+}
+
+defmod CompileOperations {
+  def measure(value: $T) -> Int where $T: CompileMeasure {
+    CompileMeasure::measure(value)
+  }
+
+  def forward(value: $T) -> Int where $T: CompileMeasure {
+    measure(value)
+  }
+
+  def pair(left: $A, right: $B) -> ($A, $B) {
+    (left, right)
+  }
+}

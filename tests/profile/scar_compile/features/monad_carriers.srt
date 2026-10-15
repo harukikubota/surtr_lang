@@ -1,0 +1,41 @@
+# Compile-only input: do-carrier resolution, generic bind, and transformer slots.
+# Exercises Result/Option/List and StateT/OptionT with small finite values.
+def lift_state(value: $T) -> StateT<Int, Result, $T> { Applicative::pure(value) }
+def map_state(source: StateT<Int, Result, $A>, mapper: ($A -> $B)) -> StateT<Int, Result, $B> {
+  Monad::bind(source, {|value| lift_state(mapper(value))})
+}
+def state_step(source: StateT<Int, Identity, Int>) -> StateT<Int, Identity, Int> {
+  do::<StateT<Int, Identity, _>> {
+    value <- source
+    StateT::new({|state| Identity::new((value + state, state + 1))})
+  }
+}
+def result_step(source: Result<Int>) -> Result<Int> {
+  do::<Result> {
+    value <- source
+    next <- Ok(value + 1)
+    Ok(next * 2)
+  }
+}
+def option_step(source: Option<Int>) -> Option<Int> {
+  do::<Option> { value <- source; Option::Some(value + 3) }
+}
+def list_step(source: List<Int>) -> List<Int> {
+  do::<List> { value <- source; [value, value + 1] }
+}
+
+state: StateT<Int, Result, Int> = lift_state(4)
+text_state = map_state(state, {|value| inspect(value)})
+int_state = map_state(state, {|value| value + 2})
+identity_state: StateT<Int, Identity, Int> = MonadT::lift(Identity::new(5))
+stepped = state_step(identity_state)
+optional: OptionT<Result, Int> = MonadT::lift::<OptionT<Result, _>>(Ok(6))
+optional_next: OptionT<Result, Int> = do::<OptionT<Result, _>> {
+  value <- optional
+  Applicative::pure(value + 1)
+}
+print(inspect(StateT::run(text_state, 0)))
+print(inspect(StateT::run(int_state, 1)))
+print(inspect(Identity::run(StateT::run(stepped, 2))))
+print(inspect(OptionT::run(optional_next)))
+print(inspect((result_step(Ok(7)), option_step(Option::Some(8)), list_step([9, 10]))))

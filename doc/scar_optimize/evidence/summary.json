@@ -1,0 +1,224 @@
+[
+  {
+    "input": "tests/profile/stdlib_prewarm.srt",
+    "condition": "cold",
+    "n": 5,
+    "phases": {
+      "stdlib_load": {
+        "median_us": 407508,
+        "min_us": 403709,
+        "max_us": 426346
+      },
+      "parse_user": {
+        "median_us": 19,
+        "min_us": 16,
+        "max_us": 22
+      },
+      "resolve": {
+        "median_us": 1898,
+        "min_us": 1855,
+        "max_us": 1957
+      },
+      "typecheck": {
+        "median_us": 1613,
+        "min_us": 1560,
+        "max_us": 1767
+      },
+      "codegen": {
+        "median_us": 565,
+        "min_us": 544,
+        "max_us": 685
+      },
+      "compile_total": {
+        "median_us": 416884,
+        "min_us": 412904,
+        "max_us": 436044
+      }
+    }
+  },
+  {
+    "input": "tests/profile/stdlib_prewarm.srt",
+    "condition": "disk_hit",
+    "n": 5,
+    "phases": {
+      "stdlib_load": {
+        "median_us": 15702,
+        "min_us": 15557,
+        "max_us": 16137
+      },
+      "parse_user": {
+        "median_us": 5,
+        "min_us": 4,
+        "max_us": 5
+      },
+      "resolve": {
+        "median_us": 1992,
+        "min_us": 1988,
+        "max_us": 2024
+      },
+      "typecheck": {
+        "median_us": 2126,
+        "min_us": 2004,
+        "max_us": 2208
+      },
+      "codegen": {
+        "median_us": 648,
+        "min_us": 622,
+        "max_us": 667
+      },
+      "compile_total": {
+        "median_us": 25728,
+        "min_us": 25369,
+        "max_us": 26262
+      }
+    }
+  },
+  {
+    "input": "tests/fixtures/script/pass/stdmod/monad_fail_priority.srt",
+    "condition": "cold",
+    "n": 5,
+    "phases": {
+      "stdlib_load": {
+        "median_us": 410448,
+        "min_us": 405537,
+        "max_us": 422818
+      },
+      "parse_user": {
+        "median_us": 357,
+        "min_us": 353,
+        "max_us": 424
+      },
+      "resolve": {
+        "median_us": 3548,
+        "min_us": 3473,
+        "max_us": 3569
+      },
+      "typecheck": {
+        "median_us": 20645,
+        "min_us": 20552,
+        "max_us": 20869
+      },
+      "codegen": {
+        "median_us": 1033,
+        "min_us": 1012,
+        "max_us": 1047
+      },
+      "compile_total": {
+        "median_us": 441927,
+        "min_us": 437067,
+        "max_us": 454397
+      }
+    }
+  },
+  {
+    "input": "tests/fixtures/script/pass/stdmod/monad_fail_priority.srt",
+    "condition": "disk_hit",
+    "n": 5,
+    "phases": {
+      "stdlib_load": {
+        "median_us": 15709,
+        "min_us": 15613,
+        "max_us": 16066
+      },
+      "parse_user": {
+        "median_us": 350,
+        "min_us": 343,
+        "max_us": 406
+      },
+      "resolve": {
+        "median_us": 3716,
+        "min_us": 3680,
+        "max_us": 3782
+      },
+      "typecheck": {
+        "median_us": 21243,
+        "min_us": 21108,
+        "max_us": 21330
+      },
+      "codegen": {
+        "median_us": 1067,
+        "min_us": 1055,
+        "max_us": 1126
+      },
+      "compile_total": {
+        "median_us": 48192,
+        "min_us": 48056,
+        "max_us": 48403
+      }
+    }
+  },
+  {
+    "input": "tests/fixtures/script/pass/patterns/generic_extractor_specialization.srt",
+    "condition": "cold",
+    "n": 5,
+    "phases": {
+      "stdlib_load": {
+        "median_us": 409162,
+        "min_us": 404907,
+        "max_us": 419668
+      },
+      "parse_user": {
+        "median_us": 1106,
+        "min_us": 1088,
+        "max_us": 1163
+      },
+      "resolve": {
+        "median_us": 5826,
+        "min_us": 5640,
+        "max_us": 6194
+      },
+      "typecheck": {
+        "median_us": 7569,
+        "min_us": 7493,
+        "max_us": 7625
+      },
+      "codegen": {
+        "median_us": 1773,
+        "min_us": 1697,
+        "max_us": 1798
+      },
+      "compile_total": {
+        "median_us": 432348,
+        "min_us": 427682,
+        "max_us": 443197
+      }
+    }
+  },
+  {
+    "input": "tests/fixtures/script/pass/patterns/generic_extractor_specialization.srt",
+    "condition": "disk_hit",
+    "n": 5,
+    "phases": {
+      "stdlib_load": {
+        "median_us": 15975,
+        "min_us": 15735,
+        "max_us": 16224
+      },
+      "parse_user": {
+        "median_us": 1095,
+        "min_us": 1080,
+        "max_us": 1122
+      },
+      "resolve": {
+        "median_us": 6109,
+        "min_us": 6017,
+        "max_us": 6325
+      },
+      "typecheck": {
+        "median_us": 8237,
+        "min_us": 8025,
+        "max_us": 8393
+      },
+      "codegen": {
+        "median_us": 1776,
+        "min_us": 1755,
+        "max_us": 1856
+      },
+      "compile_total": {
+        "median_us": 40079,
+        "min_us": 39915,
+        "max_us": 41058
+      }
+    }
+  }
+]

@@ -1,0 +1,10 @@
+include "./Operations.srt"
+include "./Values.srt"
+
+import CompileOperations::forward
+
+first: Int = forward(CompilePacket::new(7))
+second: Int = CompileOperations::measure(CompilePacket::new(11))
+numbers: (Int, Int) = CompileOperations::pair(first, second)
+mixed: (String, Boolean) = CompileOperations::pair("module", True)
+(numbers, mixed)

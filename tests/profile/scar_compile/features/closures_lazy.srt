@@ -1,0 +1,33 @@
+# Compile-only input: closure captures, lazy branch normalization, and partial application.
+# All branches are finite and pure; output only keeps representative results observable.
+def adder(offset: Int) -> (Int -> Int) { {|value| value + offset} }
+def thunk(value: Int) -> (-> Int) { {|| value + 1} }
+def invoke(block: (-> Int)) -> Int { block() }
+def select(flag: Boolean, value: Int) -> Int {
+  if(flag, (thunk(value)), { value + 2 })
+}
+def nested(offset: Int) -> (Int -> (Int -> Int)) {
+  {|left| {|right| left + right + offset}}
+}
+def apply_twice(value: $T, mapper: ($T -> $T)) -> $T { mapper(mapper(value)) }
+def prepared(value: Int) -> (Result<Int> -> Int) {
+  &if_let(&1, Ok(value), (value + 1), 0)
+}
+
+add = adder(3)
+combine = nested(4)
+partial = combine(5)
+int_result = apply_twice(1, add)
+text_result = apply_twice("x", {|value| value ++ "!"})
+choose: ((-> Int), (-> Int) -> Int) = &if(False, &1, &2)
+lazy_result = choose({|| 10}, {|| 11})
+kept: (-> Int) = if(True, {|| {|| 12}}, {|| {|| 13}})
+kept_result = invoke(kept)
+grouped = &if(&1, ((&2)), 0)
+grouped_result = grouped(True, {|| 14})
+extract = *{|offset: Int, value: Int| MatchResult::Ok(value + offset)}
+pattern_call = &if_let(&1, extract(&2, value), value, 0)
+pattern_result = pattern_call(15, 2)
+ready = prepared(16)
+print(inspect((int_result, text_result, partial(6), select(True, 7), select(False, 8))))
+print(inspect((lazy_result, kept_result, grouped_result, pattern_result, ready(Ok(17)))))
