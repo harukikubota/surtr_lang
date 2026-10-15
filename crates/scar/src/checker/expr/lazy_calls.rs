@@ -145,7 +145,7 @@ impl Checker {
                     return Err(TypeError::new(
                         "Invalid ordinary Lazy call contract",
                         span.clone(),
-                    ))
+                    ));
                 }
             };
             let call = self.finish_normalized_lazy_call(span, function, typed_args, expected)?;
@@ -312,5 +312,394 @@ impl Checker {
             span: span.clone(),
             node: TypedInner::App(Box::new(typed_function), args),
         })
+    }
+}
+
+/// A source Lazy input before its single closure shell is consumed.
+/// Shells describe evaluation semantics; they do not each require a runtime allocation.
+pub(in crate::checker) struct LazyInput {
+    pub(in crate::checker) node: TypedNode,
+    /// A direct capture parameter, including its grouping, already denotes a normalized input.
+    placeholder: bool,
+    /// A bare call contributes one delayed shell regardless of its return type.
+    call_shell: bool,
+}
+
+impl Checker {
+    pub(super) fn trait_parameter_is_lazy(
+        &self,
+        trait_name: &str,
+        method_name: &str,
+        index: usize,
+    ) -> bool {
+        self.traits
+            .get(trait_name)
+            .filter(|declaration| declaration.standard_lazy_contract)
+            .and_then(|declaration| declaration.methods.get(method_name))
+            .and_then(|method| method.value_parameters.get(index))
+            .is_some_and(|parameter| Self::lazy_parameter_inner(parameter.ty.syntax()).is_some())
+    }
+
+    /// Trait bodies receive the same normalized shell as special forms, but
+    /// consume it themselves. Hoist an explicit eager boundary before creating it.
+    pub(super) fn check_trait_lazy_argument(
+        &mut self,
+        expression: &Resolved,
+        expected: &Ty,
+        span: &Span,
+    ) -> Result<TypedNode, TypeError> {
+        let Ty::Func(parameters, result) = self.resolve_ty(expected) else {
+            return Err(TypeError::new(
+                "Invalid normalized Lazy parameter contract",
+                span.clone(),
+            ));
+        };
+        if !parameters.is_empty() {
+            return Err(TypeError::new(
+                "Lazy parameter requires a zero-argument callable",
+                span.clone(),
+            ));
+        }
+        if matches!(expression, Resolved::Grouped(..)) && !Self::is_lazy_placeholder(expression) {
+            if let Some(reference) = sigil::collect_resolved_closure_captures(expression, &[])
+                .into_iter()
+                .find(|id| id.compiler_generated && id.name.starts_with("__cap_"))
+            {
+                return Err(TypeError::new(
+                    "capture placeholder is not available in a Lazy eager expression",
+                    reference.span,
+                ));
+            }
+        }
+        let mut input = self.check_lazy_input(expression, Some(&result), span)?;
+        let mut eager_binding = None;
+        let mut outer_ids = self
+            .env
+            .vars
+            .iter()
+            .filter_map(|(id, ty)| {
+                (!matches!(ty, Ty::UserFunc { .. } | Ty::BuiltinFunc { .. })
+                    && !self.env.type_constructor_ids.contains(id))
+                .then_some(*id)
+            })
+            .collect::<HashSet<_>>();
+        if let TypedInner::EagerBoundary(inner) = &input.node.node {
+            let id = ResolvedId {
+                name: "__lazy_eager".into(),
+                qualified_name: None,
+                symbol_info: None,
+                unique_id: Self::next_synthetic_range_uid(),
+                compiler_generated: true,
+                span: span.clone(),
+            };
+            outer_ids.insert(id.unique_id);
+            eager_binding = Some(TypedNode {
+                ty: Ty::Unit,
+                span: input.node.span.clone(),
+                node: TypedInner::Bind(
+                    TypedPattern::Var(inner.ty.clone(), id.clone()),
+                    inner.clone(),
+                ),
+            });
+            input.node.node = TypedInner::Var(id);
+        }
+        let body = self.normalize_lazy_single(input, &result, span)?;
+        let captures = Self::finalized_closure_captures(&body, &outer_ids);
+        let closure = TypedNode {
+            ty: Ty::Func(vec![], Box::new(body.ty.clone())),
+            span: span.clone(),
+            node: TypedInner::Closure(vec![], captures, Box::new(body)),
+        };
+        Ok(match eager_binding {
+            Some(binding) => TypedNode {
+                ty: closure.ty.clone(),
+                span: span.clone(),
+                node: TypedInner::Block(vec![binding, closure]),
+            },
+            None => closure,
+        })
+    }
+
+    pub(in crate::checker) fn is_lazy_placeholder(arg: &Resolved) -> bool {
+        match arg {
+            Resolved::Grouped(_, inner) => Self::is_lazy_placeholder(inner),
+            Resolved::Var(_, id) => id.compiler_generated && id.name.starts_with("__cap_"),
+            _ => false,
+        }
+    }
+
+    pub(in crate::checker) fn check_lazy_input(
+        &mut self,
+        arg: &Resolved,
+        expected: Option<&Ty>,
+        call_span: &Span,
+    ) -> Result<LazyInput, TypeError> {
+        if let Resolved::Var(span, id) = arg {
+            if id.name.starts_with("__pipe_slot_") {
+                return Err(TypeError {
+                    structured: None,
+                    message: "pipe injection into a Lazy parameter is not allowed".into(),
+                    span: span.clone(),
+                    hint: Some("Lazy parameters are evaluated under the callee's control. Bind the value first, then pass that binding explicitly, or use a closure to make the evaluation order explicit.".into()),
+                });
+            }
+        }
+        let placeholder = Self::is_lazy_placeholder(arg);
+        if let Resolved::Grouped(span, inner) = arg {
+            let mut input = self.check_lazy_input(inner, expected, call_span)?;
+            // Parentheses around a normalized capture parameter only group it.
+            if placeholder {
+                input.placeholder = true;
+                return Ok(input);
+            }
+            input.call_shell = false;
+            input.node = TypedNode {
+                ty: input.node.ty.clone(),
+                span: span.clone(),
+                node: TypedInner::EagerBoundary(Box::new(input.node)),
+            };
+            return Ok(input);
+        }
+        let node = if self.branch_tail_is_return_type_argument_call(arg) && expected.is_some() {
+            let checkpoint = self.candidate_probe_checkpoint();
+            match self.check_node(arg) {
+                Ok(node) => node,
+                Err(error)
+                    if error.reason()
+                        == Some(TypeDiagnosticReason::AmbiguousReturnTypeArgument) =>
+                {
+                    self.rollback_candidate_probe(checkpoint);
+                    let expected = expected.expect("checked expected branch result");
+                    match arg {
+                        Resolved::Closure(span, params, captures, body)
+                        | Resolved::ExtractorClosure(span, params, captures, body)
+                        | Resolved::CaptureClosure(span, params, captures, body)
+                            if params.is_empty() =>
+                        {
+                            self.check_closure(
+                                span,
+                                params,
+                                captures,
+                                body,
+                                Some(&Ty::Func(vec![], Box::new(expected.clone()))),
+                                None,
+                            )?
+                        }
+                        _ => self.check_node_with_expected(arg, Some(expected))?,
+                    }
+                }
+                Err(error) => {
+                    self.rollback_candidate_probe(checkpoint);
+                    return Err(error);
+                }
+            }
+        } else {
+            self.check_node(arg)?
+        };
+        Ok(LazyInput {
+            node,
+            placeholder,
+            call_shell: matches!(
+                arg,
+                Resolved::App(..)
+                    | Resolved::LazyApp(..)
+                    | Resolved::ConstructorCall(..)
+                    | Resolved::EnumConstructorCall(..)
+                    | Resolved::If(..)
+                    | Resolved::IfLet(..)
+                    | Resolved::Cause(..)
+                    | Resolved::ApplyPattern(..)
+                    | Resolved::IsMatch(..)
+                    | Resolved::Dbg(..)
+            ),
+        })
+    }
+
+    fn lazy_depth(&self, ty: &Ty) -> usize {
+        match self.resolve_ty(ty) {
+            Ty::Func(params, ret)
+            | Ty::UserFunc { params, ret, .. }
+            | Ty::BuiltinFunc { params, ret, .. }
+                if params.is_empty() =>
+            {
+                1 + self.lazy_depth(&ret)
+            }
+            _ => 0,
+        }
+    }
+
+    fn lazy_shell_type(&self, input: &LazyInput) -> Ty {
+        let ty = self.resolve_ty(&input.node.ty);
+        if input.call_shell {
+            Ty::Func(vec![], Box::new(ty))
+        } else {
+            ty
+        }
+    }
+
+    /// Consume exactly one normalized shell, preserving any function in its result.
+    fn consume_lazy_input(&self, mut input: LazyInput, wrap: bool, span: &Span) -> TypedNode {
+        input.node.ty = self.resolve_ty(&input.node.ty);
+        if wrap && input.call_shell {
+            // Consuming the extra adjustment shell leaves the original shell
+            // around a bare call. That remaining shell must be represented as
+            // a real thunk rather than evaluating the call now.
+            let outer_ids = self
+                .env
+                .vars
+                .iter()
+                .filter_map(|(id, ty)| {
+                    (!matches!(ty, Ty::UserFunc { .. } | Ty::BuiltinFunc { .. })
+                        && !self.env.type_constructor_ids.contains(id))
+                    .then_some(*id)
+                })
+                .collect::<HashSet<_>>();
+            let captures = Self::finalized_closure_captures(&input.node, &outer_ids);
+            TypedNode {
+                ty: Ty::Func(vec![], Box::new(input.node.ty.clone())),
+                span: input.node.span.clone(),
+                node: TypedInner::Closure(vec![], captures, Box::new(input.node)),
+            }
+        } else if wrap || input.call_shell {
+            input.node
+        } else {
+            self.maybe_call_zero_arg_function(input.node, span.clone())
+        }
+    }
+
+    /// Known inputs decide the shell depth; an expected type only determines unknown parameters.
+    /// Each shallower input receives at most one shell before the ordinary branch relation.
+    pub(in crate::checker) fn normalize_lazy_pair(
+        &mut self,
+        left: LazyInput,
+        right: LazyInput,
+        expected: Option<&Ty>,
+        span: &Span,
+    ) -> Result<(TypedNode, TypedNode), TypeError> {
+        let mut left_type = self.lazy_shell_type(&left);
+        let mut right_type = self.lazy_shell_type(&right);
+        let mut wrap_left = false;
+        let mut wrap_right = false;
+        match (left.placeholder, right.placeholder) {
+            (true, true) => {
+                let result = expected.cloned().unwrap_or_else(|| self.env.fresh_tyvar());
+                let required = Ty::Func(vec![], Box::new(result));
+                self.assert_lazy_placeholder(
+                    &required,
+                    &left.node,
+                    span,
+                    &[(&left.node, &required), (&right.node, &required)],
+                )?;
+                self.assert_lazy_placeholder(
+                    &required,
+                    &right.node,
+                    span,
+                    &[(&left.node, &required), (&right.node, &required)],
+                )?;
+            }
+            (true, false) => {
+                if self.lazy_depth(&right_type) == 0 {
+                    wrap_right = true;
+                    right_type = Ty::Func(vec![], Box::new(right_type));
+                }
+                self.assert_lazy_placeholder(
+                    &right_type,
+                    &left.node,
+                    span,
+                    &[(&left.node, &right_type)],
+                )?;
+            }
+            (false, true) => {
+                if self.lazy_depth(&left_type) == 0 {
+                    wrap_left = true;
+                    left_type = Ty::Func(vec![], Box::new(left_type));
+                }
+                self.assert_lazy_placeholder(
+                    &left_type,
+                    &right.node,
+                    span,
+                    &[(&right.node, &left_type)],
+                )?;
+            }
+            (false, false) => {
+                let left_depth = self.lazy_depth(&left_type);
+                let right_depth = self.lazy_depth(&right_type);
+                wrap_left = left_depth == 0 && right_depth == 0 || left_depth < right_depth;
+                wrap_right = left_depth == 0 && right_depth == 0 || right_depth < left_depth;
+            }
+        }
+        // The ordinary branch relation below checks the resulting values;
+        // at most one shell is added, so deeper mismatches remain errors.
+        Ok((
+            self.consume_lazy_input(left, wrap_left, span),
+            self.consume_lazy_input(right, wrap_right, span),
+        ))
+    }
+
+    /// Keep all requirements known at this normalization step available to diagnostics,
+    /// even when the first placeholder relation fails.
+    fn assert_lazy_placeholder(
+        &mut self,
+        required: &Ty,
+        node: &TypedNode,
+        span: &Span,
+        requirements: &[(&TypedNode, &Ty)],
+    ) -> Result<(), TypeError> {
+        let result = self.assert_type_relation(
+            required,
+            &node.ty,
+            self.type_fact(SourceRole::Expected, span, required),
+            self.type_fact(SourceRole::Value, &node.span, &node.ty),
+            TypeDiagnosticReason::ArgumentTypeMismatch,
+            DiagnosticOrigin::Call,
+            "Lazy",
+            0,
+        );
+        result.map_err(|error| self.lazy_placeholder_error(error, required, node, requirements))
+    }
+
+    pub(in crate::checker) fn check_lazy_argument(
+        &mut self,
+        arg: &Resolved,
+        call_span: &Span,
+    ) -> Result<TypedNode, TypeError> {
+        let input = self.check_lazy_input(arg, None, call_span)?;
+        if input.placeholder {
+            return Err(TypeError::new(
+                "Lazy capture parameter requires a known branch or expected type",
+                input.node.span.clone(),
+            ));
+        }
+        let wrap = self.lazy_depth(&self.lazy_shell_type(&input)) == 0;
+        Ok(self.consume_lazy_input(input, wrap, call_span))
+    }
+
+    pub(in crate::checker) fn normalize_lazy_single(
+        &mut self,
+        input: LazyInput,
+        expected: &Ty,
+        span: &Span,
+    ) -> Result<TypedNode, TypeError> {
+        if input.placeholder {
+            let required = Ty::Func(vec![], Box::new(expected.clone()));
+            self.assert_lazy_placeholder(
+                &required,
+                &input.node,
+                span,
+                &[(&input.node, &required)],
+            )?;
+        }
+        let wrap = !input.placeholder && self.lazy_depth(&self.lazy_shell_type(&input)) == 0;
+        Ok(self.consume_lazy_input(input, wrap, span))
+    }
+
+    pub(in crate::checker) fn check_lazy_argument_with_expected(
+        &mut self,
+        arg: &Resolved,
+        expected: &Ty,
+        call_span: &Span,
+    ) -> Result<TypedNode, TypeError> {
+        let input = self.check_lazy_input(arg, Some(expected), call_span)?;
+        self.normalize_lazy_single(input, expected, call_span)
     }
 }

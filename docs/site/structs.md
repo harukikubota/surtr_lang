@@ -309,7 +309,8 @@ match user {
 
 - ソース
   - `../../crates/spire/src/parser/decl.rs`
-  - `../../crates/scar/src/checker/definitions.rs`
+  - `../../crates/scar/src/checker/definitions/nominal.rs`
+  - `../../crates/scar/src/checker/expr/constructors.rs`
   - `../../tests/integration/language_features/core_language.rs`
   - `../../tests/fixtures/modules/pass/private_visibility_*`
   - `../../tests/fixtures/modules/fail/private_field_*`

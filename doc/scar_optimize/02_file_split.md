@@ -1,10 +1,10 @@
-# Scar のファイル分割案と状態境界
+# Scar のファイル分割と状態境界
 
 調査日: 2026-10-15。対象: `a0d430a609da73f7f35bbba7a01f41f9b28dfc09` の `crates/scar/src`。
 
 現行の `Checker` と型検査順序を保ち、責務ごとに実装を移す案を推奨する。まず `expr.rs` の Facet・process・呼出し処理と、`mod.rs` の session・計測処理を分ける。その後、状態の保存・復元を直接検証できる単位で最適化する。ファイルを分けるだけで `.srt` のコンパイルが速くなるとは見込まない。
 
-この文書は調査・実装計画であり、コードの分割やテスト追加は未実施。ファイル数・行数・関数宣言数を計測し、現行実装と既存計画を照合した。Cargo は実行していない。
+初回調査ではファイル数・行数・関数宣言数を計測し、実装と既存計画を照合した。ファイル分割は 2026-10-16 に実施した。実施範囲と検証結果は末尾の実施記録を参照。状態の保存範囲やアルゴリズムの最適化は今回の分割に含めない。
 
 ## 対象と変更しない契約
 
@@ -14,23 +14,23 @@
 
 単純な移動と Scar 内部に閉じた状態整理は **level2** と判断する。行数が多いことだけを理由に level4 とはしない。推論規則、候補の確定条件、フェーズ間契約を変える必要が生じたら、その変更を切り離して **level4** の仕様にする。今回の大規模作業では、level2 の段階もサブエージェントのレビューを使う。
 
-## 現行の規模
+## 調査時の規模
 
-`crates/scar/src/**/*.rs` は **24 ファイル、61,572 行**。空行・コメント・`#[cfg(test)]` 内を含む。関数宣言数は行頭の `fn` / `pub(...) fn` を数えた参考値で、テスト関数・入れ子関数も含む。実行コストや公開 API 数ではない。
+調査対象 commit の `crates/scar/src/**/*.rs` は **24 ファイル、61,572 行**。空行・コメント・`#[cfg(test)]` 内を含む。関数宣言数は行頭の `fn` / `pub(...) fn` を数えた参考値で、テスト関数・入れ子関数も含む。実行コストや公開 API 数ではない。
 
 | ファイル | 行数 | 関数宣言数 | 主な責務 |
 |---|---:|---:|---|
-| [checker/expr.rs](../../crates/scar/src/checker/expr.rs) | 16,407 | 328 | 式の入口、通常/Trait 呼出し、Facet、process、capture、Lazy、IR 監査 |
-| [checker/specialize.rs](../../crates/scar/src/checker/specialize.rs) | 6,044 | 75 | callable の具体化、IR の走査・置換、具体化後の Pattern |
-| [checker/mod.rs](../../crates/scar/src/checker/mod.rs) | 5,424 | 156 | 公開 API、session/checkpoint、Checker 状態、実行順序、計測、process 契約 |
-| [checker/types.rs](../../crates/scar/src/checker/types.rs) | 5,374 | 125 | 型構文、型関係、置換、IR 型確定、型名表示 |
-| [checker/predeclare.rs](../../crates/scar/src/checker/predeclare.rs) | 5,255 | 85 | 宣言登録、where、Trait / impl 登録、constructor mapping |
-| [checker/definitions.rs](../../crates/scar/src/checker/definitions.rs) | 4,269 | 62 | builtin 契約、関数・型・impl の本体、constructor / Error 呼出し |
-| [checker/trait_selection.rs](../../crates/scar/src/checker/trait_selection.rs) | 3,845 | 84 | canonical 変換、unifier、候補証明、dispatch |
-| [checker/provenance.rs](../../crates/scar/src/checker/provenance.rs) | 2,679 | 46 | constructor capability の由来・伝播 |
-| [checker/patterns.rs](../../crates/scar/src/checker/patterns.rs) | 1,943 | — | Pattern 型検査 |
-| [checker/signatures.rs](../../crates/scar/src/checker/signatures.rs) | 1,729 | — | canonical signature と constructor 入力 |
-| [checker/matching.rs](../../crates/scar/src/checker/matching.rs) | 1,723 | — | match と網羅性 |
+| `checker/expr.rs` | 16,407 | 328 | 式の入口、通常/Trait 呼出し、Facet、process、capture、Lazy、IR 監査 |
+| `checker/specialize.rs` | 6,044 | 75 | callable の具体化、IR の走査・置換、具体化後の Pattern |
+| `checker/mod.rs` | 5,424 | 156 | 公開 API、session/checkpoint、Checker 状態、実行順序、計測、process 契約 |
+| `checker/types.rs` | 5,374 | 125 | 型構文、型関係、置換、IR 型確定、型名表示 |
+| `checker/predeclare.rs` | 5,255 | 85 | 宣言登録、where、Trait / impl 登録、constructor mapping |
+| `checker/definitions.rs` | 4,269 | 62 | builtin 契約、関数・型・impl の本体、constructor / Error 呼出し |
+| `checker/trait_selection.rs` | 3,845 | 84 | canonical 変換、unifier、候補証明、dispatch |
+| `checker/provenance.rs` | 2,679 | 46 | constructor capability の由来・伝播 |
+| `checker/patterns.rs` | 1,943 | — | Pattern 型検査 |
+| `checker/signatures.rs` | 1,729 | — | canonical signature と constructor 入力 |
+| `checker/matching.rs` | 1,723 | — | match と網羅性 |
 
 既に `expr/do_block.rs`（1,085 行）と `expr/lazy_calls.rs`（316 行）が分かれている。`trait_selection.rs` は途中にも大きな内部テスト群があるため、行数をそのまま製品処理の大きさと扱わない。
 
@@ -52,7 +52,7 @@
 
 ## 分割の方針
 
-初期段階では `Checker` を別々のサービス型へ作り替えず、現在の `impl Checker` を責務別ファイルへ移す。これなら移動とアルゴリズム変更を別々に検証できる。以下の移動先はすべて**提案名**で、現存ファイルへのリンクではない。
+初期段階では `Checker` を別々のサービス型へ作り替えず、現在の `impl Checker` を責務別ファイルへ移す。これなら移動とアルゴリズム変更を別々に検証できる。以下の表は調査時の移動案であり、末尾の実施記録に実際の配置と追加の責務単位を記録する。
 
 ### 1. module の入口と session
 
@@ -197,3 +197,42 @@ state     -> 型検査状態の生成・保存・復元だけ
 - 名前が近いという理由で `check_constructor_call` と TypeCtorTrait の constructor projection を統合する。値の constructor と型レベルの constructor は別の契約である。
 - `relations.rs` を再び `types.rs` に吸収する。構造化診断と型関係の適用位置という既存の境界を失う。
 - 将来の高速化を想定して公開 trait / plugin interface / 複数 checker backend を新設する。現行の一つの型検査経路を小さな責務に分ける範囲を守る。
+
+## 実施記録（2026-10-16）
+
+開始時の HEAD は `189702c5ed6e15e522c518756c4c33ed2bdc9dfa`。level2 の実装として、3つのサブエージェントが式、session・状態、宣言・型・具体化を分担し、担当外の領域を相互レビューした。既に追加済みの T-01〜T-12 と既存テストを使い、成功動作を壊す Red や重複した回帰テストは追加していない。
+
+| 領域 | 実施後の配置 |
+|---|---|
+| 入口・session | `checker/mod.rs` は module 宣言・再 export・共通 metadata 型。公開 API、checkpoint、永続状態は `session.rs`、関数 index 再調整は `session/function_indices.rs` |
+| 状態・実行順序 | `state.rs` に構築・child・永続化、`program.rs` に既存 pass 順序、`process.rs` に宣言契約、`warnings.rs` に warning 収集を移動 |
+| 初期化・計測 | `bootstrap.rs` と `profile.rs` に型・関数を移動。builtin metadata、計測形式・有効化条件を維持 |
+| 式 | `expr/mod.rs` に6つの Checker 入口を残し、calls / arguments / trait_calls / operators / process_calls / closures / literals へ移動。binding・分岐は `control.rs`、候補保存・復元は `probes.rs`、Extractor 適用は `extractors.rs` |
+| Facet・Lazy・do | Facet の入力・path・update を `expr/facet/{mod,path,update}.rs` へ移動。依存型判定も Facet 側へ配置。Lazy と SafeBind は既存 `lazy_calls.rs` / `do_block.rs` に統合 |
+| 型 | `type_syntax.rs` / `inference.rs` / `resolve_typed.rs` / `type_display.rs` に分離。型スロット検査は `type_syntax.rs` |
+| 宣言 | `definitions/{builtins,functions,traits,nominal}.rs`、`predeclare/{mod,functions,traits,nominal}.rs` へ移動。値の constructor は `expr/constructors.rs`、候補選択 helper は `trait_selection.rs` |
+| 具体化・監査 | `specialize/{mod,rewrite,substitute,patterns}.rs` に分離し、終了時監査は `audit.rs` に集約 |
+| 内部テスト | expr、session、trait_selection の専用ファイルへ移動。bootstrap / process などの小さなテストは対象 module 内に配置 |
+
+分割直前は25ファイル・62,418行、分割後は65ファイル・62,737行。`checker/mod.rs` は5,426行から553行、`expr.rs` は16,563行から入口の `expr/mod.rs` 1,018行と各責務へ分かれた。行数には空行・コメント・内部テストを含む。
+
+元の `expr.rs` / `types.rs` / `definitions.rs` / `predeclare.rs` / `specialize.rs` と移動前の session 契約テストは削除した。委譲 wrapper は追加していない。`CanonicalTyKey` と `canonical_ty_key` の追加分離は候補のままとし、候補証明や cache identity の構成を変えていない。
+
+`CallableInstantiationKey` は `checker` 直下に残し、他の公開 API は明示的に再 export した。外部 crate から元の13公開項目を import する smoke check も成功した。Checker と永続状態の field は必要な checker 内範囲に限定した。`ScarSession` は既存内部テストが参照する `state` だけを checker 内に公開し、他の field は private のまま保持した。
+
+可視性、移動した参照先パス、整形を正規化し、移動前後の Rust 構文木で関数・型・定数・static・型 alias を比較した。元の1,454定義に追加・欠落はなく、正規化後の内容は一致した。比較用に展開した入れ子関数を再走査する確認では1,497定義・1,441キーが一致した。比較用ツールは `/tmp` に置き、製品やテストの依存には追加していない。
+
+相互レビューで不要な可視性拡大、Facet helper の配置、移動時の doc コメント欠落を修正した。Pattern 内 dispatch、Facet segment 内式、Trait origin / instantiation、DoSafeBind の走査と保存範囲を維持していることを最終配置で確認した。
+
+検証結果。
+
+| コマンド・確認 | 結果 |
+|---|---|
+| 分割前の `rtk cargo nextest run -p scar` | 404 passed / 39 binaries |
+| 最終変更後の `cargo check -p scar --tests` | 成功、警告なし |
+| 最終変更後の `rtk cargo nextest run -p scar` | 404 passed / 39 binaries |
+| `rtk cargo nextest run --profile ci --workspace` | 2,622 passed / 70 binaries。cold CLI、fixture、REPL を含む全件成功 |
+| `cargo fmt --all -- --check` | 成功 |
+| `git diff --check`、変更した文書の相対リンク | 成功、相対リンク24件 |
+
+標準ソース・API・診断仕様・schema / VM version は変更していない。`cargo run -- test --quiet --all` とコンパイル性能の反復測定は未実施。clone / scan / 具体化回数を減らす段階と、状態所有者の再設計は別作業として残す。

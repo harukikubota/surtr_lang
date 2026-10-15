@@ -1,4 +1,5 @@
 use super::*;
+use diagnostics::{DiagnosticData, StructuredDiagnostic};
 
 impl Checker {
     fn canonical_do_trait_key(
@@ -1081,5 +1082,224 @@ mod tests {
                 .expect("resolved canonical identity must remain selectable"),
             "Monad"
         );
+    }
+}
+
+struct CheckedSafeBindInput {
+    typed_pattern: TypedPattern,
+    pattern_ty: Ty,
+    typed_rhs: TypedNode,
+    projection: SafeBindRhsProjection,
+    propagated_error_tys: Vec<Ty>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DoStatementKind {
+    Monadic,
+    Plain,
+}
+
+impl Checker {
+    fn require_statement_question_unit_success(
+        &self,
+        rhs_ty: &Ty,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        let rhs_ty = self.resolve_ty(rhs_ty);
+        let Ty::Result(success, _) = &rhs_ty else {
+            return Err(TypeError::new(
+                format!(
+                    "Statement `?` requires a canonical Result with terminal success type Unit; got {}.",
+                    self.ty_name(&rhs_ty),
+                ),
+                span.clone(),
+            ));
+        };
+        let mut terminal = self.resolve_ty(success);
+        while let Ty::Result(success, _) = terminal {
+            terminal = self.resolve_ty(&success);
+        }
+        if terminal != Ty::Unit {
+            return Err(TypeError::new(
+                format!(
+                    "Statement `?` requires terminal success type Unit; got {} in {}.",
+                    self.ty_name(&terminal),
+                    self.ty_name(&rhs_ty),
+                ),
+                span.clone(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn check_safebind_input(
+        &mut self,
+        span: &Span,
+        pat: &ResolvedPattern,
+        rhs: &Resolved,
+        unit_success_only: bool,
+    ) -> Result<CheckedSafeBindInput, TypeError> {
+        let typed_rhs = self.check_node(rhs)?;
+        if unit_success_only {
+            self.require_statement_question_unit_success(&typed_rhs.ty, span)?;
+        }
+        if matches!(typed_rhs.ty, Ty::Facet(..)) {
+            return Err(self.policy_error(
+                TypeDiagnosticReason::FacetSafeBindForbidden,
+                diagnostics::TypePolicy::SafeBindFacet,
+                Some("Facet value".into()),
+                None,
+                Some(&typed_rhs.ty),
+                Some("Stage1".into()),
+                None,
+                &typed_rhs.span,
+                Some("Use `=` for compile-time Facet bindings.".into()),
+            ));
+        }
+        let rhs_ty = self.resolve_ty(&typed_rhs.ty);
+        let (ok_ty, mut propagated_err_tys, rhs_projection) = match rhs_ty {
+            Ty::Result(ok, err) => {
+                let payload_ty = ok.as_ref().clone();
+                let error_ty = err.as_ref().clone();
+                (
+                    payload_ty.clone(),
+                    vec![error_ty.clone()],
+                    SafeBindRhsProjection::CanonicalResultOnce {
+                        payload_ty,
+                        error_ty,
+                    },
+                )
+            }
+            other => (
+                other.clone(),
+                Vec::new(),
+                SafeBindRhsProjection::PatternInput {
+                    pattern_input_ty: other,
+                },
+            ),
+        };
+
+        let (typed_pat, pat_ty) = self.check_pattern(pat, &ok_ty, span)?;
+        let pattern_can_nomatch = !Self::is_total_bind_pattern(pat);
+        if pattern_can_nomatch {
+            propagated_err_tys.push(Ty::Error);
+        } else if !matches!(self.resolve_ty(&typed_rhs.ty), Ty::Result(_, _)) {
+            let monad = self
+                .trait_key_by_short_name("Monad")
+                .ok_or_else(|| TypeError::new("Missing canonical Monad trait", span.clone()))?;
+            let proof = self.prove_trait_capability(&monad, &ok_ty)?;
+            if type_contains_unresolved_vars(&ok_ty) {
+                match proof {
+                    ApplicabilityProof::Satisfied(_) => {}
+                    ApplicabilityProof::Deferred(_) => {
+                        return Err(self.trait_obligation_failure(
+                            TypeDiagnosticReason::MissingTraitCapability,
+                            &monad,
+                            &[],
+                            None,
+                            &ok_ty,
+                            &typed_rhs.span,
+                            DiagnosticOrigin::Intrinsic,
+                        ));
+                    }
+                    ApplicabilityProof::Unsatisfied => {
+                        return Err(self.trait_obligation_failure(
+                            TypeDiagnosticReason::MissingGenericBound,
+                            &monad,
+                            &[],
+                            None,
+                            &ok_ty,
+                            &typed_rhs.span,
+                            DiagnosticOrigin::Intrinsic,
+                        ));
+                    }
+                }
+            }
+            let (reason, monad_capability) = match proof {
+                ApplicabilityProof::Satisfied(_) => (
+                    TypeDiagnosticReason::SafeBindTotalPatternNonResultMonadRhs,
+                    "satisfied",
+                ),
+                ApplicabilityProof::Unsatisfied => (
+                    TypeDiagnosticReason::SafeBindTotalPatternNonMonadRhs,
+                    "unsatisfied",
+                ),
+                ApplicabilityProof::Deferred(_) => {
+                    unreachable!("a deferred Monad proof must retain unresolved type variables")
+                }
+            };
+            let rhs_name = self.ty_name(&ok_ty);
+            return Err(TypeError::from_structured(StructuredDiagnostic {
+                reason: reason.into(),
+                origin: DiagnosticOrigin::Intrinsic,
+                data: DiagnosticData::SafeBindRelation(diagnostics::SafeBindRelationData {
+                    lhs_type: self.ty_name(&pat_ty),
+                    rhs_type: rhs_name,
+                    lhs_is_total: true,
+                    rhs_is_canonical_result: false,
+                    monad_capability: monad_capability.into(),
+                }),
+                primary: self.type_fact(SourceRole::Value, &typed_rhs.span, &ok_ty),
+                related: vec![self.type_fact(SourceRole::Pattern, span, &pat_ty)],
+                remediation: None,
+            }));
+        }
+        self.ensure_self_rebinding_types(&typed_pat, span)?;
+        Ok(CheckedSafeBindInput {
+            typed_pattern: typed_pat,
+            pattern_ty: pat_ty,
+            typed_rhs,
+            projection: rhs_projection,
+            propagated_error_tys: propagated_err_tys,
+        })
+    }
+
+    pub(super) fn check_safebind(
+        &mut self,
+        span: &Span,
+        operator_span: &Span,
+        pat: &ResolvedPattern,
+        rhs: &Resolved,
+        unit_success_only: bool,
+    ) -> Result<TypedNode, TypeError> {
+        let mut checked = self.check_safebind_input(span, pat, rhs, unit_success_only)?;
+        let failure_target = if matches!(
+            self.callable_context,
+            CallableContext::Extractor | CallableContext::ExtractorClosure
+        ) {
+            let (_, err_tag) = self.match_result_variant_tags(span)?;
+            SafeBindFailureTarget::EnclosingMatchResultContext { err_tag }
+        } else if let Some(ret_ty) = self.function_return_ty.clone() {
+            self.collect_pattern_result_error_types(
+                &checked.typed_pattern,
+                &mut checked.propagated_error_tys,
+            );
+            self.resolve_pattern_failure_target(
+                &ret_ty,
+                &checked.propagated_error_tys,
+                operator_span,
+                None,
+                false,
+            )?
+        } else {
+            SafeBindFailureTarget::TopLevel
+        };
+
+        self.bind_typed_pattern(&checked.typed_pattern, &checked.pattern_ty);
+        self.bind_constructor_provenance(
+            &checked.typed_pattern,
+            self.result_constructor_provenance(&checked.typed_rhs),
+        );
+
+        Ok(TypedNode {
+            ty: Ty::Unit,
+            span: span.clone(),
+            node: TypedInner::SafeBind(
+                checked.typed_pattern,
+                Box::new(checked.typed_rhs),
+                checked.projection,
+                failure_target,
+            ),
+        })
     }
 }
