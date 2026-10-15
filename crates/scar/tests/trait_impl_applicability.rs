@@ -22,24 +22,82 @@ def run() -> String { Read::read::<String>(Box::new("ok")) }
 
 #[test]
 fn nested_disjoint_heads_are_order_independent() {
-    for reverse in [false, true] {
-        let implementations = [
-            "impl Read<Int> for Box<Int> { def read::<Int>(self: Self) -> Int { self.val } }",
-            "impl Read<String> for Box<String> { def read::<String>(self: Self) -> String { self.val } }",
-        ];
-        let order = if reverse { [1, 0] } else { [0, 1] };
-        check(&format!(
+    use scar::typed::{TraitDispatch, TraitDispatchTarget, TypedInner};
+    use scar::types::Ty;
+    use spire::ast::Lit;
+
+    let implementations = [
+        "impl Read<Int> for Box<(Int, Int)> { def read::<Int>(self: Self) -> Int { 1 } }",
+        "impl Read<String> for Box<(Int, String)> { def read::<String>(self: Self) -> String { \"selected-string\" } }",
+        "impl Read<Boolean> for Box<(String, Int)> { def read::<Boolean>(self: Self) -> Boolean { True } }",
+    ];
+    for order in [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ] {
+        let definitions = format!(
             r#"
 defstruct Box<$T> {{ val: $T }}
 impl Box {{ def new(val: $T) -> Box<$T> {{ Box {{ val: val }} }} }}
 deftrait Read<$V> {{ def read::<$V>(self: Self) -> $V }}
 {}
 {}
-def run() -> String {{ Read::read::<String>(Box::new("ok")) }}
+{}
 "#,
-            implementations[order[0]], implementations[order[1]]
+            implementations[order[0]], implementations[order[1]], implementations[order[2]]
+        );
+        let nodes = check(&format!(
+            "{definitions}\nRead::read::<String>(Box::new((1, \"ok\")))"
         ))
-        .expect("disjoint heads");
+        .unwrap_or_else(|error| panic!("order {order:?}: {error:?}"));
+        let call = nodes
+            .iter()
+            .find(|node| matches!(&node.node, TypedInner::TraitCall { .. }))
+            .expect("Read call");
+        assert_eq!(call.ty, Ty::Str);
+        let TypedInner::TraitCall {
+            dispatch: TraitDispatch::Static(TraitDispatchTarget::UserFunction { fun_idx, .. }),
+            ..
+        } = &call.node
+        else {
+            panic!("concrete Read dispatch required: {call:?}");
+        };
+        let definition = nodes
+            .iter()
+            .find(|node| matches!(&node.node, TypedInner::Def(index, ..) if index == fun_idx))
+            .expect("selected method definition");
+        let TypedInner::Def(_, _, _, params, ret, _, body, _) = &definition.node else {
+            unreachable!()
+        };
+        assert_eq!(*ret, Ty::Str);
+        assert!(
+            matches!(&params[0].ty, Ty::Struct(_, fields) if fields[0].1 == Ty::Tuple(vec![Ty::Int, Ty::Str]))
+        );
+        let TypedInner::Block(body) = &body.node else {
+            panic!("method block required")
+        };
+        assert!(
+            matches!(&body.last().unwrap().node, TypedInner::Lit(Lit::Str(value)) if value == "selected-string")
+        );
+
+        // One head matches the subject, another the Trait argument; neither matches both.
+        let error = check(&format!(
+            "{definitions}\nRead::read::<Int>(Box::new((1, \"ok\")))"
+        ))
+        .expect_err("partial nested matches must not supply an implementation");
+        assert_eq!(
+            error.reason(),
+            Some(diagnostics::TypeDiagnosticReason::NoApplicableTraitImplementation),
+            "order {order:?}: {error:?}"
+        );
+        let data = error.structured.unwrap().data_json();
+        assert_eq!(data["trait_id"], "Read");
+        assert_eq!(data["trait_arguments"].as_array().unwrap().len(), 1);
+        assert_eq!(data["trait_arguments"][0], "Int");
     }
 }
 

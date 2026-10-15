@@ -12217,6 +12217,102 @@ answer = match map { hash!["a" => _] => True }"#,
     }
 }
 
+// Follow executable children, including expressions stored in Facet metadata.
+fn assert_facet_path_dispatches_are_static(node: &TypedNode, inside_path: bool) -> usize {
+    use scar::typed::TraitDispatch;
+    let visit = |child: &TypedNode| assert_facet_path_dispatches_are_static(child, inside_path);
+    let visit_path = |path: &scar::typed::TypedFacetPath| {
+        path.segments
+            .iter()
+            .map(|segment| match segment {
+                TypedFacetSegment::ListIndex { index, .. } => {
+                    assert_facet_path_dispatches_are_static(index, true)
+                }
+                TypedFacetSegment::ListRange { start, end, .. } => {
+                    assert_facet_path_dispatches_are_static(start, true)
+                        + assert_facet_path_dispatches_are_static(end, true)
+                }
+                TypedFacetSegment::MapKey { key, .. } => {
+                    assert_facet_path_dispatches_are_static(key, true)
+                }
+                _ => 0,
+            })
+            .sum::<usize>()
+    };
+    match &node.node {
+        TypedInner::TraitCall { dispatch, args, .. } => {
+            assert!(
+                matches!(dispatch, TraitDispatch::Static(_)),
+                "executable Facet specialization retains unresolved dispatch: {node:?}"
+            );
+            usize::from(inside_path) + args.iter().map(visit).sum::<usize>()
+        }
+        TypedInner::FacetPath(path) => visit_path(path),
+        TypedInner::FacetView { source, path, .. } => visit(source) + visit_path(path),
+        TypedInner::FacetSet {
+            source,
+            path,
+            value,
+            ..
+        } => visit(source) + visit_path(path) + visit(value),
+        TypedInner::FacetOver {
+            source,
+            path,
+            update_fun,
+            ..
+        } => visit(source) + visit_path(path) + visit(update_fun),
+        TypedInner::App(callee, args) | TypedInner::InjectCall(callee, args) => {
+            visit(callee) + args.iter().map(visit).sum::<usize>()
+        }
+        TypedInner::Block(nodes)
+        | TypedInner::ListLiteral(nodes)
+        | TypedInner::TupleLiteral(nodes)
+        | TypedInner::StructLit(_, nodes)
+        | TypedInner::ConstructorCall(_, nodes) => nodes.iter().map(visit).sum(),
+        TypedInner::SafeBind(_, value, _, target) => {
+            let failure = match target {
+                SafeBindFailureTarget::EnclosingMonadFail(target)
+                | SafeBindFailureTarget::DoMonadFail(target) => visit(&target.call),
+                SafeBindFailureTarget::DoAlternative { empty } => visit(empty),
+                SafeBindFailureTarget::EnclosingMatchResultContext { .. }
+                | SafeBindFailureTarget::TopLevel => 0,
+                SafeBindFailureTarget::Deferred(_) => {
+                    panic!("executable Facet specialization retains deferred failure target")
+                }
+            };
+            visit(value) + failure
+        }
+        TypedInner::Bind(_, value)
+        | TypedInner::FieldAccess(value, _)
+        | TypedInner::EagerBoundary(value) => visit(value),
+        TypedInner::Closure(_, _, body)
+        | TypedInner::CaptureClosure(_, _, body)
+        | TypedInner::ExtractorClosure(_, _, body) => visit(body),
+        TypedInner::BinOp(_, left, right)
+        | TypedInner::ListCons(left, right)
+        | TypedInner::Pipe(left, right)
+        | TypedInner::Compose(_, left, right)
+        | TypedInner::Cause(left, right) => visit(left) + visit(right),
+        TypedInner::Match(value, arms) => {
+            visit(value)
+                + arms
+                    .iter()
+                    .map(|arm| arm.guard.as_ref().map_or(0, visit) + visit(&arm.body))
+                    .sum::<usize>()
+        }
+        TypedInner::If(condition, yes, no) => {
+            visit(condition) + visit(yes) + no.as_ref().map_or(0, |no| visit(no))
+        }
+        // Path bindings are metadata; visit_path checks their actual consumers.
+        TypedInner::PendingFacetPath(_) => 0,
+        TypedInner::Lit(_)
+        | TypedInner::Var(_)
+        | TypedInner::ListNil
+        | TypedInner::ErrorKind(_) => 0,
+        other => panic!("Facet regression must visit this executable node explicitly: {other:?}"),
+    }
+}
+
 fn check_facet_specializations(body: &str, values_ty: &str, values: &str, result_ty: &str) {
     let source = format!(
         r#"
@@ -12247,6 +12343,16 @@ outer(Ok(1), {{|x: Int| Ok(x)}}, {values})
         2,
         "same-type calls should share their specialization"
     );
+    for node in &nodes {
+        if let TypedInner::Def(_, name, _, _, _, _, body, _) = &node.node {
+            if name.name == "outer" {
+                assert!(
+                    assert_facet_path_dispatches_are_static(body, false) > 0,
+                    "the specialization must retain a checked call within a Facet path expression"
+                );
+            }
+        }
+    }
     assert!(
         source_types.contains(&Ty::Int),
         "Int source specialization missing: {source_types:?}"
@@ -12272,4 +12378,14 @@ fn facet_pending_dispatch_collects_path_type_inputs() {
     ] {
         check_facet_specializations(body, values_ty, values, result_ty);
     }
+    let missing_bound = "def missing(value: $T) -> Result<Int> { Facet::view(List.[value + value], [1]) }\nmissing(1)";
+    let error = typecheck_with_standard_environment(missing_bound)
+        .expect_err("Facet segment checking must reject an undeclared generic Add bound in Scar");
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::MissingGenericBound),
+        "{error:?}"
+    );
+    assert_eq!(&missing_bound[error.span.start..error.span.end], "value");
+    assert_eq!(error.structured.unwrap().data_json()["trait_name"], "Add");
 }

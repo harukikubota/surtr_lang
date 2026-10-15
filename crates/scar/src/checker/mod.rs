@@ -36,6 +36,8 @@ mod patterns;
 mod predeclare;
 mod provenance;
 mod relations;
+#[cfg(test)]
+mod session_contract_tests;
 mod signatures;
 mod specialize;
 mod trait_selection;

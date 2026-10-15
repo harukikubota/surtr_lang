@@ -168,7 +168,7 @@ impl Monad for Boxed<$T> {
     check("value = Functor::fmap(Monad::return::<Boxed>(1), {|x: Int| x})")
         .expect("an explicit inner constructor head supplies source evidence");
 
-    for prefix in ["", definitions] {
+    for prefix in ["", definitions, "caption = \"日本語の診断位置🦀\""] {
         for annotation in ["NotAType", "List<Int, String>", "DoBlock<Int>"] {
             for callback in [
                 format!("{{|x: {annotation}| Ok(x)}}"),
@@ -187,6 +187,15 @@ impl Monad for Boxed<$T> {
                     support::typecheck(support::resolve_with_builtin_prelude(&probed))
                         .expect_err("invalid annotations must fail before carrier selection");
                 assert_eq!(probed_error, direct_error, "{probed}");
+                let offending: String = probed
+                    .chars()
+                    .skip(probed_error.span.start)
+                    .take(probed_error.span.end - probed_error.span.start)
+                    .collect();
+                assert_eq!(
+                    offending, annotation,
+                    "annotation producer must keep its scalar-value span: {probed_error:?}"
+                );
             }
         }
         let source = format!("{prefix}\nvalue = Monad::return(1) |>= {{|x: String| Ok(x)}}");

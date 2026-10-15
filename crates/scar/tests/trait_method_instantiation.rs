@@ -1,7 +1,7 @@
 #[allow(dead_code)]
 mod support;
 
-use scar::typed::{TraitDispatch, TraitDispatchTarget, TypedInner};
+use scar::typed::{TraitDispatch, TraitDispatchTarget, TypedInner, TypedNode};
 use scar::types::{NominalType, Ty};
 
 fn check(source: &str) -> Vec<scar::typed::TypedNode> {
@@ -303,16 +303,156 @@ fn generic_caller_specializes_selected_trait_method_signature() {
     let nodes = check(
         r#"
 deftrait Echo { def echo(self: Self, value: $T) -> $T }
+impl Echo for Boolean { def echo(self: Self, value: $T) -> $T { value } }
 impl Echo for Int { def echo(self: Self, value: $T) -> $T { value } }
 def wrap(value: $T) -> $T { Echo::echo(1, value) }
+wrap(1)
 wrap("left")
+wrap(2)
+keep_int: (Int -> Int) = &wrap(&1)
+keep_string: (String -> String) = &wrap(&1)
+keep_int_again: (Int -> Int) = &wrap(&1)
+keep_int(3)
+keep_string("right")
+keep_int_again(4)
 "#,
     );
-    let call = nodes
+    let wrappers = nodes
         .iter()
-        .find(|node| matches!(&node.node, TypedInner::App(_, _) if node.ty == Ty::Str))
-        .expect("specialized wrapper call");
-    assert_eq!(call.ty, Ty::Str);
+        .filter_map(|node| match &node.node {
+            TypedInner::Def(index, id, _, params, ret, _, body, _) if id.name == "wrap" => {
+                Some((*index, params, ret, body))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(wrappers.len(), 2, "Int and String need exactly two bodies");
+    let mut wrapper_indices = Vec::new();
+    let mut method_indices = Vec::new();
+    for expected in [Ty::Int, Ty::Str] {
+        let (index, params, ret, body) = wrappers
+            .iter()
+            .find(|(_, _, ret, _)| **ret == expected)
+            .expect("specialized wrapper result");
+        assert_eq!(params[0].ty, expected);
+        assert_eq!(**ret, expected);
+        assert_eq!(body.ty, expected);
+        let mut expressions = Vec::new();
+        collect_callable_expressions(body, &mut expressions);
+        let calls = expressions
+            .iter()
+            .filter(|node| matches!(&node.node, TypedInner::TraitCall { method_name, .. } if method_name == "echo"))
+            .collect::<Vec<_>>();
+        assert_eq!(calls.len(), 1);
+        let call = calls[0];
+        let TypedInner::TraitCall {
+            receiver_ty,
+            dispatch: TraitDispatch::Static(TraitDispatchTarget::UserFunction { fun_idx, .. }),
+            args,
+            ..
+        } = &call.node
+        else {
+            panic!("concrete selected method required: {call:?}")
+        };
+        assert_eq!(*receiver_ty, Ty::Int, "Boolean candidate must be rejected");
+        assert_eq!(call.ty, expected);
+        assert_eq!(args[1].ty, expected);
+        let definition = nodes
+            .iter()
+            .find(|node| matches!(&node.node, TypedInner::Def(idx, ..) if idx == fun_idx))
+            .expect("dispatch must name an emitted method definition");
+        let TypedInner::Def(_, _, _, params, ret, _, body, _) = &definition.node else {
+            unreachable!()
+        };
+        assert_eq!(params[0].ty, Ty::Int);
+        assert_eq!(params[1].ty, expected);
+        assert_eq!(*ret, expected);
+        assert_eq!(body.ty, expected);
+        let mut expressions = Vec::new();
+        collect_callable_expressions(body, &mut expressions);
+        assert!(expressions.iter().any(|node| matches!(&node.node, TypedInner::Var(id) if id.unique_id == params[1].id.unique_id)),
+            "selected body must return its value parameter: {definition:?}");
+        wrapper_indices.push(*index);
+        method_indices.push(*fun_idx);
+    }
+    assert_ne!(wrapper_indices[0], wrapper_indices[1]);
+    assert_ne!(method_indices[0], method_indices[1]);
+    assert!(!nodes.iter().any(|node| matches!(&node.node, TypedInner::Def(_, id, _, params, ..) if id.name.ends_with("::echo") && params.first().is_some_and(|param| param.ty == Ty::Bool))),
+        "rejected candidate must not emit an executable specialization");
+
+    let direct_calls = nodes
+        .iter()
+        .filter_map(|node| match &node.node {
+            TypedInner::App(fun, _) => match &fun.ty {
+                Ty::UserFunc { fun_idx, .. } if wrapper_indices.contains(fun_idx) => {
+                    Some((node.ty.clone(), *fun_idx))
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        direct_calls,
+        vec![
+            (Ty::Int, wrapper_indices[0]),
+            (Ty::Str, wrapper_indices[1]),
+            (Ty::Int, wrapper_indices[0])
+        ]
+    );
+    let mut capture_calls = Vec::new();
+    for node in &nodes {
+        if let TypedInner::Bind(_, value) = &node.node {
+            if let TypedInner::CaptureClosure(_, _, body) = &value.node {
+                let mut expressions = Vec::new();
+                collect_callable_expressions(body, &mut expressions);
+                for expression in expressions {
+                    if let TypedInner::App(fun, _) = &expression.node {
+                        if let Ty::UserFunc {
+                            fun_idx,
+                            params,
+                            ret,
+                            ..
+                        } = &fun.ty
+                        {
+                            if wrapper_indices.contains(fun_idx) {
+                                assert_eq!(params, &vec![expression.ty.clone()]);
+                                assert_eq!(**ret, expression.ty);
+                                capture_calls.push((expression.ty.clone(), *fun_idx));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(
+        capture_calls, direct_calls,
+        "captures must reuse the exact concrete wrapper definitions"
+    );
+}
+
+fn collect_callable_expressions<'a>(node: &'a TypedNode, nodes: &mut Vec<&'a TypedNode>) {
+    nodes.push(node);
+    match &node.node {
+        TypedInner::Block(items) => {
+            for item in items {
+                collect_callable_expressions(item, nodes);
+            }
+        }
+        TypedInner::App(fun, args) => {
+            collect_callable_expressions(fun, nodes);
+            for arg in args {
+                collect_callable_expressions(arg, nodes);
+            }
+        }
+        TypedInner::TraitCall { args, .. } => {
+            for arg in args {
+                collect_callable_expressions(arg, nodes);
+            }
+        }
+        _ => {}
+    }
 }
 
 #[test]

@@ -1,6 +1,8 @@
 #[allow(dead_code)]
 mod support;
 use diagnostics::{DiagnosticData, SourceRole, TypeDiagnosticReason};
+use scar::typed::{TraitDispatch, TraitDispatchTarget, TypedInner, TypedNode};
+use scar::types::Ty;
 
 #[test]
 fn result_operator_diagnostics_preserve_outer_contract_and_token_origin() {
@@ -207,15 +209,137 @@ fn result_on_left_operand_also_reports_its_operator_signature() {
 }
 
 #[test]
-fn result_context_preserves_generic_payload_inference() {
+fn result_context_preserves_generic_payload_inference_and_finalizes_safe_dispatch() {
     let source = r#"defstruct Number<$T> { value: $T }
 impl Number { def new(value: $T) -> Number<$T> { Number { value: value } } }
 impl Div for Number<$T> {
   def safe_div(self: Number<$T>, rhs: Number<$T>) -> Result<Number<$T>> { Ok(self) }
 }
-value: Result<Number<Option<Int>>> = Number(Option::None) / Number(Option::None)"#;
-    support::typecheck(support::resolve_with_builtin_prelude(source))
+value: Result<Number<Option<Int>>> = Number(Option::None) / Number(Option::None)
+def identity(value: $T) -> $T { value }
+def divide(value: $T) -> Result<$T> where $T: Div {
+  identity(value) / identity(value)
+}
+divide(Number::new(7))
+divide(Number::new("seven"))"#;
+    let nodes = support::typecheck(support::resolve_with_builtin_prelude(source))
         .expect("compatible Result context is preserved");
+    let wrappers = nodes
+        .iter()
+        .filter_map(|node| match &node.node {
+            TypedInner::Def(_, id, _, params, ret, _, body, _) if id.name == "divide" => {
+                Some((params, ret, body))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(wrappers.len(), 2);
+    for expected in [Ty::Int, Ty::Str] {
+        let (params, ret, body) = wrappers
+            .iter()
+            .find(|(params, _, _)| matches!(&params[0].ty, Ty::Struct(_, fields) if fields[0].1 == expected))
+            .expect("concrete payload specialization");
+        assert!(matches!(ret, Ty::Result(payload, _) if payload.as_ref() == &params[0].ty));
+        assert_eq!(&body.ty, *ret);
+        let mut expressions = Vec::new();
+        safe_operator_expressions(body, &mut expressions);
+        let operators = expressions
+            .iter()
+            .filter(|node| matches!(&node.node, TypedInner::TraitCall { method_name, .. } if method_name == "safe_div"))
+            .collect::<Vec<_>>();
+        assert_eq!(operators.len(), 1);
+        let operator = operators[0];
+        let TypedInner::TraitCall {
+            dispatch: TraitDispatch::Static(TraitDispatchTarget::UserFunction { fun_idx, .. }),
+            receiver_ty,
+            args,
+            ..
+        } = &operator.node
+        else {
+            panic!("safe operator needs concrete user dispatch: {operator:?}")
+        };
+        assert_eq!(receiver_ty, &params[0].ty);
+        assert_eq!(&operator.ty, *ret);
+        let definition = nodes
+            .iter()
+            .find(|node| matches!(&node.node, TypedInner::Def(index, ..) if index == fun_idx))
+            .expect("safe dispatch definition");
+        let TypedInner::Def(_, _, _, method_params, method_ret, _, method_body, _) =
+            &definition.node
+        else {
+            unreachable!()
+        };
+        assert!(method_params.iter().all(|param| param.ty == params[0].ty));
+        assert_eq!(method_ret, *ret);
+        assert_eq!(&method_body.ty, *ret);
+        for argument in args {
+            let TypedInner::App(function, _) = &argument.node else {
+                panic!("generic identity call must remain in safe operator operand: {argument:?}")
+            };
+            let Ty::UserFunc {
+                fun_idx,
+                params: call_params,
+                ret: call_ret,
+                ..
+            } = &function.ty
+            else {
+                panic!("identity call needs concrete function identity")
+            };
+            assert_eq!(call_params, &vec![params[0].ty.clone()]);
+            assert_eq!(call_ret.as_ref(), &params[0].ty);
+            assert_eq!(argument.ty, params[0].ty);
+            let definition = nodes.iter().find(|node| matches!(&node.node, TypedInner::Def(index, id, ..) if index == fun_idx && id.name == "identity"))
+                .expect("operand call must name the identity definition");
+            let TypedInner::Def(_, _, _, params, ret, _, body, _) = &definition.node else {
+                unreachable!()
+            };
+            assert_eq!(&params[0].ty, ret);
+            assert_eq!(&body.ty, ret);
+        }
+    }
+
+    let invalid = "def divide(value: $T) -> Result<$T> { value / value }\ndivide(1)";
+    let error = support::typecheck(support::resolve_with_builtin_prelude(invalid))
+        .expect_err("concrete application cannot supply an undeclared Div bound");
+    assert_eq!(
+        error.reason(),
+        Some(TypeDiagnosticReason::MissingGenericBound),
+        "{error:?}"
+    );
+    assert_eq!(&invalid[error.span.start..error.span.end], "value");
+    let data = error
+        .structured
+        .as_ref()
+        .expect("structured missing bound")
+        .data_json();
+    assert_eq!(data["trait_name"], "Div");
+}
+
+fn safe_operator_expressions<'a>(node: &'a TypedNode, expressions: &mut Vec<&'a TypedNode>) {
+    expressions.push(node);
+    match &node.node {
+        TypedInner::Block(nodes) => {
+            for node in nodes {
+                safe_operator_expressions(node, expressions);
+            }
+        }
+        TypedInner::TraitCall { dispatch, args, .. } => {
+            assert!(
+                matches!(dispatch, TraitDispatch::Static(_)),
+                "pending safe dispatch: {node:?}"
+            );
+            for arg in args {
+                safe_operator_expressions(arg, expressions);
+            }
+        }
+        TypedInner::App(function, args) => {
+            safe_operator_expressions(function, expressions);
+            for arg in args {
+                safe_operator_expressions(arg, expressions);
+            }
+        }
+        _ => {}
+    }
 }
 
 #[test]

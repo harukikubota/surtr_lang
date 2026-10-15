@@ -6,13 +6,15 @@
 
 初回調査では製品コード・実行可能テストを変更せず、調査と実装計画を作成した。サブエージェントがテスト、分割、コンパイル性能を分担し、親エージェントが基準値の実測と全体の整合確認を行った。
 
-**追加依頼への対応:** 計測入力の整備は実施済み。[05_compile_inputs.md](05_compile_inputs.md) に記録した。機能別・規模別・複数 module の新規 22 入口を追加し、既存 2 入力と合わせて cold / disk hit 各 1 回のコンパイルを確認した。コンパイラのリファクタリングと回帰テスト追加は引き続き計画段階である。
+**追加依頼への対応:** 計測入力の整備は実施済み。[05_compile_inputs.md](05_compile_inputs.md) に記録した。機能別・規模別・複数 module の新規 22 入口を追加し、既存 2 入力と合わせて cold / disk hit 各 1 回のコンパイルを確認した。
+
+**テスト計画の実施（2026-10-16）:** P0 / P1 の T-01〜T-12 を追加・拡張した。対応箇所と検証結果は [01_test_plan.md の実施記録](01_test_plan.md#8-テスト計画の実施2026-10-16) を参照。コンパイラのリファクタリングと性能改善は引き続き計画段階である。
 
 ## 調査結果
 
 | 項目 | 結論 | 詳細 |
 |---|---|---|
-| テストケースの追加 | 既存の成功・拒否に加え、nested probe、失敗後の再試行、通常／in-place API、full／prefix compile の比較を補う。P0 は 7 群、P1 は 5 群 | [01_test_plan.md](01_test_plan.md) |
+| テストケースの追加 | 既存の成功・拒否に加え、nested probe、失敗後の再試行、通常／in-place API、full／prefix compile の比較を補った。P0 の7群、P1 の5群を追加・拡張済み | [01_test_plan.md](01_test_plan.md) |
 | ファイル分割 | `expr.rs` 16,407 行を呼出し、Facet、process、literal、closure などへ分ける。最初は `impl Checker` の移動にとどめ、状態所有者の再設計と混ぜない | [02_file_split.md](02_file_split.md) |
 | `.srt` コンパイル時間 | 既存の共有化・index・prefix cache を前提に、Error 宣言時の child 状態、Trait 前処理、specialization の再走査を調べる。短縮効果は未検証 | [03_compile_time.md](03_compile_time.md) |
 | 基準値 | release binary で 3 入力 × cold / disk hit × 5 回を計測。追加 profile 6 回と生ログを保存 | [04_baseline.md](04_baseline.md) |
@@ -81,4 +83,4 @@ cold の標準定義 load は約 407〜410 ms（各条件の中央値）。別�
 - 別エージェントのレビューを実施。既に scope 化済みの経路を再提案していた箇所と、rollback 後の関数番号再割当を禁止しかねないテスト条件を修正した。
 - 初回調査では Scar / workspace の nextest、標準テスト、生成 bytecode の実行は未実施。後続の入力整備では標準テスト全件の成功を確認した。コンパイル成功をリファクタリング後の回帰検証とは扱わない。
 
-残件は、計画に沿った回帰テスト追加・ファイル分割・性能改善の実装と検証。追加依頼で規模別・追加 module の入力と `heavy_compile.srt` の現行化は完了したが、反復測定と最適化前後の比較は未実施。Error 宣言内の処理内訳と長い REPL session も未測定である。
+回帰テスト追加は 2026-10-16 に実施した。残件は、計画に沿ったファイル分割・性能改善の実装と検証。追加依頼で規模別・追加 module の入力と `heavy_compile.srt` の現行化は完了したが、反復測定と最適化前後の比較は未実施。Error 宣言内の処理内訳と長い REPL session も未測定である。

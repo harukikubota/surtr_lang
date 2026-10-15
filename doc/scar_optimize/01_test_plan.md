@@ -1,6 +1,6 @@
 # Scar リファクタリングのテスト計画
 
-調査対象は `a0d430a609da73f7f35bbba7a01f41f9b28dfc09`、調査日は 2026-10-15。本書は追加・拡張するテストの案であり、テストの追加や実行結果ではない。製品コードと実行可能テストは変更していない。
+調査対象は `a0d430a609da73f7f35bbba7a01f41f9b28dfc09`、調査日は 2026-10-15。第1〜7節は初回調査のテスト計画と判断根拠を記録している。2026-10-16 に T-01〜T-12 の回帰テストを追加・拡張した。対応箇所と検証結果は第8節に記す。コンパイラの製品処理は変更していない。
 
 Scar には、型推論の成功・拒否に加え、候補検査の rollback、共有状態の分離、構造化診断、特殊化後の型を検査する回帰テストがある。大規模な変更に備えるには、この既存ケースを維持したうえで、**状態を分割する境界と、処理を省略・共有する最適化の境界**を補うのが先になる。単純な型不一致を各層へ重複追加することは避ける。
 
@@ -121,3 +121,47 @@ cache 条件を変えて検証する場合は、setup と本体に同じ `CARGO_
 テスト追加・分割の受入条件は、登録漏れがないこと、変更する状態・処理の成功と拒否を最も直接的な層で固定すること、失敗ケースが目的の reason で失敗すること、既存の公開 API / 型規則 / 診断を維持すること。実装を変えないテスト追加では、成功している動作を人工的に壊して Red を作らない。
 
 今回確認したのはソース、登録構成、診断・状態契約である。Cargo / nextest、標準 SRT テスト、coverage、性能測定はこの担当調査では未実行。提案ケースの入力詳細は、実装ターンで最小入力に落として構文・型規則を確認する。未実行の追加案を回帰再現済み、または既知の不具合として扱わない。
+
+
+## 8. テスト計画の実施（2026-10-16）
+
+実施開始時の HEAD は `95b8b5ed2758c3cc37b6614b416f7b2bb80ef8e5`。既存契約を維持するテスト追加として level2 で実施した。3つのサブエージェントが relation / candidate、session / prefix、specialization を分担し、親が P1 の境界追加、差分確認、統合検証を担当した。
+
+| ID | 実施した検査 | 配置 |
+|---|---|---|
+| T-01 | nested probe の成功・拒否で代入と `Show` obligation を各境界へ復元し、後続 `String` assertion を確認 | `relations.rs` の `nested_relation_probes_restore_each_boundary_on_success_and_failure` |
+| T-02 | 代入先だけから到達する変数の bounds / pending obligation / process marker を戻し、clean checker と後続判定を比較 | 同 `relation_probe_restores_state_reachable_only_through_substitution` |
+| T-03 | capture binding、Deferred pattern、unused-value warning の実 producer を呼び、候補順の反転・rollback・採用後の型、診断、alias、warning を比較 | `expr.rs` の `candidate_rollback_isolates_generated_capture_aliases_and_warnings_in_either_order` |
+| T-04 | 共通 prefix の兄弟 session と失敗側の retry を比較。transactional の失敗時保持と in-place の明示 rollback を区別 | `session_contract_tests.rs` の `failed_suffix_preserves_transactional_state_and_explicit_rollback_allows_retry` |
+| T-05 | 同じ resolved suffix を通常／in-place API で検査し、型、call target、enum / nominal 定義、process metadata、boot plan、構造化診断と span を比較 | 同 `transactional_and_in_place_staged_outputs_and_structured_failures_match` |
+| T-06 | 実際の標準定義を初めから検査する経路と checkpoint / resolve resume 経路を比較。default method、constructor capability、process handler、失敗診断を含む | 同 `full_standard_compile_and_checkpoint_resume_preserve_user_contracts` |
+| T-07 | 不適合な receiver の impl を先に宣言し、direct / capture の Int → String → Int 呼び出しで具体化の共有・分離と dispatch / 定義 / body の対応を確認 | `trait_method_instantiation.rs` の既存 generic caller テストを拡張。失敗 probe の complete identity は既存 crate-local テストを併用 |
+| T-08 | tuple / list / closure / match の `Option::None` を期待型あり／なしで対にし、成功時の Int slot と拒否時の reason / constructor span を確認。正当な多相定義と Err の成功 slot も維持 | `enum_constructor_unresolved_type_arguments.rs` |
+| T-09 | nested head の3つの非重複 impl を全6宣言順で検査。成功時の具体 dispatch と body、不完全な head match の拒否 reason / trait argument を確認 | `trait_impl_applicability.rs` の既存 order test を拡張 |
+| T-10 | 日本語と emoji を先行させ、候補内の未知型・型引数 arity などの注釈診断を直接呼出しと比較。元注釈を Unicode scalar value 単位の span が指すことを確認 | `common_constructor_invocation.rs` の既存 carrier test を拡張 |
+| T-11 | 64段の diamond と共有終端の成功、末尾の diamond だけが循環する拒否を生成。循環の構成要素と宣言 span を確認 | `type_dependency_stack.rs`。recursive enum の境界は既存 surface test を維持 |
+| T-12 | Extractor、Facet の index / range / key、safe operator、capture 内 generic call で具体 dispatch と参照先署名・body の対応を確認。Add / Div 制約欠落は Scar の reason / span / trait で拒否を確認 | 既存 `generic_extractor_specialization.rs`、`safe_operator_diagnostics.rs`、`typecheck_surface.rs` を拡張 |
+
+T-03 は候補 checkpoint API を直接検査する。各状態は実 producer で生成するが、この1ケースだけで候補列挙アルゴリズム全体を検査したとは扱わない。T-07 の統合ケースと既存の失敗 probe identity ケースを併用する。
+
+T-05 の生成 process wrapper には実行ごとに異なる一時 binding UID が含まれるため、署名と本文内の callable / static dispatch、引数・結果型を比較する。SafeBind の失敗呼出しも含む。生成本文全体の α 同値性は検査していない。利用者が記述した handler と user node は直接比較する。
+
+T-06 は disk cache を使わず標準 prefix を構築する。full compile と suffix compile で割当順が異なる生の tag / 型変数 / 関数番号は一律比較せず、具体呼出し型、canonical callable 名、参照先定義、metadata とユーザ診断を比較する。Facet の未消費 path binding は compile-time metadata として許し、実際の consumer の segment 式では static dispatch を要求する。
+
+新規テストの構文・IR に関する初期の期待違いは、現行仕様と実データを確認してテスト側で修正した。成功動作を人工的に壊す Red は作成していない。製品処理、bucket 数、schema / VM version は変更していない。
+
+検証結果:
+
+| コマンド | 結果 |
+|---|---|
+| `rtk cargo nextest run -p scar --lib -E 'test(relation) \| test(candidate_rollback)'` | 9 passed / 87 skipped（対象 filter による除外） |
+| `rtk cargo nextest run -p scar --lib session_contract_tests` | 3 passed / 93 skipped（対象 filter による除外） |
+| `rtk cargo nextest run -p scar --test safe_operator_diagnostics --test generic_extractor_specialization --test trait_method_instantiation` | 32 passed |
+| `rtk cargo nextest run -p scar --test trait_method_instantiation` | 最後の不採用候補 assertion 修正後、15 passed |
+| `rtk cargo nextest run -p scar --test enum_constructor_unresolved_type_arguments --test typecheck_surface` | 成功 slot と Facet failure target の補強後、17 passed |
+| `rtk cargo nextest run -p scar` | 404 passed、39 binaries |
+| `rtk cargo nextest run --profile ci --workspace` | 2,622 passed、70 binaries。cold CLI を含み、失敗・除外なし |
+
+T-09 / T-10 / T-11 の focused 検査も実施し、上記 Scar 全体、修正後の focused 検査、最終 CI profile の成功で確認した。変更した Rust ファイルの `rustfmt --check`、`git diff --check`、文書の相対リンクを確認した。別担当による差分レビューを行い、成功 slot の直接検査、Facet の failure call 走査、不採用候補検査の名前依存、process wrapper 内 dispatch 比較の指摘を反映した。
+
+標準ソースと API は変更していないため `cargo run -- test --quiet --all` は今回は未実施。coverage、mutation testing、コンパイル性能測定、ファイル分割と最適化は実施していない。

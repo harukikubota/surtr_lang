@@ -981,6 +981,136 @@ mod tests {
     use super::*;
 
     #[test]
+    fn nested_relation_probes_restore_each_boundary_on_success_and_failure() {
+        for inner_succeeds in [true, false] {
+            let mut checker = Checker::with_persistent_state(
+                crate::test_support::session_from_cached_std_prelude().state,
+                TypecheckContext::default(),
+            );
+            let a = checker.env.fresh_tyvar();
+            let b = checker.env.fresh_tyvar();
+            let Ty::Var(a_variable) = a else {
+                unreachable!()
+            };
+            checker.pending_trait_obligations.insert(
+                a_variable,
+                vec![PendingTraitObligation {
+                    trait_id: checker.trait_key_by_short_name("Show").unwrap(),
+                    args: Vec::new(),
+                    receiver: a.clone(),
+                }],
+            );
+            let initial = checker.substitutions.clone();
+            let initial_obligations = checker.pending_trait_obligations.clone();
+            checker.with_type_relation_probe(&[&a, &b], |checker| {
+                assert!(checker.types_compatible(&a, &b).unwrap());
+                let outer = checker.substitutions.clone();
+                let outer_obligations = checker.pending_trait_obligations.clone();
+                assert_ne!(outer_obligations, initial_obligations);
+                let expected = Ty::Tuple(vec![b.clone(), Ty::Int]);
+                let actual = Ty::Tuple(vec![
+                    Ty::Bool,
+                    if inner_succeeds { Ty::Int } else { Ty::Str },
+                ]);
+                let result = checker.with_type_relation_probe(&[&expected, &actual], |checker| {
+                    let result = checker.types_compatible(&expected, &actual).unwrap();
+                    assert_eq!(checker.resolve_ty(&a), Ty::Bool);
+                    assert_eq!(checker.resolve_ty(&b), Ty::Bool);
+                    result
+                });
+                assert_eq!(result, inner_succeeds);
+                assert_eq!(checker.substitutions, outer);
+                assert_eq!(checker.pending_trait_obligations, outer_obligations);
+                assert_eq!(checker.resolve_ty(&a), b);
+                assert_eq!(checker.resolve_ty(&b), b);
+            });
+            assert_eq!(checker.substitutions, initial);
+            assert_eq!(checker.pending_trait_obligations, initial_obligations);
+            let span = Span { start: 0, end: 1 };
+            checker
+                .assert_type_relation(
+                    &a,
+                    &Ty::Str,
+                    checker.type_fact(SourceRole::Expected, &span, &a),
+                    checker.type_fact(SourceRole::Value, &span, &Ty::Str),
+                    TypeDiagnosticReason::ArgumentTypeMismatch,
+                    DiagnosticOrigin::Call,
+                    "after_nested_probe",
+                    0,
+                )
+                .expect("the rolled-back Boolean must not constrain the next assertion");
+            assert_eq!(checker.resolve_ty(&a), Ty::Str);
+            assert_eq!(checker.resolve_ty(&b), b);
+            assert_eq!(checker.candidate_probe_checkpoint_count.get(), 0);
+        }
+    }
+
+    #[test]
+    fn relation_probe_restores_state_reachable_only_through_substitution() {
+        let mut checker = Checker::new(TypecheckContext::default());
+        let source = checker.env.fresh_tyvar();
+        let Ty::Var(reachable) = checker.env.fresh_tyvar() else {
+            unreachable!()
+        };
+        let Ty::Var(destination) = checker.env.fresh_tyvar() else {
+            unreachable!()
+        };
+        assert!(checker
+            .types_compatible(&source, &Ty::Var(reachable))
+            .unwrap());
+        checker
+            .tyvar_bounds
+            .insert(reachable, vec!["Marker".into()]);
+        checker.pending_trait_obligations.insert(
+            reachable,
+            vec![PendingTraitObligation {
+                trait_id: "Marker".into(),
+                args: vec![Ty::Var(reachable)],
+                receiver: Ty::Var(reachable),
+            }],
+        );
+        checker.process_marker_tyvars.insert(reachable);
+        let substitutions = checker.substitutions.clone();
+        let bounds = checker.tyvar_bounds.clone();
+        let obligations = checker.pending_trait_obligations.clone();
+        let markers = checker.process_marker_tyvars.clone();
+        let mut clean = checker.spawn_child_checker(checker.env.clone());
+        let expected = Ty::Tuple(vec![source.clone(), Ty::Int]);
+        let actual = Ty::Tuple(vec![Ty::Var(destination), Ty::Str]);
+        assert!(
+            !checker.with_type_relation_probe(&[&expected, &actual], |checker| {
+                let compatible = checker.types_compatible(&expected, &actual).unwrap();
+                assert_eq!(checker.resolve_ty(&source), Ty::Var(destination));
+                assert_eq!(checker.tyvar_bounds[&destination], vec!["Marker"]);
+                assert!(!checker.pending_trait_obligations.contains_key(&reachable));
+                assert_eq!(
+                    checker.pending_trait_obligations[&destination][0].receiver,
+                    Ty::Var(destination)
+                );
+                assert!(checker.process_marker_tyvars.contains(&destination));
+                compatible
+            })
+        );
+        assert_eq!(checker.substitutions, substitutions);
+        assert_eq!(checker.tyvar_bounds, bounds);
+        assert_eq!(checker.pending_trait_obligations, obligations);
+        assert_eq!(checker.process_marker_tyvars, markers);
+        for variable in [reachable, destination] {
+            for ty in [Ty::Int, Ty::ProcessMarker("Global::OutHandler".into())] {
+                let actual = checker
+                    .with_type_relation_probe(&[&Ty::Var(variable), &ty], |checker| {
+                        checker.types_compatible(&Ty::Var(variable), &ty)
+                    });
+                let expected = clean
+                    .with_type_relation_probe(&[&Ty::Var(variable), &ty], |checker| {
+                        checker.types_compatible(&Ty::Var(variable), &ty)
+                    });
+                assert_eq!(actual.unwrap(), expected.unwrap());
+            }
+        }
+        assert_eq!(checker.candidate_probe_checkpoint_count.get(), 0);
+    }
+    #[test]
     fn speculative_type_relation_restores_success_and_failure_state_without_candidate_snapshot() {
         let mut checker = Checker::new(TypecheckContext::default());
         let Ty::Var(source) = checker.env.fresh_tyvar() else {
