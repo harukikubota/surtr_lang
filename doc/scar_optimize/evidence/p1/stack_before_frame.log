@@ -1,0 +1,17 @@
+(lldb) target create "target/debug/surtr"
+Current executable set to '/Users/haruca/work/rust/surtr/target/debug/surtr' (arm64).
+(lldb) disassemble -s 0x1007d1cd0 -c 12
+surtr`scar::checker::specialize::rewrite::_$LT$impl$u20$scar..checker..state..Checker$GT$::rewrite_other_specializations_in_node::hb86e92695ec5021c:
+surtr[0x1007d1cd0] <+0>:  stp    x28, x27, [sp, #-0x20]!
+surtr[0x1007d1cd4] <+4>:  stp    x29, x30, [sp, #0x10]
+surtr[0x1007d1cd8] <+8>:  add    x29, sp, #0x10
+surtr[0x1007d1cdc] <+12>: sub    x9, sp, #0x12, lsl #12    ; =0x12000 
+surtr[0x1007d1ce0] <+16>: sub    sp, sp, #0x1, lsl #12     ; =0x1000 
+surtr[0x1007d1ce4] <+20>: str    xzr, [sp]
+surtr[0x1007d1ce8] <+24>: cmp    sp, x9
+surtr[0x1007d1cec] <+28>: b.ne   0x1007d1ce0               ; <+16>
+surtr[0x1007d1cf0] <+32>: sub    sp, sp, #0xb90
+surtr[0x1007d1cf4] <+36>: str    xzr, [sp]
+surtr[0x1007d1cf8] <+40>: add    x9, sp, #0x10, lsl #12    ; =0x10000 
+surtr[0x1007d1cfc] <+44>: add    x9, x9, #0x7d0
+(lldb) quit

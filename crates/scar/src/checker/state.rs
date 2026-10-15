@@ -183,41 +183,6 @@ impl Checker {
         checker
     }
 
-    pub(super) fn absorb_child_progress(&mut self, child: &Checker) {
-        let profile = self.profiler.start();
-        self.substitutions = child.substitutions.clone();
-        self.tyvar_bounds = child.tyvar_bounds.clone();
-        self.process_marker_tyvars = child.process_marker_tyvars.clone();
-        for (current, child_use) in self
-            .active_capabilities
-            .iter_mut()
-            .zip(child.active_capabilities.iter())
-        {
-            current.consumed |= child_use.consumed;
-        }
-        self.env.next_tyvar = self.env.next_tyvar.max(child.env.next_tyvar);
-        self.env.next_tag = self.env.next_tag.max(child.env.next_tag);
-        if self.seen_builtin_type_decls.len() != child.seen_builtin_type_decls.len() {
-            self.seen_builtin_type_decls = child.seen_builtin_type_decls.clone();
-        }
-        if self.impl_method_uids.len() != child.impl_method_uids.len() {
-            self.impl_method_uids = child.impl_method_uids.clone();
-        }
-        if self.traits.len() != child.traits.len() {
-            self.traits = child.traits.clone();
-        }
-        self.trait_impls = child.trait_impls.clone();
-        self.trait_impl_index_by_base_trait = child.trait_impl_index_by_base_trait.clone();
-        if self.trait_methods_by_qualified_name.len() != child.trait_methods_by_qualified_name.len()
-        {
-            self.trait_methods_by_qualified_name = child.trait_methods_by_qualified_name.clone();
-        }
-        self.warnings
-            .extend(child.warnings.as_slice().iter().cloned());
-        self.profiler
-            .finish(ProfileEvent::ChildCheckerAbsorb, profile);
-    }
-
     pub(super) fn persistent_state_with_env(&self, env: TypeEnv) -> PersistentCheckerState {
         PersistentCheckerState {
             env,

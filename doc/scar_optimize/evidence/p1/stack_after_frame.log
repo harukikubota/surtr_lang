@@ -1,0 +1,31 @@
+(lldb) target create "target/debug/deps/trait_method_instantiation-30f7bc9d199bb840"
+Current executable set to '/Users/haruca/work/rust/surtr/target/debug/deps/trait_method_instantiation-30f7bc9d199bb840' (arm64).
+(lldb) disassemble -s 0x100518fb8 -c 12
+trait_method_instantiation-30f7bc9d199bb840`scar::checker::specialize::rewrite::_$LT$impl$u20$scar..checker..state..Checker$GT$::rewrite_callable_definition_specializations_in_node::hf219976ea68d3f09:
+trait_method_instantiation-30f7bc9d199bb840[0x100518fb8] <+0>:  stp    x28, x27, [sp, #-0x20]!
+trait_method_instantiation-30f7bc9d199bb840[0x100518fbc] <+4>:  stp    x29, x30, [sp, #0x10]
+trait_method_instantiation-30f7bc9d199bb840[0x100518fc0] <+8>:  add    x29, sp, #0x10
+trait_method_instantiation-30f7bc9d199bb840[0x100518fc4] <+12>: sub    sp, sp, #0x1, lsl #12     ; =0x1000 
+trait_method_instantiation-30f7bc9d199bb840[0x100518fc8] <+16>: str    xzr, [sp]
+trait_method_instantiation-30f7bc9d199bb840[0x100518fcc] <+20>: sub    sp, sp, #0x4a0
+trait_method_instantiation-30f7bc9d199bb840[0x100518fd0] <+24>: str    xzr, [sp]
+trait_method_instantiation-30f7bc9d199bb840[0x100518fd4] <+28>: sub    x9, x29, #0x31
+trait_method_instantiation-30f7bc9d199bb840[0x100518fd8] <+32>: str    x9, [sp, #0x170]
+trait_method_instantiation-30f7bc9d199bb840[0x100518fdc] <+36>: add    x8, sp, #0x240
+trait_method_instantiation-30f7bc9d199bb840[0x100518fe0] <+40>: str    x8, [sp, #0x178]
+trait_method_instantiation-30f7bc9d199bb840[0x100518fe4] <+44>: str    x0, [sp, #0x180]
+(lldb) disassemble -s 0x10050d020 -c 12
+trait_method_instantiation-30f7bc9d199bb840`scar::checker::specialize::rewrite::_$LT$impl$u20$scar..checker..state..Checker$GT$::rewrite_other_specializations_in_node::hbf83e6c95e14c80d:
+trait_method_instantiation-30f7bc9d199bb840[0x10050d020] <+0>:  stp    x28, x27, [sp, #-0x20]!
+trait_method_instantiation-30f7bc9d199bb840[0x10050d024] <+4>:  stp    x29, x30, [sp, #0x10]
+trait_method_instantiation-30f7bc9d199bb840[0x10050d028] <+8>:  add    x29, sp, #0x10
+trait_method_instantiation-30f7bc9d199bb840[0x10050d02c] <+12>: sub    x9, sp, #0x12, lsl #12    ; =0x12000 
+trait_method_instantiation-30f7bc9d199bb840[0x10050d030] <+16>: sub    sp, sp, #0x1, lsl #12     ; =0x1000 
+trait_method_instantiation-30f7bc9d199bb840[0x10050d034] <+20>: str    xzr, [sp]
+trait_method_instantiation-30f7bc9d199bb840[0x10050d038] <+24>: cmp    sp, x9
+trait_method_instantiation-30f7bc9d199bb840[0x10050d03c] <+28>: b.ne   0x10050d030               ; <+16>
+trait_method_instantiation-30f7bc9d199bb840[0x10050d040] <+32>: sub    sp, sp, #0x160
+trait_method_instantiation-30f7bc9d199bb840[0x10050d044] <+36>: add    x9, sp, #0x10, lsl #12    ; =0x10000 
+trait_method_instantiation-30f7bc9d199bb840[0x10050d048] <+40>: add    x9, x9, #0x230
+trait_method_instantiation-30f7bc9d199bb840[0x10050d04c] <+44>: str    x9, [sp, #0x1028]
+(lldb) quit

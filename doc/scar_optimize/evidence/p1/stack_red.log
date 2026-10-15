@@ -1,0 +1,21 @@
+info: experimental features enabled: setup-scripts
+   Compiling scar v0.1.0 (/Users/haruca/work/rust/surtr/crates/scar)
+    Finished `test` profile [unoptimized] target(s) in 1.65s
+────────────
+ Nextest run ID 8362586f-1126-453a-840a-2c1ab0035d9d with nextest profile: default
+    Starting 1 test across 1 binary (15 tests skipped)
+     SIGABRT [   0.429s] (1/1) scar::trait_method_instantiation generic_forwarding_chain_64_fits_the_cli_stack_in_both_declaration_orders
+  stdout ───
+
+    running 1 test
+  stderr ───
+
+    thread 'scar-generic-forwarding-stack-regression' (3593645) has overflowed its stack
+    fatal runtime error: stack overflow, aborting
+
+    (test aborted with signal 6: SIGABRT)
+
+────────────
+     Summary [   0.431s] 1 test run: 0 passed, 1 failed, 15 skipped
+     SIGABRT [   0.429s] (1/1) scar::trait_method_instantiation generic_forwarding_chain_64_fits_the_cli_stack_in_both_declaration_orders
+error: test run failed

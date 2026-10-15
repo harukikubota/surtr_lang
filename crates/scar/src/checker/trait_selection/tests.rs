@@ -91,17 +91,6 @@ mod applicability_tests {
             &child.trait_impls[&untouched_key]
         ));
 
-        parent.absorb_child_progress(&child);
-        assert!(Arc::ptr_eq(
-            &parent.trait_impls[&key],
-            &child.trait_impls[&key]
-        ));
-        assert!(!parent.trait_impls[&key].methods["carry"]
-            .body_obligations
-            .is_empty());
-        assert!(sibling.trait_impls[&key].methods["carry"]
-            .body_obligations
-            .is_empty());
         let bytes = bincode::serialize(&checkpoint).unwrap();
         let restored: ScarCheckpoint = bincode::deserialize(&bytes).unwrap();
         assert!(restored.trait_impls[&key].methods["carry"]

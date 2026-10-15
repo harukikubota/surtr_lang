@@ -1,0 +1,21 @@
+FAIL [   1.592s] (1/1) scar checker::definitions::nominal::deferror_scope_tests::do_block_retains_outer_binding_inference_for_later_annotations
+  stdout ───
+
+    running 1 test
+    test checker::definitions::nominal::deferror_scope_tests::do_block_retains_outer_binding_inference_for_later_annotations ... FAILED
+
+    failures:
+
+    failures:
+        checker::definitions::nominal::deferror_scope_tests::do_block_retains_outer_binding_inference_for_later_annotations
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 100 filtered out; finished in 1.58s
+
+  stderr ───
+
+    thread 'checker::definitions::nominal::deferror_scope_tests::do_block_retains_outer_binding_inference_for_later_annotations' (3495170) panicked at crates/scar/src/checker/definitions/nominal.rs:639:36:
+    do inference must reject a later conflicting type: [TypedNode { ty: Unit, span: Span { start: 0, end: 7 }, node: Bind(Located(Span { start: 0, end: 2 }, Var(List(Str), ResolvedId { name: "xs", qualified_name: None, unique_id: 3701, compiler_generated: false, symbol_info: None, span: Span { start: 0, end: 2 } })), TypedNode { ty: List(Var(7551)), span: Span { start: 5, end: 7 }, node: ListNil }) }, TypedNode { ty: Enum("Global::Option", [Unit]), span: Span { start: 24, end: 132 }, node: Block([TypedNode { ty: Unit, span: Span { start: 59, end: 77 }, node: Bind(Located(Span { start: 59, end: 61 }, Var(List(Int), ResolvedId { name: "ys", qualified_name: None, unique_id: 3702, compiler_generated: false, symbol_info: None, span: Span { start: 59, end: 61 } })), TypedNode { ty: List(Int), span: Span { start: 75, end: 77 }, node: Var(ResolvedId { name: "xs", qualified_name: None, unique_id: 3701, compiler_generated: false, symbol_info: None, span: Span { start: 75, end: 77 } }) }) }, TypedNode { ty: Enum("Global::Option", [Unit]), span: Span { start: 98, end: 114 }, node: ConstructorCall(245, [TypedNode { ty: Int, span: Span { start: 98, end: 114 }, node: Lit(Int(0)) }, TypedNode { ty: Unit, span: Span { start: 111, end: 113 }, node: Lit(Unit) }]) }]) }, TypedNode { ty: Unit, span: Span { start: 149, end: 170 }, node: Bind(Located(Span { start: 149, end: 151 }, Var(List(Str), ResolvedId { name: "zs", qualified_name: None, unique_id: 3703, compiler_generated: false, symbol_info: None, span: Span { start: 149, end: 151 } })), TypedNode { ty: List(Str), span: Span { start: 168, end: 170 }, node: Var(ResolvedId { name: "xs", qualified_name: None, unique_id: 3701, compiler_generated: false, symbol_info: None, span: Span { start: 168, end: 170 } }) }) }]
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+cargo nextest: 0 passed, 1 failed, 100 skipped (1 binary, 1.594s)
+[full output: "$HOME/Library/Application Support/rtk/tee/1792105878_cargo_nextest.log"]

@@ -1,0 +1,91 @@
+{
+  "level": 2,
+  "final_compiler_source_manifest": "manifest.json build_provenance.after",
+  "final_workspace": {
+    "command": "rtk cargo nextest run --profile ci --workspace",
+    "exit_code": 0,
+    "passed": 2628,
+    "log": "workspace-ci.log"
+  },
+  "standard_tests": {
+    "command": "CARGO_TARGET_DIR=<after-target> cargo run --release -p rune --bin surtr -- test --quiet --all",
+    "exit_code": 0,
+    "log": "stdlib-tests.log",
+    "count": null
+  },
+  "p1_focused": {
+    "command": "rtk cargo nextest run -p scar --lib deferror_scope_tests",
+    "exit_code": 0,
+    "passed": 5,
+    "filtered_out": 96,
+    "log": "scope_green.log"
+  },
+  "specialization_focused": {
+    "command": "rtk cargo nextest run -p scar --test trait_method_instantiation",
+    "exit_code": 0,
+    "passed": 16,
+    "log": "stack_green.log"
+  },
+  "scar_before_stack_correction": {
+    "command": "rtk cargo nextest run -p scar",
+    "exit_code": 0,
+    "passed": 409,
+    "note": "P1 final source; later stack-only correction included in final workspace run"
+  },
+  "debug_cli": {
+    "exit_code": 0,
+    "cases": 6,
+    "log": "debug-chains.json",
+    "main_stack_KiB": 8176,
+    "RUST_MIN_STACK": "unset",
+    "static_frames": "stack_frame_manifest.json"
+  },
+  "comparison": {
+    "exit_code": 0,
+    "runs": 960,
+    "cases": 24,
+    "iterations_per_variant_and_cache_condition": 10,
+    "wall_time_profiler": "disabled",
+    "summary": "summary.json",
+    "raw": "runs.jsonl.gz",
+    "jsonl_sha256": "d215605cb87e3158e042b78caa2d97aae5c2f53f2c20dc70c8201b50ae5a07a6",
+    "gzip_sha256": "bf72989fabbdf37ba275c3034aeee093932f5e9eaabcce893d7f6bd767d63844"
+  },
+  "profiler": {
+    "exit_code": 0,
+    "runs": 4,
+    "adoption_timing": false,
+    "log": "profiles.json"
+  },
+  "independent_review": {
+    "status": "completed",
+    "resolved_finding": "normalization undo changed existing do inference; corrected by deferror-local variable table snapshot",
+    "final_findings": 0
+  },
+  "measurement_script": {
+    "path": "tests/profile/scar_compile/measure.py",
+    "sha256": "cb0dce40e19a851182f61f7845c65870cc8fe152d8aead6646c68b7d02e01d94"
+  },
+  "notes": [
+    "Archived runs.jsonl.gz losslessly compresses 960 records with embedded stdout/stderr; *_file retains the original per-run relative path. Cache payloads and .eldr files stay in the temporary measurement directory.",
+    "Standard test quiet output has no count; no count is inferred.",
+    "Deferror variable-table and local-state clones remain. Process warm/incremental performance harness not implemented."
+  ],
+  "format_and_diff": {
+    "exit_code": 0,
+    "commands": [
+      "git diff --check",
+      "rustfmt --check --edition 2021 <7 changed Rust files>"
+    ]
+  },
+  "evidence_validation": {
+    "exit_code": 0,
+    "checks": [
+      "960 successful raw records and all cache/phase conditions",
+      "48 summary groups recomputed from raw values; 10 records per variant/cache/input",
+      "final compiler source hashes and archived source diff hash",
+      "identical before/after embedded lib source hashes",
+      "relative document links and measurement script syntax"
+    ]
+  }
+}

@@ -4,7 +4,9 @@
 本書はコード調査に基づく候補と測定計画であり、最適化の実装仕様を確定するものではない。
 今回の現行バイナリによる測定は [基準測定](04_baseline.md) に分ける。
 
-追加依頼で、以下の候補に対応する複数の測定入力を整備した。[入力一覧](../../tests/profile/scar_compile/README.md) と [検証記録](05_compile_inputs.md) を参照。最適化本体は未実装である。
+追加依頼で、以下の候補に対応する複数の測定入力を整備した。[入力一覧](../../tests/profile/scar_compile/README.md) と [検証記録](05_compile_inputs.md) を参照。
+
+**2026-10-16の実施:** 最初の一候補としてP1を実装した。全24入力・各条件10回のbefore / after比較と、通常debug stackの64段generic chain修正を含む検証結果は [06_deferror_scope.md](06_deferror_scope.md) を参照。以下のP1のコード説明は調査時点の挙動であり、現行は専用scopeへ置換済み。P2a / P2b以降の最適化は未実施である。
 
 ## 1. 最初に測るもの
 
@@ -24,12 +26,12 @@ trait の identity 検索は、費用を局所化できてから選ぶ次候補�
 |---|---|---|
 | stdlib の semantic snapshot、process 内共有、disk cache、cold build の single flight | [Xldr](../../crates/xldr/src/lib.rs) の `build_stdlib_snapshot`、`default_stdlib_semantic_snapshot` | 新規導入案にしない。cold / disk hit / process hit を分けて測る |
 | stdlib prefix から resolve / Scar / Forge を再開 | [Rune compile](../../crates/rune/src/compile.rs) の `compile_source_with_measurement` | stdlib を毎回全型検査している前提を置かない |
-| one-shot suffix の in-place 型検査 | [Scar session](../../crates/scar/src/checker/mod.rs) の `typecheck_staged_program_in_place_with_context` | transactional API と区別する。失敗後の session を再利用できる契約に変えない |
-| trait / impl 追加のない suffix で predeclare の全体処理を省略 | [predeclare](../../crates/scar/src/checker/predeclare.rs) の `declared_trait`、`declared_trait_impl`、`trait_impl_keys_in_stmts` | [既存計画](../optimize/014_scar_incremental_predeclare_fast_path.md) は実装と照合済み |
+| one-shot suffix の in-place 型検査 | [Scar session](../../crates/scar/src/checker/session.rs) の `typecheck_staged_program_in_place_with_context` | transactional API と区別する。失敗後の session を再利用できる契約に変えない |
+| trait / impl 追加のない suffix で predeclare の全体処理を省略 | [predeclare](../../crates/scar/src/checker/predeclare/mod.rs) の `declared_trait`、`declared_trait_impl`、`trait_impl_keys_in_stmts` | [既存計画](../optimize/014_scar_incremental_predeclare_fast_path.md) は実装と照合済み |
 | 型・enum metadata の `Arc` 共有と enum の constructor/tag index | [TypeEnv](../../crates/scar/src/env.rs) | metadata の共有は既存。外側の map や推論状態の複製とは分ける |
 | trait 定義・impl metadata と保持済み定義の共有、base trait ごとの impl index | [Checker state](../../crates/scar/src/checker/mod.rs) の `TraitDefinitions`、`TraitImplementations`、`SpecializableDefinitions`、`index_trait_impl` | 「毎回すべての impl 本体を深く複製する」という前提を置かない |
 | relation probe の対象型に含まれる推論変数だけを保存し、concrete / rigid-only 比較では保存を省略 | [relations](../../crates/scar/src/checker/relations.rs) の `type_relation_checkpoint_for` | checkpoint 全体の clone 削減として再提案しない |
-| specialization key による再利用、trait method 所属 index の一括構築 | [specialize](../../crates/scar/src/checker/specialize.rs) の `specialize_program`、`ensure_specialized_def` | key の再利用は維持し、分類・走査費用を別に調べる |
+| specialization key による再利用、trait method 所属 index の一括構築 | [specialize](../../crates/scar/src/checker/specialize/mod.rs) の `specialize_program`、`ensure_specialized_def` | key の再利用は維持し、分類・走査費用を別に調べる |
 
 [過去の計測手段監査](../optimize/011_compile_measurement_options_audit.md) の前半にある
 「phase が未実装で `n/a`」という記述は調査当時の状態である。現行の
@@ -58,7 +60,7 @@ Scar total 287.595ms、`DeferrorDef` 174件で163.654msだった。
 これらは包含関係のある計時なので加算しない。profile 有効時の一走行であり、
 163.654msすべてを除去できると解釈しない。
 
-[definitions.rs](../../crates/scar/src/checker/definitions.rs) の `check_deferror_def` は、
+[definitions/nominal.rs](../../crates/scar/src/checker/definitions/nominal.rs) の `check_deferror_def` は、
 各宣言で `self.env.clone()`、`spawn_child_checker`、本体の検査、`absorb_child_progress` を行う。
 このコードと回数の一致は、cold の子 Checker 費用を調べる直接の根拠になる。
 通常の関数本体には `check_body_in_isolated_scope` と `push_var_scope` / `pop_var_scope` が既存なので、
@@ -84,7 +86,7 @@ substitutions の保存・成功時反映・失敗時復元を表にして、子
 Scar total 8.436msのうち `specialize_program` が3.096msだった。
 現在の入力でも調査対象になる割合を持つが、以下の各走査の費用はまだ分離できていない。
 
-[specialize.rs](../../crates/scar/src/checker/specialize.rs) の `specialize_program` は、
+[specialize.rs](../../crates/scar/src/checker/specialize/mod.rs) の `specialize_program` は、
 `self.specializable_defs` と当該 suffix の定義を合わせ、次の処理を行う。
 
 1. `collect_direct_pattern_requirements`。
@@ -120,7 +122,7 @@ Scar total 20.627msのうち `predeclare_traits` が5.548msだった。
 この suffix は trait impl を持つため、「trait/impl の追加なし」の既存 fast path では除去できない。
 なお計時区間には `activate_nominal_declaration_bounds` も含まれる。
 
-[predeclare.rs](../../crates/scar/src/checker/predeclare.rs) の impl 登録・constructor mapping・
+[predeclare.rs](../../crates/scar/src/checker/predeclare/mod.rs) の impl 登録・constructor mapping・
 親 impl 被覆証明・method signature 構築を局所的に計時し、
 新規 impl に対して必要な検査と既存 impl への再検査を分ける。
 追加宣言のみの検査へ狭める場合も、追加によって既存候補との重複や親被覆が変わる境界を先に固定する。
@@ -136,7 +138,8 @@ method type list/where 制約、重複・曖昧性・循環の拒否を保つ。
 `absorb_child_progress` は子の substitutions / bounds などを親へ clone して戻す。
 一部 metadata の値は `Arc` で共有されるが、外側の `HashMap` や推論状態のコピーは残る。
 
-現行の child 作成は `check_deferror_def` と `trait_dependency_for_requirement` の probe に残る。
+調査時の child 作成は `check_deferror_def` と `trait_dependency_for_requirement` の probe に残っていた。
+P1実施後は後者のprobeを維持し、前者を専用scopeへ置き換えた。変数表の保存cloneは残している。
 通常関数・match arm・closure は既に `push_var_scope` / `pop_var_scope` を使うため、
 これらの child 廃止を新規案にはしない。既存 scope 内の保存・復元にもコピーがある場合は別に測る。
 `child_checker_spawn` / `child_checker_absorb` が支配的な入力を先に選び、
@@ -288,5 +291,5 @@ SURTR_SCAR_PROFILE=1 SURTR_STDLIB_CACHE_DIR="$measure_dir/generic_extractor_spec
 4. 最初の実装は一回の compile 呼び出し内に閉じた改善を優先する。
 5. 採用条件を満たしてから、session をまたぐ summary 保持や状態表現の変更を別仕様にする。
 
-本書で挙げた最適化は未実装。規模別入力は作成・コンパイル確認済み。process warm / incremental 専用 harness は未作成である。
+P1は実装・検証・性能比較済み。規模別入力も含む全24入口を各条件10回測定した。P2a / P2b以降の最適化とprocess warm / incremental専用harnessは未実施である。
 コードから確認できた反復処理を、まだ確認していない性能効果に読み替えない。

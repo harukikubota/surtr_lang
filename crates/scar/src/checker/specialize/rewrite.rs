@@ -231,6 +231,15 @@ impl Checker {
                     specialization_fun_idxs,
                     generated_defs,
                 ),
+            TypedInner::Def(..) | TypedInner::ExtractorDef(..) => self
+                .rewrite_callable_definition_specializations_in_node(
+                    node,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                ),
             TypedInner::Lit(..)
             | TypedInner::ErrorKind(_)
             | TypedInner::Var(..)
@@ -268,8 +277,6 @@ impl Checker {
             | TypedInner::ConstructorCall(..)
             | TypedInner::DeferrorDef(..)
             | TypedInner::ErrorConstruct { .. }
-            | TypedInner::Def(..)
-            | TypedInner::ExtractorDef(..)
             | TypedInner::BuiltinExtractorDecl(..)
             | TypedInner::Capture(..)
             | TypedInner::StructDef(..)
@@ -652,6 +659,69 @@ impl Checker {
             _ => unreachable!("specialization dispatcher selected a non-closure node"),
         };
 
+        Ok(Box::new(TypedNode { ty, span, node }))
+    }
+
+    // Generic forwarding retains this frame while specializing the next callable.
+    // Keep it separate from the temporaries of unrelated expression variants.
+    #[inline(never)]
+    fn rewrite_callable_definition_specializations_in_node(
+        &mut self,
+        node: TypedNode,
+        defs_by_fun_idx: &SpecializableDefinitions,
+        bound_tyvars_by_fun_idx: &HashMap<u32, CallableSpecializationRequirements>,
+        needs_specialization: &HashSet<u32>,
+        specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
+        generated_defs: &mut Vec<TypedNode>,
+    ) -> Result<Box<TypedNode>, Box<TypeError>> {
+        let TypedNode { ty, span, node } = node;
+        let node = match node {
+            TypedInner::Def(
+                fun_idx,
+                id,
+                type_params,
+                params,
+                ret_ty,
+                where_clause,
+                body,
+                visibility,
+            ) => TypedInner::Def(
+                fun_idx,
+                id,
+                type_params,
+                params,
+                ret_ty,
+                where_clause,
+                self.rewrite_specializations_in_node(
+                    *body,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?,
+                visibility,
+            ),
+            TypedInner::ExtractorDef(fun_idx, id, type_params, param, ret_ty, body, visibility) => {
+                TypedInner::ExtractorDef(
+                    fun_idx,
+                    id,
+                    type_params,
+                    param,
+                    ret_ty,
+                    self.rewrite_specializations_in_node(
+                        *body,
+                        defs_by_fun_idx,
+                        bound_tyvars_by_fun_idx,
+                        needs_specialization,
+                        specialization_fun_idxs,
+                        generated_defs,
+                    )?,
+                    visibility,
+                )
+            }
+            _ => unreachable!("specialization dispatcher selected a non-callable definition"),
+        };
         Ok(Box::new(TypedNode { ty, span, node }))
     }
 
@@ -1413,50 +1483,6 @@ impl Checker {
                     generated_defs,
                 )?,
             ),
-            TypedInner::Def(
-                fun_idx,
-                id,
-                type_params,
-                params,
-                ret_ty,
-                where_clause,
-                body,
-                visibility,
-            ) => TypedInner::Def(
-                fun_idx,
-                id,
-                type_params,
-                params,
-                ret_ty,
-                where_clause,
-                self.rewrite_specializations_in_node(
-                    *body,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-                visibility,
-            ),
-            TypedInner::ExtractorDef(fun_idx, id, type_params, param, ret_ty, body, visibility) => {
-                TypedInner::ExtractorDef(
-                    fun_idx,
-                    id,
-                    type_params,
-                    param,
-                    ret_ty,
-                    self.rewrite_specializations_in_node(
-                        *body,
-                        defs_by_fun_idx,
-                        bound_tyvars_by_fun_idx,
-                        needs_specialization,
-                        specialization_fun_idxs,
-                        generated_defs,
-                    )?,
-                    visibility,
-                )
-            }
             TypedInner::BuiltinExtractorDecl(id, param_ty, ret_ty) => {
                 TypedInner::BuiltinExtractorDecl(id, param_ty, ret_ty)
             }

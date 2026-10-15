@@ -17,7 +17,6 @@ pub(super) enum ProfileEvent {
     GenericTraitCandidateScan,
     OperatorTraitCandidateScan,
     ChildCheckerSpawn,
-    ChildCheckerAbsorb,
     ResolveTypedNode,
     CheckBodyIsolated,
     MatchArm,
@@ -64,7 +63,6 @@ struct ProfileData {
     generic_trait_candidate_scan: ProfileCounter,
     operator_trait_candidate_scan: ProfileCounter,
     child_checker_spawn: ProfileCounter,
-    child_checker_absorb: ProfileCounter,
     resolve_typed_node: ProfileCounter,
     check_body_isolated: ProfileCounter,
     match_arm: ProfileCounter,
@@ -98,8 +96,6 @@ pub(super) struct ProfileSnapshot {
     operator_trait_candidate_scan_nanos: u64,
     child_checker_spawn_calls: u64,
     child_checker_spawn_nanos: u64,
-    child_checker_absorb_calls: u64,
-    child_checker_absorb_nanos: u64,
     resolve_typed_node_calls: u64,
     resolve_typed_node_nanos: u64,
     check_body_isolated_calls: u64,
@@ -167,7 +163,6 @@ impl TypecheckProfiler {
                 self.data.operator_trait_candidate_scan.add(elapsed)
             }
             ProfileEvent::ChildCheckerSpawn => self.data.child_checker_spawn.add(elapsed),
-            ProfileEvent::ChildCheckerAbsorb => self.data.child_checker_absorb.add(elapsed),
             ProfileEvent::ResolveTypedNode => self.data.resolve_typed_node.add(elapsed),
             ProfileEvent::CheckBodyIsolated => self.data.check_body_isolated.add(elapsed),
             ProfileEvent::MatchArm => self.data.match_arm.add(elapsed),
@@ -192,7 +187,6 @@ impl TypecheckProfiler {
         self.data.generic_trait_candidate_scan.reset();
         self.data.operator_trait_candidate_scan.reset();
         self.data.child_checker_spawn.reset();
-        self.data.child_checker_absorb.reset();
         self.data.resolve_typed_node.reset();
         self.data.check_body_isolated.reset();
         self.data.match_arm.reset();
@@ -224,8 +218,6 @@ impl TypecheckProfiler {
             self.data.operator_trait_candidate_scan.snapshot();
         let (child_checker_spawn_calls, child_checker_spawn_nanos) =
             self.data.child_checker_spawn.snapshot();
-        let (child_checker_absorb_calls, child_checker_absorb_nanos) =
-            self.data.child_checker_absorb.snapshot();
         let (resolve_typed_node_calls, resolve_typed_node_nanos) =
             self.data.resolve_typed_node.snapshot();
         let (check_body_isolated_calls, check_body_isolated_nanos) =
@@ -259,8 +251,6 @@ impl TypecheckProfiler {
             operator_trait_candidate_scan_nanos,
             child_checker_spawn_calls,
             child_checker_spawn_nanos,
-            child_checker_absorb_calls,
-            child_checker_absorb_nanos,
             resolve_typed_node_calls,
             resolve_typed_node_nanos,
             check_body_isolated_calls,
@@ -306,7 +296,7 @@ impl TypecheckProfiler {
             snap.enum_variant_selector_lookup_nanos as f64 / 1_000_000.0,
         );
         eprintln!(
-            "scar-profile dispatch lookup={} ({:.3}ms) | generic_scan={} ({:.3}ms) | operator_scan={} ({:.3}ms) | child_spawn={} ({:.3}ms) | child_absorb={} ({:.3}ms)",
+            "scar-profile dispatch lookup={} ({:.3}ms) | generic_scan={} ({:.3}ms) | operator_scan={} ({:.3}ms) | child_spawn={} ({:.3}ms)",
             snap.trait_dispatch_lookup_calls,
             snap.trait_dispatch_lookup_nanos as f64 / 1_000_000.0,
             snap.generic_trait_candidate_scan_calls,
@@ -315,8 +305,6 @@ impl TypecheckProfiler {
             snap.operator_trait_candidate_scan_nanos as f64 / 1_000_000.0,
             snap.child_checker_spawn_calls,
             snap.child_checker_spawn_nanos as f64 / 1_000_000.0,
-            snap.child_checker_absorb_calls,
-            snap.child_checker_absorb_nanos as f64 / 1_000_000.0,
         );
         eprintln!(
             "scar-profile normalize resolve_typed_node={} ({:.3}ms) | env_bindings={} ({:.3}ms) | isolated_body={} ({:.3}ms) | match_arm={} ({:.3}ms) | closure_body={} ({:.3}ms)",

@@ -1,0 +1,30 @@
+[
+  {
+    "variant": "before",
+    "binary": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-scar-p1-lqok6e24/before-target/debug/surtr",
+    "binary_sha256": "dfd44bbf56481a0a096e937e6a3625187cc87194ff7c1cf5d548b51f76ed0dc8",
+    "method": "rewrite_other_specializations_in_node",
+    "args": [
+      "lldb",
+      "--batch",
+      "-o",
+      "disassemble -s 0x00000001007d0984 -c 16",
+      "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/surtr-scar-p1-lqok6e24/before-target/debug/surtr"
+    ],
+    "exit_code": 0
+  },
+  {
+    "variant": "after",
+    "binary": "/Users/haruca/work/rust/surtr/target/debug/surtr",
+    "binary_sha256": "028a77dd8f9f3b2aecbb1f6d02e5eac855b34957ae372bc7d0907e1f46a4aae1",
+    "method": "rewrite_callable_definition_specializations_in_node",
+    "args": [
+      "lldb",
+      "--batch",
+      "-o",
+      "disassemble -s 0x00000001007ddc38 -c 16",
+      "/Users/haruca/work/rust/surtr/target/debug/surtr"
+    ],
+    "exit_code": 0
+  }
+]

@@ -1867,7 +1867,9 @@ impl Checker {
                     continue;
                 }
                 let resolved = self.resolve_ty(ty);
-                self.env.vars.insert(key, resolved);
+                if *ty != resolved {
+                    self.env.vars.insert(key, resolved);
+                }
             }
         }
         self.profiler

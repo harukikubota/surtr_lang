@@ -71,3 +71,33 @@ SURTR_STDLIB_CACHE_DIR="$measure_dir/cache" "$CARGO_TARGET_DIR/release/surtr" bu
 一括処理では `cases.json` の `entry` だけを使う。`*.srt` の再帰 glob は補助 module も拾うため使わない。入力と依存ソースの hash、compiler の commit・差分・binary hash、cold / disk hit、各回の時間を保存する。少なくとも複数回を測り、cold と disk hit を別集計にする。
 
 追加時の確認は [入力整備と検証記録](../../../doc/scar_optimize/05_compile_inputs.md) に記載した。24 入口の cold / disk hit 各 1 回はコンパイル可否と cache 経路の確認であり、安定した性能基準値や機能の実行結果を保証する測定ではない。
+
+## before / after の一括測定
+
+[measure.py](measure.py) は `cases.json` の全入口を既定で各10回測る。反復ごとに before / after の順を反転し、入力・反復・binary ごとの新しい専用 cache で cold → disk hit を直列実行する。既存の cache は変更しない。`SURTR_*` のうち `PROFILE` / `COUNTER` を名前に含む環境変数を除去し、各 process の終了コード、cache 状態、`typecheck` の実行、`execute` の省略を確認する。失敗や120秒の timeout があれば、生ログを残して終了コード1で中断する。
+
+```sh
+python3 tests/profile/scar_compile/measure.py \
+  --before /tmp/scar-before/target/release/surtr \
+  --after /tmp/scar-after/target/release/surtr \
+  --before-manifest /tmp/scar-before/build.json \
+  --after-manifest /tmp/scar-after/build.json \
+  --power-condition 'AC電源、他のビルド停止' \
+  --output /tmp/scar-comparison-new
+```
+
+`--output` は存在しないディレクトリを指定する。`--iterations`、`--timeout` で反復数・processごとの秒数を変更できる。小規模な入口確認には `--case stdlib_prewarm` のように入力IDを指定する。`--case` は複数回指定できる。10回未満や一部入口のみの結果は、全24入口の採用測定の代わりにしない。
+
+build manifest は各 binary のビルド時に用意した JSON を必ず渡す。内容はそのまま測定 manifest に保存する。source root、commit、差分とその hash、build profile・flags、target directory、Rust toolchain、binary hash を記録し、元の差分ファイルも保管する。スクリプトは任意の JSON を受け取るため、記載内容と binary の対応までは保証しない。異なる build 条件や古い binary の比較を、manifest があるだけで正当化しない。測定時の cwd はこのスクリプトを置いたリポジトリのルートに固定される。
+
+標準定義は binary のビルド時に埋め込まれる。測定 manifest の `lib_sources` は実行 cwd 側の確認用なので、各 build manifest にもビルド元の `lib/**/*.srt` の hash を記録し、before / after で一致することを確認する。
+
+出力は次のとおり。
+
+- `manifest.json`: build manifest、入力と依存・`lib/**/*.srt`・binary の hash、toolchain・host・電源条件、実行順序。完了時に入力・標準ソース・binary の hash が変化していないことも確認する。
+- `runs.jsonl`: 各回の引数、cwd、測定に関係する環境変数、cache、終了コード、wall time、全 phase JSON、生ログへの相対パス。
+- `<入力ID>/<反復>/<variant>/cold.*` / `disk_hit.*`: stdout、stderr、生成 `.eldr`。一組だけで共有する cache も同じ場所に置く。
+- `summary.json`: cold / disk hit を分けた各 phase の中央値・最小最大・件数と、after の before に対する変化率。負の変化率が短縮を表す。
+- `failure.json`: 失敗した走行または測定中の hash 変化。失敗時は完成した `summary.json` を生成しない。
+
+host の toolchain 情報は測定環境の記録であり、build manifest の toolchain を置き換えない。OS の page cache、同時実行負荷、電源設定をスクリプトが固定することはない。測定中は binary・入力・標準ソースを更新せず、before / after に対応する target を別のタスクで使わない。

@@ -50,8 +50,11 @@ splitting the implementation does not introduce another checking path.
 | `audit` | Completion checks for pending dispatch and unresolved executable types |
 
 `signatures`, `trait_selection`, `relations`, and `provenance` retain their existing
-contracts. State ownership and pass order are unchanged. File separation alone is
-not evidence of faster Surtr compilation.
+contracts. Public state/checkpoint contracts and pass order are preserved.
+Error constructor bodies use a local checking scope that restores variable and
+expression-local state while reusing declaration metadata. Trait probes retain
+their isolated child checker. File separation alone is not evidence of faster
+Surtr compilation.
 
 ## Usage
 

@@ -1,0 +1,44 @@
+FAIL [   0.021s] (1/3) scar checker::definitions::nominal::deferror_scope_tests::normalized_variable_binding_is_restored_by_scope
+  stdout ───
+
+    running 1 test
+    test checker::definitions::nominal::deferror_scope_tests::normalized_variable_binding_is_restored_by_scope ... FAILED
+
+    failures:
+
+    failures:
+        checker::definitions::nominal::deferror_scope_tests::normalized_variable_binding_is_restored_by_scope
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 98 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'checker::definitions::nominal::deferror_scope_tests::normalized_variable_binding_is_restored_by_scope' (3462797) panicked at crates/scar/src/checker/definitions/nominal.rs:523:9:
+    assertion `left == right` failed
+      left: Some(Str)
+     right: Some(Var(10))
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+FAIL [   0.021s] (3/3) scar checker::definitions::nominal::deferror_scope_tests::deferror_body_reuses_environment_and_readonly_metadata
+  stdout ───
+
+    running 1 test
+    test checker::definitions::nominal::deferror_scope_tests::deferror_body_reuses_environment_and_readonly_metadata ... FAILED
+
+    failures:
+
+    failures:
+        checker::definitions::nominal::deferror_scope_tests::deferror_body_reuses_environment_and_readonly_metadata
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 98 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'checker::definitions::nominal::deferror_scope_tests::deferror_body_reuses_environment_and_readonly_metadata' (3462796) panicked at crates/scar/src/checker/definitions/nominal.rs:417:17:
+    assertion `left == right` failed: deferror body must use the existing environment storage
+      left: 0x104d3a640
+     right: 0x104d39c00
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+cargo nextest: 1 passed, 2 failed, 96 skipped (1 binary, 0.023s)
+[full output: "$HOME/Library/Application Support/rtk/tee/1792105518_cargo_nextest.log"]

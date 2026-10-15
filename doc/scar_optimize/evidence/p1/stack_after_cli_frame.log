@@ -1,0 +1,20 @@
+(lldb) target create "/Users/haruca/work/rust/surtr/target/debug/surtr"
+Current executable set to '/Users/haruca/work/rust/surtr/target/debug/surtr' (arm64).
+(lldb) disassemble -s 0x00000001007ddc38 -c 16
+surtr`scar::checker::specialize::rewrite::_$LT$impl$u20$scar..checker..state..Checker$GT$::rewrite_callable_definition_specializations_in_node::hd93a0b007c058ca3:
+surtr[0x1007ddc38] <+0>:  stp    x28, x27, [sp, #-0x20]!
+surtr[0x1007ddc3c] <+4>:  stp    x29, x30, [sp, #0x10]
+surtr[0x1007ddc40] <+8>:  add    x29, sp, #0x10
+surtr[0x1007ddc44] <+12>: sub    sp, sp, #0x1, lsl #12     ; =0x1000 
+surtr[0x1007ddc48] <+16>: str    xzr, [sp]
+surtr[0x1007ddc4c] <+20>: sub    sp, sp, #0x4a0
+surtr[0x1007ddc50] <+24>: str    xzr, [sp]
+surtr[0x1007ddc54] <+28>: sub    x9, x29, #0x31
+surtr[0x1007ddc58] <+32>: str    x9, [sp, #0x170]
+surtr[0x1007ddc5c] <+36>: add    x8, sp, #0x240
+surtr[0x1007ddc60] <+40>: str    x8, [sp, #0x178]
+surtr[0x1007ddc64] <+44>: str    x0, [sp, #0x180]
+surtr[0x1007ddc68] <+48>: str    x1, [sp, #0x1b0]
+surtr[0x1007ddc6c] <+52>: str    x2, [sp, #0x188]
+surtr[0x1007ddc70] <+56>: str    x3, [sp, #0x190]
+surtr[0x1007ddc74] <+60>: str    x4, [sp, #0x198]

@@ -1,0 +1,6 @@
+   Compiling scar v0.1.0 (/Users/haruca/work/rust/surtr/crates/scar)
+   Compiling xldr v0.1.0 (/Users/haruca/work/rust/surtr/crates/xldr)
+   Compiling surtr-analysis v0.1.0 (/Users/haruca/work/rust/surtr/crates/surtr-analysis)
+   Compiling forge v0.1.0 (/Users/haruca/work/rust/surtr/crates/forge)
+   Compiling rune v0.1.0 (/Users/haruca/work/rust/surtr/crates/rune)
+    Finished `release` profile [optimized] target(s) in 54.23s

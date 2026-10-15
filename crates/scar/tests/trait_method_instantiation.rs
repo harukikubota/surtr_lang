@@ -40,6 +40,22 @@ fn finite_trait_specialization_chain_fits_the_default_test_stack() {
 }
 
 #[test]
+fn generic_forwarding_chain_64_fits_the_cli_stack_in_both_declaration_orders() {
+    for source in [
+        include_str!("../../../tests/profile/scar_compile/generated/generic_chain_064.srt"),
+        include_str!("../../../tests/profile/scar_compile/generated/generic_chain_reverse_064.srt"),
+    ] {
+        std::thread::Builder::new()
+            .name("scar-generic-forwarding-stack-regression".into())
+            .stack_size(8 * 1024 * 1024)
+            .spawn(move || check(source))
+            .expect("generic forwarding regression thread should spawn")
+            .join()
+            .expect("64 generic forwarding stages must fit the CLI stack budget");
+    }
+}
+
+#[test]
 fn box_field_return_and_body_are_instantiated_together() {
     let nodes = check(
         r#"
