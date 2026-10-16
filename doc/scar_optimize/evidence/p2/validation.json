@@ -1,0 +1,82 @@
+{
+  "level": 2,
+  "source_commit": "61267fd25081b44223e806a7512f12f4573a8c4d",
+  "source_diff": "after-source.diff",
+  "source_frozen_for_tests_and_measurement": true,
+  "checks": [
+    {
+      "command": "rtk cargo nextest run -p scar --lib checker::specialize --no-capture",
+      "result": "14 passed; 94 filtered",
+      "exit_code": 0,
+      "log": "p2a-green-final.log"
+    },
+    {
+      "command": "rtk cargo nextest run -p scar --lib -E 'test(incremental_predeclare_tests) | test(constructor_mapping_tests) | test(shared_registry_tests)'",
+      "result": "6 passed; 98 filtered",
+      "exit_code": 0,
+      "log": "p2b-green-lib.log"
+    },
+    {
+      "command": "rtk cargo nextest run --profile ci --workspace",
+      "result": "2635 passed across 70 binaries; no skipped/failed",
+      "exit_code": 0,
+      "log": "workspace-ci.log"
+    },
+    {
+      "command": "rtk proxy cargo run --release --manifest-path /tmp/surtr-scar-p2-20261016-084530/after/Cargo.toml -p rune --bin surtr -- test --quiet --all",
+      "result": "exit 0; quiet output has no test count",
+      "exit_code": 0,
+      "log": "stdlib-tests.log"
+    },
+    {
+      "command": "target/debug/surtr build tests/profile/scar_compile/generated/generic_chain{,_reverse}_{016,032,064}.srt OUTPUT --phase-times-json (six separate commands)",
+      "result": "all 6 succeeded; ordinary inherited stack; RUST_MIN_STACK unset",
+      "exit_code": 0,
+      "log": "debug-chains.json"
+    },
+    {
+      "command": "rtk proxy cargo nextest run -p scar --lib callable_requirement_chain_visits_edges_linearly_in_both_orders --no-capture",
+      "result": "1 passed; 107 filtered; 16/32/64 in each order = 15/31/63 visits",
+      "exit_code": 0,
+      "log": "p2a-edge-counts.log"
+    },
+    {
+      "command": "rustfmt --check --edition 2021 (three changed Rust files)",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "measurement": {
+    "cases": 24,
+    "iterations_per_condition": 10,
+    "variants": [
+      "before",
+      "after"
+    ],
+    "cache_conditions": [
+      "cold",
+      "disk_hit"
+    ],
+    "completed_runs": 960,
+    "exit_code": 0,
+    "profiler_enabled": false,
+    "profile_separate_runs": 96,
+    "profile_separate_exit_code": 0
+  },
+  "independent_review": {
+    "agent": "/root/review",
+    "status": "no unresolved code/semantics/test findings",
+    "notes": "Final code reviewed after all additional tests. Adoption evidence reviewed separately.",
+    "performance": "Raw run conditions, all group counts and medians independently recomputed. No blocker; forward64 misses 10% goal; aggregate P2 timings and P2b attribution distinguished."
+  },
+  "not_performed": [
+    "process-warm performance harness",
+    "incremental performance harness",
+    "memory benchmark"
+  ],
+  "versions_changed": false,
+  "commit_created": false
+}

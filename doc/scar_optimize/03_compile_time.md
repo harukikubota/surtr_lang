@@ -6,7 +6,7 @@
 
 追加依頼で、以下の候補に対応する複数の測定入力を整備した。[入力一覧](../../tests/profile/scar_compile/README.md) と [検証記録](05_compile_inputs.md) を参照。
 
-**2026-10-16の実施:** 最初の一候補としてP1を実装した。全24入力・各条件10回のbefore / after比較と、通常debug stackの64段generic chain修正を含む検証結果は [06_deferror_scope.md](06_deferror_scope.md) を参照。以下のP1のコード説明は調査時点の挙動であり、現行は専用scopeへ置換済み。P2a / P2b以降の最適化は未実施である。
+**2026-10-16の実施:** P1に続きP2a / P2bを実装した。P1の全24入力・各条件10回の比較とdebug stack修正は [06_deferror_scope.md](06_deferror_scope.md)、P2のsummary共有・逆辺worklist・trait前宣言の局所化と同条件960回の比較は [07_specialization_predeclare.md](07_specialization_predeclare.md) を参照。以下のP1 / P2のコード説明は調査時点の挙動である。P3 / P4は未実施。
 
 ## 1. 最初に測るもの
 
@@ -291,5 +291,5 @@ SURTR_SCAR_PROFILE=1 SURTR_STDLIB_CACHE_DIR="$measure_dir/generic_extractor_spec
 4. 最初の実装は一回の compile 呼び出し内に閉じた改善を優先する。
 5. 採用条件を満たしてから、session をまたぐ summary 保持や状態表現の変更を別仕様にする。
 
-P1は実装・検証・性能比較済み。規模別入力も含む全24入口を各条件10回測定した。P2a / P2b以降の最適化とprocess warm / incremental専用harnessは未実施である。
+P1とP2a / P2bは実装・検証・性能比較済み。それぞれ規模別入力も含む全24入口を各条件10回測定した。P2の正順64段の10%目安は未達であり、逆順の改善・処理量・代表入力の比較を合わせた採用判断を実施記録に示した。P3 / P4とprocess warm / incremental専用harnessは未実施である。
 コードから確認できた反復処理を、まだ確認していない性能効果に読み替えない。

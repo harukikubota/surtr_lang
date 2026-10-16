@@ -16,6 +16,21 @@ struct CallableSpecializationRequirements {
     requires_concrete: bool,
 }
 
+#[derive(Default)]
+struct SpecializationWork {
+    #[cfg(test)]
+    edge_visits: usize,
+}
+
+impl SpecializationWork {
+    fn visit_edge(&mut self) {
+        #[cfg(test)]
+        {
+            self.edge_visits += 1;
+        }
+    }
+}
+
 struct SpecializationContext<'a> {
     defs_by_fun_idx: &'a SpecializableDefinitions,
     bound_tyvars_by_fun_idx: &'a HashMap<u32, CallableSpecializationRequirements>,
@@ -27,6 +42,7 @@ struct SpecializationContext<'a> {
 mod patterns;
 mod rewrite;
 mod substitute;
+mod summary;
 use super::audit::UnresolvedExecutableTypeArgument;
 
 impl Checker {
@@ -34,118 +50,6 @@ impl Checker {
         let mut variables = Vec::new();
         Self::collect_ty_vars(ty, &mut variables);
         variables.is_empty()
-    }
-
-    fn propagate_callable_specialization_requirements(
-        &self,
-        definitions: &SpecializableDefinitions,
-        requirements: &mut HashMap<u32, CallableSpecializationRequirements>,
-    ) -> Result<(), TypeError> {
-        use std::cell::RefCell;
-        let mut signatures = HashMap::new();
-        let mut edges = Vec::new();
-        let mut indices = definitions.keys().copied().collect::<Vec<_>>();
-        indices.sort_unstable();
-        for index in indices {
-            let definition = &definitions[&index];
-            let mut variables = Vec::new();
-            match &definition.node {
-                TypedInner::Def(_, _, arguments, parameters, result, ..) => {
-                    for argument in arguments {
-                        Self::collect_ty_vars(&argument.ty, &mut variables);
-                    }
-                    for parameter in parameters {
-                        Self::collect_ty_vars(&parameter.ty, &mut variables);
-                    }
-                    Self::collect_ty_vars(result, &mut variables);
-                }
-                TypedInner::ExtractorDef(_, _, _, parameters, result, ..) => {
-                    for parameter in parameters {
-                        Self::collect_ty_vars(&parameter.ty, &mut variables);
-                    }
-                    Self::collect_ty_vars(result, &mut variables);
-                }
-                _ => {
-                    return Err(self.typecheck_invariant_error(
-                        "specialization requirements must name a callable definition",
-                        &definition.span,
-                    ))
-                }
-            }
-            signatures.insert(index, variables.into_iter().collect::<HashSet<_>>());
-            let calls = RefCell::new(Vec::new());
-            self.find_typed_node(definition, &|_, node| {
-                let mut types = Self::pattern_callable_types(node);
-                if !matches!(
-                    node.node,
-                    TypedInner::Def(..) | TypedInner::ExtractorDef(..)
-                ) {
-                    types.push((&node.ty, &node.span));
-                }
-                for (ty, span) in types {
-                    if let Ty::UserFunc {
-                        fun_idx,
-                        call_substitution,
-                        ..
-                    } = ty
-                    {
-                        if definitions.contains_key(fun_idx) {
-                            calls.borrow_mut().push((
-                                *fun_idx,
-                                call_substitution.clone(),
-                                span.clone(),
-                            ));
-                        }
-                    }
-                }
-                None::<()>
-            });
-            edges.push((index, calls.into_inner()));
-        }
-
-        // The graph and saved substitutions are immutable. Propagate only
-        // declaration-owned slots until the finite sets reach a fixed point.
-        loop {
-            let mut changed = false;
-            for (caller, calls) in &edges {
-                let mut forwarded = requirements[caller].clone();
-                for (callee, substitution, span) in calls {
-                    let required = &requirements[callee];
-                    forwarded.requires_concrete |= required.requires_concrete;
-                    for variable in &required.tyvars {
-                        let Some((_, input)) =
-                            substitution.iter().find(|(slot, _)| slot == variable)
-                        else {
-                            return Err(self.typecheck_invariant_error(
-                                "Missing call substitution for ordinary specialization",
-                                span,
-                            ));
-                        };
-                        let mut inputs = Vec::new();
-                        Self::collect_ty_vars(&self.resolve_ty(input), &mut inputs);
-                        for input in inputs {
-                            if signatures[caller].contains(&input)
-                                && !forwarded.tyvars.contains(&input)
-                            {
-                                forwarded.tyvars.push(input);
-                            }
-                        }
-                    }
-                }
-                // Stable keys do not depend on hash iteration or definition order.
-                forwarded.tyvars.sort_unstable();
-                if forwarded.tyvars != requirements[caller].tyvars
-                    || forwarded.requires_concrete != requirements[caller].requires_concrete
-                {
-                    requirements.insert(*caller, forwarded);
-                    changed = true;
-                }
-            }
-            if !changed {
-                break;
-            }
-        }
-        Ok(())
     }
 
     fn resolve_deferred_do_failure(
@@ -174,122 +78,6 @@ impl Checker {
         }
     }
 
-    fn collect_direct_pattern_requirements(
-        &self,
-        definitions: &SpecializableDefinitions,
-    ) -> Result<HashMap<u32, Vec<u32>>, TypeError> {
-        use std::cell::RefCell;
-        let mut signatures = HashMap::new();
-        let mut requirements = HashMap::<u32, Vec<u32>>::new();
-        for (index, definition) in definitions {
-            let mut variables = Vec::new();
-            match &definition.node {
-                TypedInner::Def(_, _, arguments, parameters, result, _, _, _) => {
-                    for argument in arguments {
-                        Self::collect_ty_vars(&argument.ty, &mut variables);
-                    }
-                    for parameter in parameters {
-                        Self::collect_ty_vars(&parameter.ty, &mut variables);
-                    }
-                    Self::collect_ty_vars(result, &mut variables);
-                }
-                TypedInner::ExtractorDef(_, _, _, parameters, result, _, _) => {
-                    for parameter in parameters {
-                        Self::collect_ty_vars(&parameter.ty, &mut variables);
-                    }
-                    Self::collect_ty_vars(result, &mut variables);
-                }
-                _ => {
-                    return Err(self.typecheck_invariant_error(
-                        "specializable definition metadata must name a callable definition",
-                        &definition.span,
-                    ))
-                }
-            }
-            let signature = variables.into_iter().collect::<HashSet<_>>();
-            let own = RefCell::new(Vec::new());
-            if let Some(error) = self.find_typed_node(definition, &|checker, node| {
-                if let TypedInner::Match(_, arms) = &node.node {
-                    for arm in arms {
-                        match checker.deferred_direct_pattern_variable(arm) {
-                            Ok(Some(variable)) if signature.contains(&variable) => {
-                                if !own.borrow().contains(&variable) {
-                                    own.borrow_mut().push(variable);
-                                }
-                            }
-                            Err(error) => return Some(error),
-                            _ => {}
-                        }
-                    }
-                }
-                None
-            }) {
-                return Err(error);
-            }
-            let mut own = own.into_inner();
-            own.sort_unstable();
-            if !own.is_empty() {
-                requirements.insert(*index, own);
-            }
-            signatures.insert(*index, signature);
-        }
-        if requirements.is_empty() {
-            return Ok(requirements);
-        }
-
-        // Definitions and substitutions do not change during propagation.
-        // Collect their forwarding edges once, then iterate only those edges.
-        let mut forwarding = HashMap::new();
-        for (index, definition) in definitions {
-            let calls = RefCell::new(Vec::new());
-            self.find_typed_node(definition, &|_, node| {
-                if let Ty::UserFunc {
-                    fun_idx,
-                    call_substitution,
-                    ..
-                } = &node.ty
-                {
-                    calls.borrow_mut().push((*fun_idx, call_substitution));
-                }
-                None::<()>
-            });
-            forwarding.insert(*index, calls.into_inner());
-        }
-
-        // Forwarding a generic callable forwards its deferred Pattern contract.
-        // Add only declaration-owned slots, using each resolved call substitution.
-        loop {
-            let mut changed = false;
-            for (index, calls) in &forwarding {
-                let mut found = requirements.get(index).cloned().unwrap_or_default();
-                for (fun_idx, call_substitution) in calls {
-                    if let Some(required) = requirements.get(fun_idx) {
-                        for variable in required {
-                            if let Some((_, Ty::Var(forwarded))) =
-                                call_substitution.iter().find(|(slot, _)| slot == variable)
-                            {
-                                if signatures[index].contains(forwarded)
-                                    && !found.contains(forwarded)
-                                {
-                                    found.push(*forwarded);
-                                }
-                            }
-                        }
-                    }
-                }
-                found.sort_unstable();
-                if !found.is_empty() && requirements.get(index) != Some(&found) {
-                    requirements.insert(*index, found);
-                    changed = true;
-                }
-            }
-            if !changed {
-                break;
-            }
-        }
-        Ok(requirements)
-    }
-
     pub(in crate::checker) fn specialize_program(
         &mut self,
         stmts: Vec<TypedNode>,
@@ -300,9 +88,6 @@ impl Checker {
                 defs_by_fun_idx.insert(fun_idx, Arc::new(stmt.clone()));
             }
         }
-
-        self.direct_pattern_requirement_tyvars =
-            self.collect_direct_pattern_requirements(&defs_by_fun_idx)?;
 
         let mut needs_specialization = HashSet::new();
         let mut bound_tyvars_by_fun_idx = HashMap::new();
@@ -317,8 +102,12 @@ impl Checker {
                     .map(|method| method.function_id.unique_id)
             })
             .collect::<HashSet<_>>();
-        for (fun_idx, def) in &defs_by_fun_idx {
-            let mut bound_tyvars = self.collect_bound_tyvars_for_def(def, &trait_impl_method_uids);
+        let summaries = self.callable_summaries(&defs_by_fun_idx, &trait_impl_method_uids)?;
+        let reverse = Self::reverse_callable_edges(&summaries);
+        self.direct_pattern_requirement_tyvars =
+            self.collect_direct_pattern_requirements(&summaries, &reverse);
+        for (fun_idx, summary) in &summaries {
+            let mut bound_tyvars = summary.bound_tyvars.clone();
             if let Some(required) = self.direct_pattern_requirement_tyvars.get(fun_idx) {
                 for variable in required {
                     if !bound_tyvars.contains(variable) {
@@ -326,7 +115,7 @@ impl Checker {
                     }
                 }
             }
-            let requires_concrete = Self::typed_node_has_pending_trait_call(def)
+            let requires_concrete = summary.requires_concrete
                 || self.direct_pattern_requirement_tyvars.contains_key(fun_idx);
             bound_tyvars_by_fun_idx.insert(
                 *fun_idx,
@@ -336,9 +125,9 @@ impl Checker {
                 },
             );
         }
-
         self.propagate_callable_specialization_requirements(
-            &defs_by_fun_idx,
+            &summaries,
+            &reverse,
             &mut bound_tyvars_by_fun_idx,
         )?;
         for (fun_idx, requirements) in &bound_tyvars_by_fun_idx {
@@ -910,6 +699,8 @@ impl Checker {
         &self,
         def: &TypedNode,
         trait_impl_method_uids: &HashSet<u32>,
+        signature_vars: &HashSet<u32>,
+        pending_variables: &[u32],
     ) -> Vec<u32> {
         let mut ordered = Vec::new();
         let mut seen = HashSet::new();
@@ -949,19 +740,11 @@ impl Checker {
                 } else {
                     self.collect_bound_tyvars_in_ty(ret_ty, &mut ordered, &mut seen);
                 }
-                let mut signature_vars = Vec::new();
-                for argument in return_type_arguments {
-                    Self::collect_ty_vars(&argument.ty, &mut signature_vars);
+                for var in pending_variables {
+                    if signature_vars.contains(var) && seen.insert(*var) {
+                        ordered.push(*var);
+                    }
                 }
-                for param in params {
-                    Self::collect_ty_vars(&param.ty, &mut signature_vars);
-                }
-                Self::collect_ty_vars(ret_ty, &mut signature_vars);
-                let signature_vars = signature_vars.into_iter().collect::<HashSet<_>>();
-                let already_bound = seen.clone();
-                self.collect_pending_trait_receiver_tyvars_in_node(_body, &mut ordered, &mut seen);
-                ordered.retain(|var| already_bound.contains(var) || signature_vars.contains(var));
-                seen.retain(|var| already_bound.contains(var) || signature_vars.contains(var));
                 // Function-local inference variables can carry trait bounds,
                 // but callers cannot infer them from a call site. Only the
                 // declared signature determines a valid specialization key.
@@ -976,19 +759,14 @@ impl Checker {
                     self.collect_bound_tyvars_in_ty(&param.ty, &mut ordered, &mut seen);
                 }
                 self.collect_bound_tyvars_in_ty(ret_ty, &mut ordered, &mut seen);
-                let mut signature_vars = type_params
-                    .iter()
-                    .map(|type_param| type_param.ty_var)
-                    .collect::<Vec<_>>();
-                for param in param {
-                    Self::collect_ty_vars(&param.ty, &mut signature_vars);
+                for var in pending_variables {
+                    if (signature_vars.contains(var)
+                        || type_params.iter().any(|parameter| parameter.ty_var == *var))
+                        && seen.insert(*var)
+                    {
+                        ordered.push(*var);
+                    }
                 }
-                Self::collect_ty_vars(ret_ty, &mut signature_vars);
-                let signature_vars = signature_vars.into_iter().collect::<HashSet<_>>();
-                let already_bound = seen.clone();
-                self.collect_pending_trait_receiver_tyvars_in_node(_body, &mut ordered, &mut seen);
-                ordered.retain(|var| already_bound.contains(var) || signature_vars.contains(var));
-                seen.retain(|var| already_bound.contains(var) || signature_vars.contains(var));
                 // See `Def` above: exclude function-local inference variables.
             }
             _ => {}
@@ -1000,18 +778,7 @@ impl Checker {
     /// the current surface syntax cannot express that fully-instantiated
     /// bound in the enclosing signature. It still has to participate in the
     /// definition's specialization key, otherwise Forge sees a Pending call.
-    fn collect_pending_trait_receiver_tyvars_in_node(
-        &self,
-        node: &TypedNode,
-        ordered: &mut Vec<u32>,
-        seen: &mut HashSet<u32>,
-    ) {
-        if let Some(call) = node.monad_fail_call() {
-            self.collect_pending_trait_receiver_tyvars_in_node(call, ordered, seen);
-        }
-        for expr in Self::pattern_expression_nodes(node) {
-            self.collect_pending_trait_receiver_tyvars_in_node(expr, ordered, seen);
-        }
+    fn collect_pending_trait_receiver_tyvars(node: &TypedNode, ordered: &mut Vec<u32>) {
         match &node.node {
             TypedInner::TraitCall {
                 dispatch,
@@ -1068,197 +835,20 @@ impl Checker {
                     TraitDispatch::Static(_) => {}
                 }
                 for var in vars {
-                    if seen.insert(var) {
+                    if !ordered.contains(&var) {
                         ordered.push(var);
                     }
                 }
-                for arg in args {
-                    self.collect_pending_trait_receiver_tyvars_in_node(arg, ordered, seen);
-                }
-            }
-            TypedInner::ErrorConstruct {
-                message, payload, ..
-            } => {
-                self.collect_pending_trait_receiver_tyvars_in_node(message, ordered, seen);
-                for value in payload {
-                    self.collect_pending_trait_receiver_tyvars_in_node(value, ordered, seen);
-                }
-            }
-            TypedInner::ListLiteral(args) | TypedInner::TupleLiteral(args) => {
-                for arg in args {
-                    self.collect_pending_trait_receiver_tyvars_in_node(arg, ordered, seen);
-                }
-            }
-            TypedInner::App(func, args)
-            | TypedInner::InjectCall(func, args)
-            | TypedInner::Capture(func, args) => {
-                self.collect_pending_trait_receiver_tyvars_in_node(func, ordered, seen);
-                for arg in args {
-                    self.collect_pending_trait_receiver_tyvars_in_node(arg, ordered, seen);
-                }
-            }
-            TypedInner::Block(stmts) => {
-                for stmt in stmts {
-                    self.collect_pending_trait_receiver_tyvars_in_node(stmt, ordered, seen);
-                }
-            }
-            TypedInner::Bind(_, rhs)
-            | TypedInner::ApplyPattern { value: rhs, .. }
-            | TypedInner::SafeBind(_, rhs, _, _)
-            | TypedInner::Semi(rhs) => {
-                self.collect_pending_trait_receiver_tyvars_in_node(rhs, ordered, seen)
             }
             TypedInner::DoSafeBind(control) => {
-                self.collect_pending_trait_receiver_tyvars_in_node(&control.rhs, ordered, seen);
-                match &control.failure_target {
-                    SafeBindFailureTarget::DoAlternative { empty } => {
-                        self.collect_pending_trait_receiver_tyvars_in_node(empty, ordered, seen);
-                    }
-                    SafeBindFailureTarget::Deferred(deferred) => {
-                        let mut vars = Vec::new();
-                        Self::collect_ty_vars(&deferred.carrier_ty, &mut vars);
-                        for error_ty in &deferred.propagated_error_tys {
-                            Self::collect_ty_vars(error_ty, &mut vars);
-                        }
-                        for var in vars {
-                            if seen.insert(var) {
-                                ordered.push(var);
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-                self.collect_pending_trait_receiver_tyvars_in_node(
-                    &control.continuation,
-                    ordered,
-                    seen,
-                );
-            }
-            TypedInner::BinOp(_, left, right)
-            | TypedInner::Pipe(left, right)
-            | TypedInner::Compose(_, left, right)
-            | TypedInner::ListCons(left, right) => {
-                self.collect_pending_trait_receiver_tyvars_in_node(left, ordered, seen);
-                self.collect_pending_trait_receiver_tyvars_in_node(right, ordered, seen);
-            }
-            TypedInner::HashMapLiteral(entries) => {
-                for (key, value) in entries {
-                    self.collect_pending_trait_receiver_tyvars_in_node(key, ordered, seen);
-                    self.collect_pending_trait_receiver_tyvars_in_node(value, ordered, seen);
-                }
-            }
-            TypedInner::InterpolatedStr(parts) => {
-                for part in parts {
-                    if let TypedInterpolatedPart::Expr(expr) = part {
-                        self.collect_pending_trait_receiver_tyvars_in_node(expr, ordered, seen);
+                if let SafeBindFailureTarget::Deferred(deferred) = &control.failure_target {
+                    Self::collect_ty_vars(&deferred.carrier_ty, ordered);
+                    for ty in &deferred.propagated_error_tys {
+                        Self::collect_ty_vars(ty, ordered);
                     }
                 }
             }
-            TypedInner::Dbg(args) => {
-                for arg in args {
-                    self.collect_pending_trait_receiver_tyvars_in_node(&arg.expr, ordered, seen);
-                }
-            }
-            TypedInner::EagerBoundary(inner)
-            | TypedInner::FieldAccess(inner, _)
-            | TypedInner::SupervisorSpawn { init: inner, .. }
-            | TypedInner::SupervisorAdopt { pid: inner, .. } => {
-                self.collect_pending_trait_receiver_tyvars_in_node(inner, ordered, seen)
-            }
-            TypedInner::If(cond, then_branch, else_branch) => {
-                self.collect_pending_trait_receiver_tyvars_in_node(cond, ordered, seen);
-                self.collect_pending_trait_receiver_tyvars_in_node(then_branch, ordered, seen);
-                if let Some(branch) = else_branch {
-                    self.collect_pending_trait_receiver_tyvars_in_node(branch, ordered, seen);
-                }
-            }
-            TypedInner::Cause(value, err) => {
-                self.collect_pending_trait_receiver_tyvars_in_node(value, ordered, seen);
-                self.collect_pending_trait_receiver_tyvars_in_node(err, ordered, seen);
-            }
-            TypedInner::Match(scrutinee, arms) => {
-                self.collect_pending_trait_receiver_tyvars_in_node(scrutinee, ordered, seen);
-                for arm in arms {
-                    if let Some(guard) = &arm.guard {
-                        self.collect_pending_trait_receiver_tyvars_in_node(guard, ordered, seen);
-                    }
-                    self.collect_pending_trait_receiver_tyvars_in_node(&arm.body, ordered, seen);
-                }
-            }
-            TypedInner::SupervisorWorkers { init, strategy, .. } => {
-                self.collect_pending_trait_receiver_tyvars_in_node(init, ordered, seen);
-                self.collect_pending_trait_receiver_tyvars_in_node(strategy, ordered, seen);
-            }
-            TypedInner::FacetPath(path) => {
-                for expr in Self::typed_facet_path_expression_nodes(path) {
-                    self.collect_pending_trait_receiver_tyvars_in_node(expr, ordered, seen);
-                }
-            }
-            TypedInner::PendingFacetPath(path) => {
-                for expr in Self::pending_facet_path_expression_nodes(path) {
-                    self.collect_pending_trait_receiver_tyvars_in_node(expr, ordered, seen);
-                }
-            }
-            TypedInner::FacetView { source, path, .. } => {
-                self.collect_pending_trait_receiver_tyvars_in_node(source, ordered, seen);
-                for expr in Self::typed_facet_path_expression_nodes(path) {
-                    self.collect_pending_trait_receiver_tyvars_in_node(expr, ordered, seen);
-                }
-            }
-            TypedInner::FacetSet {
-                source,
-                path,
-                value,
-                ..
-            } => {
-                self.collect_pending_trait_receiver_tyvars_in_node(source, ordered, seen);
-                for expr in Self::typed_facet_path_expression_nodes(path) {
-                    self.collect_pending_trait_receiver_tyvars_in_node(expr, ordered, seen);
-                }
-                self.collect_pending_trait_receiver_tyvars_in_node(value, ordered, seen);
-            }
-            TypedInner::FacetOver {
-                source,
-                path,
-                update_fun,
-                ..
-            } => {
-                self.collect_pending_trait_receiver_tyvars_in_node(source, ordered, seen);
-                for expr in Self::typed_facet_path_expression_nodes(path) {
-                    self.collect_pending_trait_receiver_tyvars_in_node(expr, ordered, seen);
-                }
-                self.collect_pending_trait_receiver_tyvars_in_node(update_fun, ordered, seen);
-            }
-            TypedInner::StructLit(_, fields) | TypedInner::ConstructorCall(_, fields) => {
-                for field in fields {
-                    self.collect_pending_trait_receiver_tyvars_in_node(field, ordered, seen);
-                }
-            }
-            TypedInner::DeferrorDef(_, _, _, _, show) => {
-                self.collect_pending_trait_receiver_tyvars_in_node(show, ordered, seen)
-            }
-            TypedInner::Def(_, _, _, _, _, _, body, _)
-            | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
-            | TypedInner::Closure(_, _, body)
-            | TypedInner::ExtractorClosure(_, _, body)
-            | TypedInner::CaptureClosure(_, _, body) => {
-                self.collect_pending_trait_receiver_tyvars_in_node(body, ordered, seen)
-            }
-            TypedInner::CaptureConstructorClosure(_, _, _, body) => {
-                self.collect_pending_trait_receiver_tyvars_in_node(body, ordered, seen)
-            }
-            TypedInner::Lit(_)
-            | TypedInner::ErrorKind(_)
-            | TypedInner::Var(_)
-            | TypedInner::ListNil
-            | TypedInner::BuiltinExtractorDecl(..)
-            | TypedInner::StructDef(..)
-            | TypedInner::RecordDef(..)
-            | TypedInner::EnumDef(..)
-            | TypedInner::TraitDef(..)
-            | TypedInner::TraitImplDef(..)
-            | TypedInner::SupervisorStatus { .. }
-            | TypedInner::ProcessContextHandler { .. } => {}
+            _ => {}
         }
     }
 
@@ -1671,6 +1261,329 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn callable_requirement_chain_visits_edges_linearly_in_both_orders() {
+        for depth in [16, 32, 64] {
+            for reverse in [false, true] {
+                let checker = Checker::new(TypecheckContext::default());
+                let mut definitions = HashMap::new();
+                let mut requirements = HashMap::new();
+                for level in 0..depth {
+                    let index = if reverse { depth - level } else { level + 1 };
+                    let variable = index + 100;
+                    let id = resolved_id("relay", None, index);
+                    let mut definition = generic_identity_def(
+                        index,
+                        id,
+                        resolved_id("value", None, index + 200),
+                        variable,
+                    );
+                    if level + 1 < depth {
+                        let callee = if reverse { index - 1 } else { index + 1 };
+                        let TypedInner::Def(_, _, _, _, _, _, body, _) = &mut definition.node
+                        else {
+                            unreachable!()
+                        };
+                        *body = Box::new(call_generic(
+                            resolved_id("relay", None, callee),
+                            callee,
+                            callee + 100,
+                            typed_arg(index + 200, Ty::Var(variable)),
+                        ));
+                    }
+                    definitions.insert(index, Arc::new(definition));
+                    requirements.insert(
+                        index,
+                        CallableSpecializationRequirements {
+                            tyvars: if level + 1 == depth {
+                                vec![variable]
+                            } else {
+                                Vec::new()
+                            },
+                            requires_concrete: level + 1 == depth,
+                        },
+                    );
+                }
+                let summaries = checker
+                    .callable_summaries(&definitions, &HashSet::new())
+                    .unwrap();
+                let reverse_calls = Checker::reverse_callable_edges(&summaries);
+                let work = checker
+                    .propagate_callable_specialization_requirements(
+                        &summaries,
+                        &reverse_calls,
+                        &mut requirements,
+                    )
+                    .unwrap();
+                for (index, required) in &requirements {
+                    assert_eq!(required.tyvars, vec![index + 100]);
+                    assert!(required.requires_concrete);
+                }
+                eprintln!(
+                    "P2a depth={depth} reverse={reverse} callable_edge_visits={}",
+                    work.edge_visits
+                );
+                assert!(
+                    work.edge_visits <= 2 * (depth as usize - 1),
+                    "requirements must visit the dependency chain linearly: {}",
+                    work.edge_visits
+                );
+            }
+        }
+    }
+
+    fn forwarding_def(fun_idx: u32, variable: u32, callee: u32, slot: u32, input: Ty) -> TypedNode {
+        let mut definition = generic_identity_def(
+            fun_idx,
+            resolved_id("relay", None, fun_idx),
+            resolved_id("value", None, fun_idx + 1000),
+            variable,
+        );
+        let TypedInner::Def(_, _, _, _, _, _, body, _) = &mut definition.node else {
+            unreachable!()
+        };
+        *body = Box::new(call_generic(
+            resolved_id("callee", None, callee),
+            callee,
+            slot,
+            typed_arg(fun_idx + 1000, input),
+        ));
+        definition
+    }
+
+    #[test]
+    fn summary_keeps_direct_pattern_and_ordinary_forwarding_distinct() {
+        let mut checker = Checker::new(TypecheckContext::default());
+        checker
+            .substitutions
+            .insert(9, Ty::List(Box::new(Ty::Var(4))));
+        let mut leaf = generic_identity_def(
+            20,
+            resolved_id("leaf", None, 20),
+            resolved_id("value", None, 1020),
+            1,
+        );
+        let TypedInner::Def(_, _, _, _, _, _, body, _) = &mut leaf.node else {
+            unreachable!()
+        };
+        *body = Box::new(TypedNode {
+            ty: Ty::Var(1),
+            span: test_span(),
+            node: TypedInner::Match(
+                Box::new(typed_arg(2000, Ty::Int)),
+                vec![TypedMatchArm {
+                    direct_expression: true,
+                    pattern: TypedMatchPattern::Wildcard,
+                    guard: None,
+                    body: typed_arg(2001, Ty::Var(1)),
+                }],
+            ),
+        });
+        let definitions = HashMap::from([
+            (20, Arc::new(leaf)),
+            (
+                21,
+                Arc::new(forwarding_def(21, 2, 20, 1, Ty::List(Box::new(Ty::Var(2))))),
+            ),
+            (22, Arc::new(forwarding_def(22, 3, 20, 1, Ty::Var(3)))),
+            (23, Arc::new(forwarding_def(23, 4, 20, 1, Ty::Var(9)))),
+        ]);
+        let summaries = checker
+            .callable_summaries(&definitions, &HashSet::new())
+            .unwrap();
+        let reverse = Checker::reverse_callable_edges(&summaries);
+        let direct = checker.collect_direct_pattern_requirements(&summaries, &reverse);
+        assert_eq!(direct, HashMap::from([(20, vec![1]), (22, vec![3])]));
+        let mut ordinary = (20..=23)
+            .map(|index| {
+                (
+                    index,
+                    CallableSpecializationRequirements {
+                        tyvars: if index == 20 { vec![1] } else { Vec::new() },
+                        requires_concrete: index == 20,
+                    },
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        checker
+            .propagate_callable_specialization_requirements(&summaries, &reverse, &mut ordinary)
+            .unwrap();
+        for (index, variable) in [(20, 1), (21, 2), (22, 3), (23, 4)] {
+            assert_eq!(ordinary[&index].tyvars, vec![variable]);
+            assert!(ordinary[&index].requires_concrete);
+        }
+    }
+
+    #[test]
+    fn callable_requirement_cycle_converges_and_sorts_seed_slots() {
+        let checker = Checker::new(TypecheckContext::default());
+        let definitions = HashMap::from([
+            (20, Arc::new(forwarding_def(20, 1, 21, 2, Ty::Var(1)))),
+            (21, Arc::new(forwarding_def(21, 2, 20, 1, Ty::Var(2)))),
+            (
+                22,
+                Arc::new(generic_identity_def(
+                    22,
+                    resolved_id("seed", None, 22),
+                    resolved_id("value", None, 1022),
+                    3,
+                )),
+            ),
+        ]);
+        let summaries = checker
+            .callable_summaries(&definitions, &HashSet::new())
+            .unwrap();
+        let reverse = Checker::reverse_callable_edges(&summaries);
+        let mut requirements = HashMap::from([
+            (
+                20,
+                CallableSpecializationRequirements {
+                    tyvars: vec![1],
+                    requires_concrete: true,
+                },
+            ),
+            (
+                21,
+                CallableSpecializationRequirements {
+                    tyvars: vec![],
+                    requires_concrete: false,
+                },
+            ),
+            (
+                22,
+                CallableSpecializationRequirements {
+                    tyvars: vec![5, 3, 4],
+                    requires_concrete: false,
+                },
+            ),
+        ]);
+        let work = checker
+            .propagate_callable_specialization_requirements(&summaries, &reverse, &mut requirements)
+            .unwrap();
+        assert_eq!(requirements[&20].tyvars, vec![1]);
+        assert_eq!(requirements[&21].tyvars, vec![2]);
+        assert!(requirements[&21].requires_concrete);
+        assert_eq!(requirements[&22].tyvars, vec![3, 4, 5]);
+        assert_eq!(work.edge_visits, 2);
+    }
+
+    #[test]
+    fn callable_requirement_missing_slot_uses_original_call_span() {
+        let checker = Checker::new(TypecheckContext::default());
+        let mut caller = forwarding_def(20, 1, 21, 2, Ty::Var(1));
+        let TypedInner::Def(_, _, _, _, _, _, body, _) = &mut caller.node else {
+            unreachable!()
+        };
+        let TypedInner::App(call, _) = &mut body.node else {
+            unreachable!()
+        };
+        call.span = Span { start: 42, end: 57 };
+        let Ty::UserFunc {
+            call_substitution, ..
+        } = &mut call.ty
+        else {
+            unreachable!()
+        };
+        call_substitution.clear();
+        let definitions = HashMap::from([
+            (20, Arc::new(caller)),
+            (
+                21,
+                Arc::new(generic_identity_def(
+                    21,
+                    resolved_id("leaf", None, 21),
+                    resolved_id("value", None, 1021),
+                    2,
+                )),
+            ),
+        ]);
+        let summaries = checker
+            .callable_summaries(&definitions, &HashSet::new())
+            .unwrap();
+        let reverse = Checker::reverse_callable_edges(&summaries);
+        let mut requirements = HashMap::from([
+            (
+                20,
+                CallableSpecializationRequirements {
+                    tyvars: vec![],
+                    requires_concrete: false,
+                },
+            ),
+            (
+                21,
+                CallableSpecializationRequirements {
+                    tyvars: vec![2],
+                    requires_concrete: true,
+                },
+            ),
+        ]);
+        let error = checker
+            .propagate_callable_specialization_requirements(&summaries, &reverse, &mut requirements)
+            .err()
+            .expect("required missing substitution must fail");
+        assert_eq!(
+            error.reason(),
+            Some(TypeDiagnosticReason::TypecheckInvariantViolation)
+        );
+        assert!(
+            matches!(error.structured.as_ref().map(|diagnostic| &diagnostic.data),
+            Some(DiagnosticData::Policy(policy)) if policy.subject.as_deref() == Some("Missing call substitution for ordinary specialization"))
+        );
+        assert_eq!(error.span, Span { start: 42, end: 57 });
+    }
+
+    #[test]
+    fn failed_specialization_then_checkpoint_restore_matches_sibling_at_another_type() {
+        let mut prefix = Checker::new(TypecheckContext::default());
+        prefix.env.next_fun_idx = 100;
+        let id = resolved_id("id", Some("Global::id"), 10);
+        prefix
+            .specialize_program(vec![generic_identity_def(
+                20,
+                id.clone(),
+                resolved_id("value", None, 11),
+                1,
+            )])
+            .unwrap();
+        let checkpoint = prefix
+            .persistent_state_with_env(prefix.env.clone())
+            .checkpoint(Vec::new());
+        let mut failed =
+            Checker::with_persistent_state(checkpoint.clone().into(), TypecheckContext::default());
+        let mut bad = call_generic(id.clone(), 20, 1, typed_arg(2000, Ty::Int));
+        let TypedInner::App(call, _) = &mut bad.node else {
+            unreachable!()
+        };
+        let Ty::UserFunc {
+            call_substitution, ..
+        } = &mut call.ty
+        else {
+            unreachable!()
+        };
+        call_substitution.clear();
+        failed
+            .specialize_program(vec![
+                call_generic(id.clone(), 20, 1, typed_arg(2001, Ty::Int)),
+                bad,
+            ])
+            .expect_err("failure follows one materialized specialization");
+        assert!(failed.env.next_fun_idx > 100);
+        let mut restored =
+            Checker::with_persistent_state(checkpoint.clone().into(), TypecheckContext::default());
+        let mut sibling =
+            Checker::with_persistent_state(checkpoint.into(), TypecheckContext::default());
+        let call = call_generic(id, 20, 1, typed_arg(2002, Ty::Str));
+        let retried = restored.specialize_program(vec![call.clone()]).unwrap();
+        let clean = sibling.specialize_program(vec![call]).unwrap();
+        assert_eq!(retried, clean);
+        assert_eq!(
+            restored.specialization_fun_idxs,
+            sibling.specialization_fun_idxs
+        );
+        assert_eq!(restored.env.next_fun_idx, sibling.env.next_fun_idx);
+        assert_eq!(generated_def_fun_idxs(&retried, "Global::id"), vec![100]);
     }
 
     #[test]

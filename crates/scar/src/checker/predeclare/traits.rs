@@ -3,6 +3,19 @@ use sindr::names::TraitImplPolicy;
 
 const SYNTHETIC_DEFAULT_METHOD_UID_BASE: u32 = 0x6000_0000;
 
+#[derive(Default, Debug)]
+struct PredeclareTraitWork {
+    trait_setup: std::time::Duration,
+    impl_registration: std::time::Duration,
+    constructor_mappings: std::time::Duration,
+    method_signatures: std::time::Duration,
+    added_impls: usize,
+    coherence_entries: usize,
+    peer_entries: usize,
+    method_lookup_entries: usize,
+    mapping_declarations: usize,
+}
+
 enum ParentImplCoverage {
     HeadMismatch,
     ConstraintMismatch,
@@ -1522,8 +1535,35 @@ impl Checker {
         &mut self,
         stmts: &[Resolved],
     ) -> Result<(), TypeError> {
+        let mut work = PredeclareTraitWork::default();
+        let result = self.predeclare_traits_with_work(stmts, &mut work);
+        if self.profiler.enabled() {
+            eprintln!(
+                "scar-predeclare trait_setup={:.3}ms impl_registration={:.3}ms constructor_mappings={:.3}ms method_signatures={:.3}ms added_impls={} coherence_entries={} peer_entries={} method_lookup_entries={} mapping_declarations={}",
+                work.trait_setup.as_secs_f64() * 1000.0,
+                work.impl_registration.as_secs_f64() * 1000.0,
+                work.constructor_mappings.as_secs_f64() * 1000.0,
+                work.method_signatures.as_secs_f64() * 1000.0,
+                work.added_impls,
+                work.coherence_entries,
+                work.peer_entries,
+                work.method_lookup_entries,
+                work.mapping_declarations,
+            );
+        }
+        result
+    }
+
+    fn predeclare_traits_with_work(
+        &mut self,
+        stmts: &[Resolved],
+        work: &mut PredeclareTraitWork,
+    ) -> Result<(), TypeError> {
+        let phase_start = self.profiler.start();
         let mut declared_trait = false;
-        let mut declared_trait_impl = false;
+        // Keep suffix declaration lookup local to this compile. Retained impl
+        // metadata and the checkpoint representation need no additional index.
+        let mut declared_impl_keys = HashMap::new();
         for stmt in stmts {
             let Resolved::TraitDef(span, id, type_params, where_clause, methods, _) = stmt else {
                 continue;
@@ -1687,6 +1727,10 @@ impl Checker {
             }
         }
 
+        if let Some(start) = phase_start {
+            work.trait_setup = start.elapsed();
+        }
+        let phase_start = self.profiler.start();
         for stmt in stmts {
             let Resolved::TraitImplDef(
                 span,
@@ -1700,7 +1744,7 @@ impl Checker {
             else {
                 continue;
             };
-            declared_trait_impl = true;
+            work.added_impls += 1;
             let generated_derive = is_generated_derive_impl(methods);
 
             let trait_key = self.trait_key(trait_id);
@@ -1829,11 +1873,11 @@ impl Checker {
                 .where_constraints;
             let impl_key =
                 CanonicalTraitImplPatternKey::from_head(trait_id.unique_id, &head_type_list);
-            let existing_impls = self.trait_impls.values().cloned().collect::<Vec<_>>();
-            for existing in existing_impls {
-                if self.trait_key(&existing.trait_id) != trait_key {
-                    continue;
-                }
+            // Coherence only compares patterns of the same base trait. The
+            // existing index includes both retained and earlier suffix impls.
+            for existing_key in self.trait_impl_candidate_keys(&trait_key) {
+                work.coherence_entries += 1;
+                let existing = &self.trait_impls[&existing_key];
                 if Self::canonical_patterns_overlap(&impl_key, &existing.declaration_key.pattern) {
                     return Err(TypeError {
                         structured: None,
@@ -1849,23 +1893,31 @@ impl Checker {
                 }
             }
 
-            let exclusive_peer = if self.trait_matches_short_name(&trait_key, "Convert") {
+            // Only the two conversion traits can have an exclusive peer.
+            // Other impls do not need a whole-trait short-name uniqueness scan.
+            let exclusive_peer = if trait_info.id.name == "Convert"
+                && self.trait_matches_short_name(&trait_key, "Convert")
+            {
                 self.trait_key_by_short_name("TryConvert")
-            } else if self.trait_matches_short_name(&trait_key, "TryConvert") {
+            } else if trait_info.id.name == "TryConvert"
+                && self.trait_matches_short_name(&trait_key, "TryConvert")
+            {
                 self.trait_key_by_short_name("Convert")
             } else {
                 None
             };
             if let Some(peer_trait_key) = exclusive_peer {
-                let peers = self
-                    .trait_impls
-                    .values()
-                    .filter(|existing| self.trait_key(&existing.trait_id) == peer_trait_key)
-                    .cloned()
-                    .collect::<Vec<_>>();
-                let peer = peers.into_iter().find(|existing| {
-                    Self::canonical_patterns_overlap(&impl_key, &existing.declaration_key.pattern)
-                });
+                let peer = self
+                    .trait_impl_candidate_keys(&peer_trait_key)
+                    .into_iter()
+                    .inspect(|_| work.peer_entries += 1)
+                    .map(|key| &self.trait_impls[&key])
+                    .find(|existing| {
+                        Self::canonical_patterns_overlap(
+                            &impl_key,
+                            &existing.declaration_key.pattern,
+                        )
+                    });
                 if let Some(existing) = peer {
                     return Err(TypeError {
                         structured: None,
@@ -1919,12 +1971,22 @@ impl Checker {
             self.constructor_mapping_resolution
                 .pending
                 .insert(impl_key.clone());
-            self.index_trait_impl(impl_key);
+            self.index_trait_impl(impl_key.clone());
+            declared_impl_keys.insert(*declaration_id, impl_key);
         }
 
-        if declared_trait_impl {
+        if let Some(start) = phase_start {
+            work.impl_registration = start.elapsed();
+        }
+        let phase_start = self.profiler.start();
+        if !declared_impl_keys.is_empty() {
+            work.mapping_declarations = self.constructor_mapping_resolution.pending.len();
             self.resolve_impl_constructor_mappings()?;
         }
+        if let Some(start) = phase_start {
+            work.constructor_mappings = start.elapsed();
+        }
+        let phase_start = self.profiler.start();
 
         // Methods consume the declaration's resolved mapping, never re-infer it.
         for stmt in stmts {
@@ -1942,12 +2004,11 @@ impl Checker {
             };
             let trait_key = self.trait_key(trait_id);
             let trait_info = self.traits[&trait_key].clone();
-            let impl_info = self
-                .trait_impls
-                .values()
-                .find(|info| info.declaration_key.declaration_id == *declaration_id)
-                .expect("collected impl head")
-                .clone();
+            work.method_lookup_entries += 1;
+            let impl_key = declared_impl_keys
+                .get(declaration_id)
+                .expect("collected suffix impl head");
+            let impl_info = self.trait_impls[impl_key].clone();
             let generated_derive = impl_info.generated_derive;
             let target_ty = impl_info.target_ty.clone();
             let target_name = impl_info.target_name.clone();
@@ -2340,6 +2401,9 @@ impl Checker {
             impl_info.method_signature_lists = method_signature_lists;
         }
 
+        if let Some(start) = phase_start {
+            work.method_signatures = start.elapsed();
+        }
         Ok(())
     }
 
@@ -2697,5 +2761,85 @@ impl Checker {
                     _ => false,
                 })
         })
+    }
+}
+
+#[cfg(test)]
+mod incremental_predeclare_tests {
+    use super::*;
+
+    fn resolved(source: &str) -> Vec<Resolved> {
+        let ast = spire::parse_with_context(source, spire::ParserContext::project(0)).unwrap();
+        crate::test_support::resolve_ast_with_builtin_prelude(ast).unwrap()
+    }
+
+    #[test]
+    fn suffix_predeclare_work_does_not_visit_unrelated_retained_impls() {
+        let prefix = "deftrait RetainedP2 {}\ndeftrait AddedP2 {}\nimpl RetainedP2 for Int {}";
+        let mut checker = Checker::with_persistent_state(
+            crate::test_support::session_from_cached_std_prelude().state,
+            TypecheckContext::default(),
+        );
+        let prefix_stmts = resolved(prefix);
+        let prefix_len = prefix_stmts.len();
+        checker.check_program(prefix_stmts).unwrap();
+        let retained = checker.trait_impls.clone();
+        let suffix = resolved(&format!("{prefix}\nimpl AddedP2 for Int {{}}"))
+            .into_iter()
+            .skip(prefix_len)
+            .collect::<Vec<_>>();
+        let mut work = PredeclareTraitWork::default();
+        checker
+            .predeclare_traits_with_work(&suffix, &mut work)
+            .unwrap();
+        assert_eq!(work.added_impls, 1);
+        assert_eq!(work.mapping_declarations, 1);
+        assert_eq!(
+            work.coherence_entries, 0,
+            "unrelated traits are not coherence candidates"
+        );
+        assert_eq!(
+            work.method_lookup_entries, 1,
+            "the added declaration has one direct lookup"
+        );
+        for (key, original) in retained {
+            assert!(Arc::ptr_eq(&original, &checker.trait_impls[&key]));
+        }
+    }
+
+    #[test]
+    fn suffix_overlap_keeps_diagnostic_and_failed_session_isolation() {
+        let prefix = "deftrait SessionP2 {}\ndefenum SessionBoxP2<$A> { Box($A), }\nimpl SessionP2 for SessionBoxP2<$A> {}";
+        let mut session = crate::test_support::session_from_cached_std_prelude();
+        let prefix_stmts = resolved(prefix);
+        let prefix_len = prefix_stmts.len();
+        session.typecheck(prefix_stmts).unwrap();
+        let saved = session.checkpoint();
+        let before = bincode::serialize(&saved).unwrap();
+        let suffix = |declaration: &str| {
+            resolved(&format!("{prefix}\n{declaration}"))
+                .into_iter()
+                .skip(prefix_len)
+                .collect::<Vec<_>>()
+        };
+        let error = session
+            .typecheck(suffix("impl SessionP2 for SessionBoxP2<Int> {}"))
+            .expect_err("same trait and target must overlap across the suffix boundary");
+        assert!(error.message.contains("Overlapping trait impls"), "{error}");
+        assert_eq!(error.span.start, prefix.len() + 1);
+        assert!(error
+            .hint
+            .as_deref()
+            .unwrap()
+            .contains("structurally disjoint"));
+        assert_eq!(before, bincode::serialize(&session.checkpoint()).unwrap());
+        session
+            .typecheck(suffix("impl SessionP2 for String {}"))
+            .unwrap();
+        let mut sibling = ScarSession::new();
+        sibling.rollback(saved);
+        sibling
+            .typecheck(suffix("impl SessionP2 for String {}"))
+            .unwrap();
     }
 }

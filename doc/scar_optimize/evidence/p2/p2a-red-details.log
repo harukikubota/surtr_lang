@@ -1,0 +1,29 @@
+
+running 1 test
+test checker::specialize::tests::callable_requirement_chain_visits_edges_linearly_in_both_orders ... FAILED
+
+failures:
+
+failures:
+    checker::specialize::tests::callable_requirement_chain_visits_edges_linearly_in_both_orders
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 103 filtered out; finished in 0.01s
+
+info: experimental features enabled: setup-scripts
+   Compiling scar-test-cache-key v0.1.0 (/Users/haruca/work/rust/surtr/crates/scar/tests/cache-key)
+   Compiling scar v0.1.0 (/Users/haruca/work/rust/surtr/crates/scar)
+    Finished `test` profile [unoptimized] target(s) in 28.12s
+────────────
+ Nextest run ID 56a61ce8-8b96-4703-90c4-f6ccb190f965 with nextest profile: default
+    Starting 1 test across 39 binaries (410 tests skipped)
+       START [         ] (1/1) scar checker::specialize::tests::callable_requirement_chain_visits_edges_linearly_in_both_orders
+P2a depth=16 reverse=false callable_edge_visits=240
+
+thread 'checker::specialize::tests::callable_requirement_chain_visits_edges_linearly_in_both_orders' (3894345) panicked at crates/scar/src/checker/specialize/mod.rs:1717:17:
+requirements must visit the dependency chain linearly: 240
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+        FAIL [   0.553s] (1/1) scar checker::specialize::tests::callable_requirement_chain_visits_edges_linearly_in_both_orders
+────────────
+     Summary [   0.558s] 1 test run: 0 passed, 1 failed, 410 skipped
+        FAIL [   0.553s] (1/1) scar checker::specialize::tests::callable_requirement_chain_visits_edges_linearly_in_both_orders
+error: test run failed

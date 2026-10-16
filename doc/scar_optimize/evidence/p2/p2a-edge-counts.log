@@ -1,0 +1,21 @@
+info: experimental features enabled: setup-scripts
+    Finished `test` profile [unoptimized] target(s) in 0.08s
+────────────
+ Nextest run ID 26761553-b589-4616-8f22-b5e9cce40b3a with nextest profile: default
+    Starting 1 test across 1 binary (107 tests skipped)
+       START [         ] (1/1) scar checker::specialize::tests::callable_requirement_chain_visits_edges_linearly_in_both_orders
+
+running 1 test
+P2a depth=16 reverse=false callable_edge_visits=15
+P2a depth=16 reverse=true callable_edge_visits=15
+P2a depth=32 reverse=false callable_edge_visits=31
+P2a depth=32 reverse=true callable_edge_visits=31
+P2a depth=64 reverse=false callable_edge_visits=63
+P2a depth=64 reverse=true callable_edge_visits=63
+test checker::specialize::tests::callable_requirement_chain_visits_edges_linearly_in_both_orders ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 107 filtered out; finished in 0.05s
+
+        PASS [   0.067s] (1/1) scar checker::specialize::tests::callable_requirement_chain_visits_edges_linearly_in_both_orders
+────────────
+     Summary [   0.068s] 1 test run: 1 passed, 107 skipped

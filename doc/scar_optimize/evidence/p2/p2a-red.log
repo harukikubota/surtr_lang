@@ -1,0 +1,3 @@
+FAIL [   0.553s] (1/1) scar checker::specialize::tests::callable_requirement_chain_visits_edges_linearly_in_both_orders
+cargo nextest: 0 passed, 1 failed, 410 skipped (39 binaries, 0.558s)
+[full output: "$HOME/Library/Application Support/rtk/tee/1792108040_cargo_nextest.log"]

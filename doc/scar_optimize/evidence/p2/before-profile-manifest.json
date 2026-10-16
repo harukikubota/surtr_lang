@@ -1,0 +1,24 @@
+{
+  "source_commit": "61267fd25081b44223e806a7512f12f4573a8c4d",
+  "only_source_change": [
+    "crates/scar/src/checker/predeclare/traits.rs"
+  ],
+  "instrumentation_patch": "p2b-profile-before.patch",
+  "instrumentation_patch_sha256": "eb82513a13c3296e6d8c3c37ee111211abcf77fcf07b8e83d198325e03f2480d",
+  "binary": "/tmp/surtr-scar-p2-20261016-084530/before-profile-surtr",
+  "binary_sha256": "c89bd0a1641d48a94957764c69324ccec1a3f957577d0faa74029f80dfb76c8d",
+  "build_exit_code": 0,
+  "build_command": [
+    "cargo",
+    "build",
+    "--release",
+    "-p",
+    "rune",
+    "--bin",
+    "surtr"
+  ],
+  "build_target": "/tmp/surtr-scar-p2-20261016-084530/before-target",
+  "build_profile": "release",
+  "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)\nbinary: rustc\ncommit-hash: e408947bfd200af42db322daf0fadfe7e26d3bd1\ncommit-date: 2026-03-25\nhost: aarch64-apple-darwin\nrelease: 1.94.1\nLLVM version: 21.1.8\n",
+  "purpose": "Separate profiler-enabled before run only. Adoption timing uses clean before-surtr."
+}

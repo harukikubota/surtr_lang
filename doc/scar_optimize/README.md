@@ -10,9 +10,11 @@
 
 **テスト計画の実施（2026-10-16）:** P0 / P1 の T-01〜T-12 を追加・拡張した。対応箇所と検証結果は [01_test_plan.md の実施記録](01_test_plan.md#8-テスト計画の実施2026-10-16) を参照。
 
-**ファイル分割の実施（2026-10-16）:** `02_file_split` の移動を実施した。既存の `Checker` と公開 API を保ち、式、session・状態、宣言・型・具体化を責務別に配置した。実際の配置と検証結果は [02_file_split.md の実施記録](02_file_split.md#実施記録2026-10-16) を参照。処理回数・コピー範囲・型規則は変更しておらず、性能改善は引き続き計画段階である。
+**ファイル分割の実施（2026-10-16）:** `02_file_split` の移動を実施した。既存の `Checker` と公開 API を保ち、式、session・状態、宣言・型・具体化を責務別に配置した。実際の配置と検証結果は [02_file_split.md の実施記録](02_file_split.md#実施記録2026-10-16) を参照。処理回数・コピー範囲・型規則は変更しておらず、分割単独による速度改善は主張しない。
 
 **性能改善の実施（2026-10-16）:** P1のError本体検査を専用scopeへ置き換え、宣言metadataの複製を減らした。64段generic chainのdebug stack修正も実施。全24入力を各条件10回、計960回測定し、小入力coldのcompile totalは17.29%、Error 64 / 128 / 256宣言のdisk-hit typecheckは48.82〜52.12%短縮した。最終CI profileは2628件成功。条件と記録は [06_deferror_scope.md](06_deferror_scope.md) を参照。
+
+**P2の実施（2026-10-16）:** specializationのcompile内summary共有・逆辺worklistと、trait前宣言の候補・宣言検索の局所化を実施した。別の960回比較で、disk-hit typecheckは逆順generic chain 64段で18.88%、trait impl 64件で12.99%短縮。正順64段は4.97%で10%目安未達。最終CI profileは2635件成功。合算比較と採用判断は [07_specialization_predeclare.md](07_specialization_predeclare.md) を参照。
 
 ## 調査結果
 
@@ -20,7 +22,7 @@
 |---|---|---|
 | テストケースの追加 | 既存の成功・拒否に加え、nested probe、失敗後の再試行、通常／in-place API、full／prefix compile の比較を補った。P0 の7群、P1 の5群を追加・拡張済み | [01_test_plan.md](01_test_plan.md) |
 | ファイル分割 | 責務別の移動を実施済み。`checker/mod.rs` は553行、`expr/mod.rs` は1,018行となり、入口と共通型を残した。状態所有者の再設計は行っていない | [02_file_split.md](02_file_split.md) |
-| `.srt` コンパイル時間 | P1のmetadata複製削減を実施し、全24入力でbefore / afterを測定。Trait前処理とspecialization再走査の削減は未実施 | [03_compile_time.md](03_compile_time.md)、[実施結果](06_deferror_scope.md) |
+| `.srt` コンパイル時間 | P1のmetadata複製削減とP2のTrait前処理・specialization走査削減を実施。それぞれ全24入力でbefore / afterを測定 | [03_compile_time.md](03_compile_time.md)、[P1結果](06_deferror_scope.md)、[P2結果](07_specialization_predeclare.md) |
 | 基準値 | release binary で 3 入力 × cold / disk hit × 5 回を計測。追加 profile 6 回と生ログを保存 | [04_baseline.md](04_baseline.md) |
 | 測定入力の整備 | 現行の機能別入力、規模系列、宣言順比較、複数 module を追加。計測対象 24 入口の一覧を保存 | [05_compile_inputs.md](05_compile_inputs.md) |
 
@@ -87,4 +89,4 @@ cold の標準定義 load は約 407〜410 ms（各条件の中央値）。別�
 - 別エージェントのレビューを実施。既に scope 化済みの経路を再提案していた箇所と、rollback 後の関数番号再割当を禁止しかねないテスト条件を修正した。
 - 初回調査では Scar / workspace の nextest、標準テスト、生成 bytecode の実行は未実施。後続の入力整備では標準テスト全件の成功を確認した。コンパイル成功をリファクタリング後の回帰検証とは扱わない。
 
-回帰テスト追加、ファイル分割、P1の性能改善と全24入口の反復比較は2026-10-16に実施した。残件はP2a / P2b以降の最適化、変数表clone削減、process warm / incremental専用の性能測定。P1では変数表と局所推論状態のコピーを維持し、公開契約を変えず宣言metadataの複製を減らした。
+回帰テスト追加、ファイル分割、P1 / P2a / P2bの性能改善と全24入口の反復比較は2026-10-16に実施した。残件はP3 / P4、変数表clone削減、process warm / incremental専用の性能測定。公開契約を保ち、P1では宣言metadataの複製、P2では走査と検索を減らした。

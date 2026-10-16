@@ -1,0 +1,4 @@
+   Compiling xldr v0.1.0 (/tmp/surtr-scar-p2-20261016-084530/after/crates/xldr)
+   Compiling rune v0.1.0 (/tmp/surtr-scar-p2-20261016-084530/after/crates/rune)
+    Finished `release` profile [optimized] target(s) in 28.60s
+     Running `/tmp/surtr-scar-p2-20261016-084530/after-target/release/surtr test --quiet --all`

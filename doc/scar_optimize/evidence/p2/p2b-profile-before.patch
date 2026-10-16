@@ -1,0 +1,128 @@
+diff --git a/crates/scar/src/checker/predeclare/traits.rs b/crates/scar/src/checker/predeclare/traits.rs
+index 9f8f74db..e0e1467f 100644
+--- a/crates/scar/src/checker/predeclare/traits.rs
++++ b/crates/scar/src/checker/predeclare/traits.rs
+@@ -3,6 +3,19 @@ use sindr::names::TraitImplPolicy;
+ 
+ const SYNTHETIC_DEFAULT_METHOD_UID_BASE: u32 = 0x6000_0000;
+ 
++#[derive(Default, Debug)]
++struct PredeclareTraitWork {
++    trait_setup: std::time::Duration,
++    impl_registration: std::time::Duration,
++    constructor_mappings: std::time::Duration,
++    method_signatures: std::time::Duration,
++    added_impls: usize,
++    coherence_entries: usize,
++    peer_entries: usize,
++    method_lookup_entries: usize,
++    mapping_declarations: usize,
++}
++
+ enum ParentImplCoverage {
+     HeadMismatch,
+     ConstraintMismatch,
+@@ -1522,6 +1535,31 @@ impl Checker {
+         &mut self,
+         stmts: &[Resolved],
+     ) -> Result<(), TypeError> {
++        let mut work = PredeclareTraitWork::default();
++        let result = self.predeclare_traits_with_work(stmts, &mut work);
++        if self.profiler.enabled() {
++            eprintln!(
++                "scar-predeclare trait_setup={:.3}ms impl_registration={:.3}ms constructor_mappings={:.3}ms method_signatures={:.3}ms added_impls={} coherence_entries={} peer_entries={} method_lookup_entries={} mapping_declarations={}",
++                work.trait_setup.as_secs_f64() * 1000.0,
++                work.impl_registration.as_secs_f64() * 1000.0,
++                work.constructor_mappings.as_secs_f64() * 1000.0,
++                work.method_signatures.as_secs_f64() * 1000.0,
++                work.added_impls,
++                work.coherence_entries,
++                work.peer_entries,
++                work.method_lookup_entries,
++                work.mapping_declarations,
++            );
++        }
++        result
++    }
++
++    fn predeclare_traits_with_work(
++        &mut self,
++        stmts: &[Resolved],
++        work: &mut PredeclareTraitWork,
++    ) -> Result<(), TypeError> {
++        let phase_start = self.profiler.start();
+         let mut declared_trait = false;
+         let mut declared_trait_impl = false;
+         for stmt in stmts {
+@@ -1687,6 +1725,10 @@ impl Checker {
+             }
+         }
+ 
++        if let Some(start) = phase_start {
++            work.trait_setup = start.elapsed();
++        }
++        let phase_start = self.profiler.start();
+         for stmt in stmts {
+             let Resolved::TraitImplDef(
+                 span,
+@@ -1701,6 +1743,7 @@ impl Checker {
+                 continue;
+             };
+             declared_trait_impl = true;
++            work.added_impls += 1;
+             let generated_derive = is_generated_derive_impl(methods);
+ 
+             let trait_key = self.trait_key(trait_id);
+@@ -1831,6 +1874,7 @@ impl Checker {
+                 CanonicalTraitImplPatternKey::from_head(trait_id.unique_id, &head_type_list);
+             let existing_impls = self.trait_impls.values().cloned().collect::<Vec<_>>();
+             for existing in existing_impls {
++                work.coherence_entries += 1;
+                 if self.trait_key(&existing.trait_id) != trait_key {
+                     continue;
+                 }
+@@ -1860,6 +1904,7 @@ impl Checker {
+                 let peers = self
+                     .trait_impls
+                     .values()
++                    .inspect(|_| work.peer_entries += 1)
+                     .filter(|existing| self.trait_key(&existing.trait_id) == peer_trait_key)
+                     .cloned()
+                     .collect::<Vec<_>>();
+@@ -1922,9 +1967,18 @@ impl Checker {
+             self.index_trait_impl(impl_key);
+         }
+ 
++        if let Some(start) = phase_start {
++            work.impl_registration = start.elapsed();
++        }
++        let phase_start = self.profiler.start();
+         if declared_trait_impl {
++            work.mapping_declarations = self.constructor_mapping_resolution.pending.len();
+             self.resolve_impl_constructor_mappings()?;
+         }
++        if let Some(start) = phase_start {
++            work.constructor_mappings = start.elapsed();
++        }
++        let phase_start = self.profiler.start();
+ 
+         // Methods consume the declaration's resolved mapping, never re-infer it.
+         for stmt in stmts {
+@@ -1945,6 +1999,7 @@ impl Checker {
+             let impl_info = self
+                 .trait_impls
+                 .values()
++                .inspect(|_| work.method_lookup_entries += 1)
+                 .find(|info| info.declaration_key.declaration_id == *declaration_id)
+                 .expect("collected impl head")
+                 .clone();
+@@ -2340,6 +2395,9 @@ impl Checker {
+             impl_info.method_signature_lists = method_signature_lists;
+         }
+ 
++        if let Some(start) = phase_start {
++            work.method_signatures = start.elapsed();
++        }
+         Ok(())
+     }
+ 

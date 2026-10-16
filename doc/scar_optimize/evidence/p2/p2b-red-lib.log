@@ -1,0 +1,23 @@
+FAIL [   2.095s] (2/2) scar checker::predeclare::traits::incremental_predeclare_tests::suffix_predeclare_work_does_not_visit_unrelated_retained_impls
+  stdout ───
+
+    running 1 test
+    test checker::predeclare::traits::incremental_predeclare_tests::suffix_predeclare_work_does_not_visit_unrelated_retained_impls ... FAILED
+
+    failures:
+
+    failures:
+        checker::predeclare::traits::incremental_predeclare_tests::suffix_predeclare_work_does_not_visit_unrelated_retained_impls
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 103 filtered out; finished in 2.09s
+
+  stderr ───
+
+    thread 'checker::predeclare::traits::incremental_predeclare_tests::suffix_predeclare_work_does_not_visit_unrelated_retained_impls' (3896222) panicked at crates/scar/src/checker/predeclare/traits.rs:2789:9:
+    assertion `left == right` failed: unrelated traits are not coherence candidates
+      left: 147
+     right: 0
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+cargo nextest: 1 passed, 1 failed, 102 skipped (1 binary, 2.097s)
+[full output: "$HOME/Library/Application Support/rtk/tee/1792108084_cargo_nextest.log"]
