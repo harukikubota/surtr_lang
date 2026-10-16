@@ -1,0 +1,117 @@
+{
+  "level": 2,
+  "validation": [
+    {
+      "command": "cargo test -p rune --example scar-session-profile",
+      "exit_code": 0,
+      "passed": 5,
+      "log": "harness-tests.log"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests/profile/scar_compile -p test_measure_session.py -v",
+      "exit_code": 0,
+      "passed": 20,
+      "log": "collector-tests.log"
+    },
+    {
+      "command": "rtk cargo nextest run --profile ci --workspace",
+      "exit_code": 0,
+      "passed": 2643,
+      "binaries": 70,
+      "log": "workspace-ci.log"
+    },
+    {
+      "command": "rtk proxy cargo run -p rune --bin surtr -- test --quiet --all",
+      "exit_code": 0,
+      "note": "quiet output has no count",
+      "log": "stdlib-tests.log"
+    },
+    {
+      "command": "cargo build -p rune --example scar-session-profile; debug binary incremental 16/32/64 and warm generic_chain_064",
+      "exit_code": 0,
+      "processes": 4,
+      "samples": 122,
+      "expected_failures": 3,
+      "log": "debug-validation.json"
+    },
+    {
+      "command": "rustfmt --check --edition 2021 crates/rune/examples/scar-session-profile.rs",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    },
+    {
+      "command": "relative Markdown link verification on four changed documents",
+      "exit_code": 0,
+      "links": 133,
+      "log": "links.json"
+    },
+    {
+      "command": "yomiyasu_lint.py separately for four final changed documents",
+      "exit_code": 0,
+      "note": "style notices reviewed; technical terminology and existing structure preserved",
+      "log": "doc-lint.json"
+    }
+  ],
+  "measurement": {
+    "status": "completed",
+    "processes": 27,
+    "setup_rows": 27,
+    "samples": 1450,
+    "success": 1420,
+    "expected_failures": 30,
+    "conditions": 145,
+    "iterations_per_condition": 10,
+    "source_binary_input_hashes": "unchanged",
+    "baseline_only": true,
+    "manifest": "manifest.json",
+    "raw_samples": "runs.jsonl.gz",
+    "raw_process_outputs": "process-outputs.jsonl.gz",
+    "summary": "summary.json"
+  },
+  "development_failures": [
+    {
+      "stage": "scaffold contract tests",
+      "result": "3 intentional missing-harness failures",
+      "log": "harness-scaffold-red.log"
+    },
+    {
+      "stage": "first implementation attempt",
+      "result": "invalid source declaration order and REPL source-policy rejection corrected in harness input generation/context",
+      "log": "harness-invalid-input-attempt.log"
+    },
+    {
+      "stage": "collector metadata acceptance",
+      "result": "43 intentional failing subtests before metadata validation fix",
+      "log": "collector-metadata-red.log"
+    },
+    {
+      "stage": "initial release measurement",
+      "result": "stopped on patterns raw signature mismatch, excluded from baseline; generated local UID alpha-normalization added",
+      "log": "initial-incomplete-measurement.json.gz"
+    },
+    {
+      "stage": "patterns regression",
+      "result": "1 intentional failure before signature normalization",
+      "log": "pattern-signature-red.log"
+    }
+  ],
+  "not_performed": [
+    "P/I before-after optimization comparison",
+    "VM execution in measurement harness",
+    "REPL source grammar/CLI end-to-end measurement"
+  ],
+  "deferred_candidates": [
+    "transactional state clone optimization",
+    "diagnostic child probe optimization",
+    "persistent specialization summaries"
+  ],
+  "final_source_binary_verification": "unchanged after validation",
+  "review": {
+    "status": "completed",
+    "unresolved_findings": 0,
+    "log": "review.json"
+  }
+}

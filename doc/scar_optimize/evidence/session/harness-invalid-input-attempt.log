@@ -1,0 +1,39 @@
+   Compiling rune v0.1.0 (/Users/haruca/work/rust/surtr/crates/rune)
+warning: unused import: `ScarSession`
+  --> crates/rune/examples/scar-session-profile.rs:30:12
+   |
+30 | use scar::{ScarSession, TypecheckContext};
+   |            ^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `rune` (example "scar-session-profile" test) generated 1 warning (run `cargo fix --example "scar-session-profile" -p rune --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized] target(s) in 2.53s
+     Running unittests examples/scar-session-profile.rs (target/debug/examples/scar_session_profile-507657abdefd43f8)
+
+running 3 tests
+test tests::sibling_sessions_do_not_share_new_names_or_nominal_metadata ... ok
+test tests::incremental_retains_bindings_and_restores_both_phases_after_late_failure ... FAILED
+test tests::warm_replays_identical_suffix_from_independent_checkpoints ... FAILED
+
+failures:
+
+---- tests::incremental_retains_bindings_and_restores_both_phases_after_late_failure stdout ----
+
+thread 'tests::incremental_retains_bindings_and_restores_both_phases_after_late_failure' (5430615) panicked at crates/rune/examples/scar-session-profile.rs:475:77:
+called `Result::unwrap()` on an `Err` value: "parse: SyntaxError { message: \"This top-level declaration is not allowed in REPL chunks\", span: Span { start: 0, end: 35 }, reason: SourcePolicy, expected_tokens: [], cursor_span: Span { start: 0, end: 35 }, guidance: Some(TopLevelDeclaration), token_kind: None }"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- tests::warm_replays_identical_suffix_from_independent_checkpoints stdout ----
+
+thread 'tests::warm_replays_identical_suffix_from_independent_checkpoints' (5430617) panicked at crates/rune/examples/scar-session-profile.rs:459:59:
+called `Result::unwrap()` on an `Err` value: "parse: SyntaxError { message: \"top-level definition cannot appear after top-level expression\", span: Span { start: 82, end: 139 }, reason: PositionRule, expected_tokens: [], cursor_span: Span { start: 82, end: 139 }, guidance: None, token_kind: None }"
+
+
+failures:
+    tests::incremental_retains_bindings_and_restores_both_phases_after_late_failure
+    tests::warm_replays_identical_suffix_from_independent_checkpoints
+
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.35s
+
+error: test failed, to rerun pass `-p rune --example scar-session-profile`

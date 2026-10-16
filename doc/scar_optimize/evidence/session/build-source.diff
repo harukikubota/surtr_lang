@@ -1,0 +1,1178 @@
+diff --git a/crates/rune/examples/scar-session-profile.rs b/crates/rune/examples/scar-session-profile.rs
+new file mode 100644
+index 00000000..69308990
+--- /dev/null
++++ b/crates/rune/examples/scar-session-profile.rs
+@@ -0,0 +1,656 @@
++//! Manual process-warm and incremental Scar measurements. No VM execution.
++use serde_json::{json, Value};
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++enum Mode {
++    Warm,
++    Incremental,
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++enum Api {
++    Transactional,
++    InPlace,
++}
++impl Api {
++    fn name(self) -> &'static str {
++        match self {
++            Self::Transactional => "transactional",
++            Self::InPlace => "in_place",
++        }
++    }
++}
++struct Options {
++    mode: Mode,
++    api: Api,
++    iterations: usize,
++    size: usize,
++    input: Option<String>,
++}
++
++use scar::TypecheckContext;
++use sha2::{Digest, Sha256};
++use sigil::{ResolveEnvironment, ResolvedStagedProgram, SigilSession};
++use spire::ast::Ast;
++use std::sync::Arc;
++use std::time::Instant;
++
++struct Prepared {
++    snapshot: Arc<xldr::DefaultStdlibSnapshot>,
++    environment: ResolveEnvironment,
++    prefix_metadata: ResolvedStagedProgram,
++}
++impl Prepared {
++    fn new() -> Result<Self, String> {
++        let snapshot = xldr::default_stdlib_semantic_snapshot().map_err(|e| format!("{e:?}"))?;
++        let environment =
++            ResolveEnvironment::from_stages(&snapshot.module_stages).map_err(|e| e.to_string())?;
++        // Resolve prefix metadata once, outside sample timings. No Scar or VM work here.
++        let mut prefix_metadata = sigil::resolve_staged_program_from_state(
++            &snapshot.module_stages,
++            Vec::new(),
++            snapshot.declaration_index(),
++            None,
++            0,
++            sigil::ResolveResumeState::default(),
++        )
++        .map_err(|e| e.to_string())?;
++        prefix_metadata.resolved.clear();
++        Ok(Self {
++            snapshot,
++            environment,
++            prefix_metadata,
++        })
++    }
++    fn resolver(&self) -> Result<SigilSession, String> {
++        SigilSession::from_environment(
++            &self.environment,
++            Some("ProfileHarness".into()),
++            self.snapshot.resolve_state(),
++        )
++        .map_err(|e| e.to_string())
++    }
++    fn program(&self, resolved: Vec<sigil::resolved::Resolved>) -> ResolvedStagedProgram {
++        let mut program = self.prefix_metadata.clone();
++        program.resolved = resolved;
++        program.resume_state = self.snapshot.resolve_state(); // Scar does not consume this field.
++        program
++    }
++}
++fn micros(start: Instant) -> f64 {
++    start.elapsed().as_nanos() as f64 / 1000.0
++}
++fn hash(bytes: &[u8]) -> String {
++    format!("{:x}", Sha256::digest(bytes))
++}
++fn declaration_count(ast: &[Ast]) -> usize {
++    ast.iter()
++        .filter(|node| {
++            matches!(
++                node,
++                Ast::Def(..)
++                    | Ast::ConstDef(..)
++                    | Ast::ExtractorDef(..)
++                    | Ast::StructDef(..)
++                    | Ast::RecordDef(..)
++                    | Ast::EnumDef(..)
++                    | Ast::DeferrorDef(..)
++                    | Ast::TraitDef(..)
++                    | Ast::TraitImplDef(..)
++                    | Ast::ImplDef(..)
++            )
++        })
++        .count()
++}
++fn generated_definition(index: usize) -> String {
++    let body = if index == 0 {
++        "x".into()
++    } else {
++        format!("profile_stage{:03}(x)", index - 1)
++    };
++    format!("def profile_stage{index:03}(x: $A) -> $A {{ {body} }}\n")
++}
++fn generated_calls(index: usize) -> String {
++    format!(
++        "profile_stage{index:03}(7)\nprofile_stage{index:03}(\"x\")\nprofile_stage{index:03}(7)\n"
++    )
++}
++fn generated_chunk(index: usize) -> String {
++    generated_definition(index) + &generated_calls(index)
++}
++fn generated_warm(size: usize) -> String {
++    let mut source: String = (0..size).map(generated_definition).collect();
++    source.push_str(&generated_calls(size - 1));
++    source
++}
++const TRAIT_CHUNK: &str = "defrecord ProfileRecord(value: Int)\ndeftrait ProfileRead { def read(self: Self) -> Int }\nimpl ProfileRead for ProfileRecord { def read(self: ProfileRecord) -> Int { self.value } }\nProfileRead::read(ProfileRecord(7))\n";
++const REJECTED_CHUNK: &str = "def profile_discard(x: Int) -> Int { x }\ndef profile_invalid(x: Int) -> Int { \"invalid\" }\n";
++fn recovery_chunk(size: usize) -> String {
++    format!("def profile_discard(x: String) -> String {{ profile_stage{:03}(x) }}\nprofile_discard(\"recovered\")\nProfileRead::read(ProfileRecord(9))\n", size - 1)
++}
++
++struct Timings {
++    parse: f64,
++    resolve: f64,
++    scar: f64,
++    restore: f64,
++    checkpoint: f64,
++    rollback: f64,
++    resolver_restore: f64,
++    resolver_checkpoint: f64,
++    resolver_rollback: f64,
++}
++impl Default for Timings {
++    fn default() -> Self {
++        Self {
++            parse: 0.0,
++            resolve: 0.0,
++            scar: 0.0,
++            restore: 0.0,
++            checkpoint: 0.0,
++            rollback: 0.0,
++            resolver_restore: 0.0,
++            resolver_checkpoint: 0.0,
++            resolver_rollback: 0.0,
++        }
++    }
++}
++fn semantic_fingerprint(mut program: Value) -> String {
++    fn normalize(value: &mut Value, bindings: &mut std::collections::HashMap<u64, usize>) {
++        match value {
++            Value::Object(object) => {
++                // Compiler-created local binders use a process-global fresh UID supply.
++                // Alpha-rename only these ResolvedId objects, preserving every other
++                // field and one-to-one binding/reference relationships across the program.
++                if object.get("compiler_generated") == Some(&Value::Bool(true))
++                    && object.get("qualified_name") == Some(&Value::Null)
++                    && object.contains_key("name")
++                    && object.contains_key("span")
++                {
++                    if let Some(uid) = object.get("unique_id").and_then(Value::as_u64) {
++                        let next = bindings.len();
++                        let ordinal = *bindings.entry(uid).or_insert(next);
++                        object.insert(
++                            "unique_id".into(),
++                            json!(format!("synthetic_binding:{ordinal}")),
++                        );
++                    }
++                }
++                // serde_json::Value uses sorted object keys; arrays retain source order.
++                for child in object.values_mut() {
++                    normalize(child, bindings);
++                }
++            }
++            Value::Array(items) => {
++                for child in items {
++                    normalize(child, bindings);
++                }
++            }
++            _ => {}
++        }
++    }
++    normalize(&mut program, &mut std::collections::HashMap::new());
++    hash(&serde_json::to_vec(&program).expect("JSON value serializes"))
++}
++
++fn record(
++    options: &Options,
++    iteration: usize,
++    chunk: usize,
++    case: &str,
++    source: &str,
++    before: usize,
++    after: usize,
++    typed: Option<&scar::typed::TypedProgram>,
++    error: Option<&scar::error::TypeError>,
++    timings: Timings,
++    outer: f64,
++) -> Result<Value, String> {
++    let signature = typed
++        .map(|typed| serde_json::to_value(typed).map(|value| semantic_fingerprint(value)))
++        .transpose()
++        .map_err(|e| e.to_string())?;
++    Ok(json!({
++        "event": "sample", "mode": match options.mode { Mode::Warm => "warm", Mode::Incremental => "incremental" },
++        "api": options.api.name(), "iteration": iteration, "size": options.size,
++        "chunk": chunk, "case": case, "status": if error.is_some() { "expected_failure" } else { "success" },
++        "input_bytes": source.len(), "source_sha256": hash(source.as_bytes()),
++        "retained_user_definitions_before": before, "retained_user_definitions_after": after,
++        "typed_top_level_nodes": typed.map(|p| p.nodes.len()), "semantic_signature": signature,
++        "resolved_clone_in_scar": false, "resolved_clone_performed": false,
++        "typed_metadata_in_scar": true, "session_restore_in_scar": false,
++        "timings_us": { "parse": timings.parse, "resolve": timings.resolve, "scar": timings.scar,
++            "restore": timings.restore, "checkpoint": timings.checkpoint, "rollback": timings.rollback,
++            "resolver_restore": timings.resolver_restore, "resolver_checkpoint": timings.resolver_checkpoint,
++            "resolver_rollback": timings.resolver_rollback, "resolved_clone": 0.0, "frontend_total": outer },
++        "diagnostic": error.map(|e| json!({"reason": format!("{:?}", e.reason()),
++            "message": e.message, "span_start": e.span.start, "span_end": e.span.end, "hint": e.hint}))
++    }))
++}
++#[cfg(test)]
++fn samples(options: &Options) -> Result<Vec<Value>, String> {
++    samples_with_setup(options).map(|(_, rows)| rows)
++}
++fn samples_with_setup(options: &Options) -> Result<(Value, Vec<Value>), String> {
++    if options.iterations == 0 || options.size == 0 {
++        return Err("iterations and size must be positive".into());
++    }
++    if options.mode == Mode::Incremental
++        && (options.api != Api::Transactional || options.input.is_some())
++    {
++        return Err("incremental uses transactional API and generated chunks".into());
++    }
++    let setup_start = Instant::now();
++    let prepared = Prepared::new()?;
++    let setup_elapsed = micros(setup_start);
++    let setup = json!({
++        "event": "setup", "mode": match options.mode { Mode::Warm => "warm", Mode::Incremental => "incremental" },
++        "api": options.api.name(), "size": options.size, "iterations": options.iterations,
++        "setup_elapsed_us": setup_elapsed,
++        "stdlib_cache": xldr::stdlib_semantic_snapshot_cache_state(xldr::StdlibVariant::Default).map(|s| s.as_str()),
++        "timing_unit": "microseconds", "stdlib_snapshot_prepared_once": true,
++        "stdlib_preparation_in_samples": false, "resolved_input_cloned": false,
++        "typed_metadata_in_scar": true,
++        "semantic_signature_normalization": "alpha-renames compiler-generated unqualified ResolvedId bindings; preserves names, types, dispatch, literals, spans, function indices, tags, type variables, AST and array order",
++        "retained_definition_unit": "accepted top-level user declarations including trait and impl declarations; excludes generated specializations and stdlib",
++        "frontend_total_includes": ["parse", "resolve", "scar", "restore", "checkpoint", "rollback", "resolver_restore", "resolver_checkpoint", "resolver_rollback"],
++        "frontend_total_excludes": ["stdlib preparation", "input generation and file I/O", "JSON and signature generation", "VM and Forge execution", "typed results, sessions, and unused success checkpoints dropped after each sample"],
++        "scar_includes": ["API-owned transactional state clone when selected", "TypedProgram metadata generation"],
++        "incremental_api": "transactional", "parser_context": "script (compiler-session workload; not REPL grammar)"
++    });
++    let mut rows = Vec::new();
++    for iteration in 0..options.iterations {
++        if options.mode == Mode::Warm {
++            let generated;
++            let source = if let Some(source) = &options.input {
++                source
++            } else {
++                generated = generated_warm(options.size);
++                &generated
++            };
++            let outer = Instant::now();
++            let mut timings = Timings::default();
++            let start = Instant::now();
++            let ast = xldr::parse_file_source(
++                source,
++                spire::ParserContext::script(0),
++                "session-profile.srt",
++            )
++            .map_err(|e| format!("parse: {e:?}"))?;
++            timings.parse = micros(start);
++            let declarations = declaration_count(&ast);
++            let start = Instant::now();
++            let mut program = sigil::resolve_staged_program_from_state(
++                &prepared.snapshot.module_stages,
++                ast,
++                prepared.snapshot.declaration_index(),
++                Some("ProfileHarness".into()),
++                prepared.snapshot.default_stage_count,
++                prepared.snapshot.resolve_state(),
++            )
++            .map_err(|e| format!("resolve: {e}"))?;
++            // Keep stdlib process dependencies and source boot metadata in the staged API input.
++            let mut process_specs = prepared.prefix_metadata.process_specs.clone();
++            process_specs.extend(program.process_specs);
++            program.process_specs = process_specs;
++            let mut boot = prepared.prefix_metadata.boot_plan.clone();
++            boot.entries.extend(program.boot_plan.entries);
++            boot.singletons.extend(program.boot_plan.singletons);
++            boot.supervisors.extend(program.boot_plan.supervisors);
++            program.boot_plan = boot;
++            timings.resolve = micros(start);
++            let start = Instant::now();
++            let mut scar = prepared.snapshot.compile_prefix().restored_scar_session();
++            timings.restore = micros(start);
++            let start = Instant::now();
++            let typed = match options.api {
++                Api::Transactional => {
++                    scar.typecheck_staged_program_with_context(program, TypecheckContext::default())
++                }
++                Api::InPlace => scar.typecheck_staged_program_in_place_with_context(
++                    program,
++                    TypecheckContext::default(),
++                ),
++            }
++            .map_err(|e| format!("typecheck: {e}"))?;
++            timings.scar = micros(start);
++            let total = micros(outer);
++            rows.push(record(
++                options,
++                iteration,
++                0,
++                "independent_suffix",
++                source,
++                0,
++                declarations,
++                Some(&typed),
++                None,
++                timings,
++                total,
++            )?);
++        } else {
++            let start = Instant::now();
++            let mut resolver = prepared.resolver()?;
++            let resolver_restore = micros(start);
++            let start = Instant::now();
++            let mut scar = prepared.snapshot.compile_prefix().restored_scar_session();
++            let restore = micros(start);
++            let mut retained = 0;
++            for chunk in 0..options.size + 3 {
++                let (case, source) = if chunk < options.size {
++                    ("growing", generated_chunk(chunk))
++                } else if chunk == options.size {
++                    ("trait_impl", TRAIT_CHUNK.into())
++                } else if chunk == options.size + 1 {
++                    ("rejection", REJECTED_CHUNK.into())
++                } else {
++                    ("recovery", recovery_chunk(options.size))
++                };
++                let outer = Instant::now();
++                let mut timings = Timings::default();
++                if chunk == 0 {
++                    timings.restore = restore;
++                    timings.resolver_restore = resolver_restore;
++                }
++                let start = Instant::now();
++                let scar_checkpoint = scar.checkpoint();
++                timings.checkpoint = micros(start);
++                let start = Instant::now();
++                let resolver_checkpoint = resolver.checkpoint();
++                timings.resolver_checkpoint = micros(start);
++                let start = Instant::now();
++                let ast = xldr::parse_file_source(
++                    &source,
++                    spire::ParserContext::script(0),
++                    "session-profile.srt",
++                )
++                .map_err(|e| format!("parse: {e:?}"))?;
++                timings.parse = micros(start);
++                let added = declaration_count(&ast);
++                let start = Instant::now();
++                let resolved = resolver.resolve(ast).map_err(|e| format!("resolve: {e}"))?;
++                let program = prepared.program(resolved);
++                timings.resolve = micros(start);
++                let start = Instant::now();
++                let result = scar
++                    .typecheck_staged_program_with_context(program, TypecheckContext::default());
++                timings.scar = micros(start);
++                let before = retained;
++                let mut rolled_back = false;
++                let (typed, error) = match result {
++                    Ok(typed) if case != "rejection" => {
++                        retained += added;
++                        (Some(typed), None)
++                    }
++                    Ok(_) => return Err("expected late type rejection succeeded".into()),
++                    Err(error) if case == "rejection" => {
++                        let expected_start = REJECTED_CHUNK
++                            .find("\"invalid\"")
++                            .expect("fixed rejection literal");
++                        if error.reason()
++                            != Some(diagnostics::TypeDiagnosticReason::ReturnTypeMismatch)
++                            || error.span.start != expected_start
++                            || error.span.end != expected_start + "\"invalid\"".len()
++                        {
++                            return Err(format!("unexpected rejection diagnostic: {error}"));
++                        }
++                        // Resolver already committed names; both checkpoints must be restored.
++                        if resolver.lookup_uid("profile_discard").is_none() {
++                            return Err("rejection did not commit resolver binding".into());
++                        }
++                        let start = Instant::now();
++                        scar.rollback(scar_checkpoint);
++                        timings.rollback = micros(start);
++                        let start = Instant::now();
++                        resolver.rollback(resolver_checkpoint);
++                        timings.resolver_rollback = micros(start);
++                        rolled_back = resolver.lookup_uid("profile_discard").is_none()
++                            && resolver.lookup_uid("profile_invalid").is_none();
++                        if !rolled_back {
++                            return Err("resolver rollback retained rejected names".into());
++                        }
++                        (None, Some(error))
++                    }
++                    Err(error) => return Err(format!("unexpected {case} rejection: {error}")),
++                };
++                let total = micros(outer)
++                    + if chunk == 0 {
++                        restore + resolver_restore
++                    } else {
++                        0.0
++                    };
++                let mut row = record(
++                    options,
++                    iteration,
++                    chunk,
++                    case,
++                    &source,
++                    before,
++                    retained,
++                    typed.as_ref(),
++                    error.as_ref(),
++                    timings,
++                    total,
++                )?;
++                row["resolver_rollback_verified"] = json!(rolled_back);
++                row["reused_failed_binding"] = json!(case == "recovery");
++                rows.push(row);
++            }
++        }
++    }
++    // Fail the manual run if an independent repetition changes its semantic result.
++    for row in &rows {
++        if row["iteration"] != 0 {
++            let baseline = rows
++                .iter()
++                .find(|candidate| candidate["iteration"] == 0 && candidate["chunk"] == row["chunk"])
++                .ok_or("missing first-iteration sample")?;
++            if row["semantic_signature"] != baseline["semantic_signature"]
++                || row["diagnostic"] != baseline["diagnostic"]
++            {
++                return Err(format!(
++                    "repetition changed semantic result at chunk {}",
++                    row["chunk"]
++                ));
++            }
++        }
++    }
++    Ok((setup, rows))
++}
++
++fn parse_options() -> Result<Options, String> {
++    let mut options = Options {
++        mode: Mode::Warm,
++        api: Api::Transactional,
++        iterations: 10,
++        size: 16,
++        input: None,
++    };
++    let mut args = std::env::args().skip(1);
++    while let Some(flag) = args.next() {
++        if flag == "--help" {
++            return Err("usage: scar-session-profile --mode warm|incremental --api transactional|in_place --iterations N --size N [--input PATH]".into());
++        }
++        let value = args
++            .next()
++            .ok_or_else(|| format!("missing value for {flag}"))?;
++        match flag.as_str() {
++            "--mode" => {
++                options.mode = match value.as_str() {
++                    "warm" => Mode::Warm,
++                    "incremental" => Mode::Incremental,
++                    _ => return Err("mode must be warm or incremental".into()),
++                }
++            }
++            "--api" => {
++                options.api = match value.as_str() {
++                    "transactional" => Api::Transactional,
++                    "in_place" => Api::InPlace,
++                    _ => return Err("api must be transactional or in_place".into()),
++                }
++            }
++            "--iterations" => {
++                options.iterations = value.parse().map_err(|_| "invalid iterations")?
++            }
++            "--size" => options.size = value.parse().map_err(|_| "invalid size")?,
++            "--input" => {
++                options.input =
++                    Some(std::fs::read_to_string(&value).map_err(|e| format!("{value}: {e}"))?)
++            }
++            _ => return Err(format!("unknown argument: {flag}")),
++        }
++    }
++    Ok(options)
++}
++fn main() {
++    let outcome = parse_options().and_then(|options| samples_with_setup(&options));
++    match outcome {
++        Ok((setup, rows)) => {
++            println!("{setup}");
++            for row in rows {
++                println!("{row}");
++            }
++        }
++        Err(error) => {
++            eprintln!("{error}");
++            std::process::exit(1);
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn options(mode: Mode, api: Api) -> Options {
++        Options {
++            mode,
++            api,
++            iterations: 2,
++            size: 3,
++            input: None,
++        }
++    }
++
++    #[test]
++    fn warm_replays_identical_suffix_from_independent_checkpoints() {
++        for api in [Api::Transactional, Api::InPlace] {
++            let rows = samples(&options(Mode::Warm, api)).unwrap();
++            assert_eq!(rows.len(), 2);
++            assert_eq!(rows[0]["semantic_signature"], rows[1]["semantic_signature"]);
++            assert_eq!(rows[0]["source_sha256"], rows[1]["source_sha256"]);
++            for row in rows {
++                assert_eq!(row["status"], "success");
++                assert_eq!(row["retained_user_definitions_before"], 0);
++                assert_eq!(row["retained_user_definitions_after"], 3);
++                assert_eq!(row["resolved_clone_in_scar"], false);
++                assert_eq!(row["typed_metadata_in_scar"], true);
++            }
++        }
++    }
++
++    #[test]
++    fn warm_pattern_fixture_preserves_semantics_across_repetitions() {
++        for api in [Api::Transactional, Api::InPlace] {
++            let mut options = options(Mode::Warm, api);
++            options.iterations = 4;
++            options.input = Some(
++                include_str!("../../../tests/profile/scar_compile/features/patterns.srt").into(),
++            );
++            let rows = samples(&options).unwrap();
++            assert_eq!(rows.len(), 4);
++            for row in &rows[1..] {
++                assert_eq!(row["semantic_signature"], rows[0]["semantic_signature"]);
++            }
++        }
++    }
++
++    #[test]
++    fn semantic_fingerprint_preserves_binding_wiring_and_semantic_fields() {
++        fn id(uid: u64, generated: bool) -> Value {
++            json!({"name": "__local", "qualified_name": null, "unique_id": uid,
++                "compiler_generated": generated, "symbol_info": null, "span": {"start": 1, "end": 2}})
++        }
++        fn program(first: u64, second: u64) -> Value {
++            json!({"binders": [id(first, true), id(second, true)],
++                "references": [id(first, true), id(second, true)],
++                "literal": {"Int": 42}, "ty": "Int",
++                "dispatch": {"UserFunction": {"name": "Canonical::method", "fun_idx": 7}},
++                "authored": id(10, false)})
++        }
++        let baseline = program(3_000_000_000, 3_000_000_001);
++        let expected = semantic_fingerprint(baseline.clone());
++        assert_eq!(
++            expected,
++            semantic_fingerprint(program(3_000_000_100, 3_000_000_101))
++        );
++        let mut rewired = baseline.clone();
++        rewired["references"][1] = id(3_000_000_000, true);
++        assert_ne!(expected, semantic_fingerprint(rewired));
++        for (pointer, replacement) in [
++            ("/literal/Int", json!(43)),
++            ("/ty", json!("Str")),
++            ("/dispatch/UserFunction/name", json!("Other::method")),
++            ("/dispatch/UserFunction/fun_idx", json!(8)),
++            ("/authored/unique_id", json!(11)),
++            ("/references/0/span/end", json!(3)),
++        ] {
++            let mut changed = baseline.clone();
++            *changed.pointer_mut(pointer).unwrap() = replacement;
++            assert_ne!(expected, semantic_fingerprint(changed), "{pointer}");
++        }
++    }
++
++    #[test]
++    fn incremental_retains_bindings_and_restores_both_phases_after_late_failure() {
++        let rows = samples(&options(Mode::Incremental, Api::Transactional)).unwrap();
++        for iteration in 0..2 {
++            let run = rows
++                .iter()
++                .filter(|row| row["iteration"] == iteration)
++                .collect::<Vec<_>>();
++            assert_eq!(run.len(), 6); // three growing chunks, trait/impl, rejection, recovery.
++            for (chunk, row) in run.iter().take(3).enumerate() {
++                assert_eq!(row["retained_user_definitions_before"], chunk);
++                assert_eq!(row["retained_user_definitions_after"], chunk + 1);
++                assert_eq!(row["status"], "success");
++            }
++            assert_eq!(run[3]["case"], "trait_impl");
++            let failed = run[4];
++            assert_eq!(failed["status"], "expected_failure");
++            assert_eq!(failed["resolver_rollback_verified"], true);
++            assert_eq!(failed["diagnostic"]["reason"], "Some(ReturnTypeMismatch)");
++            let expected_start = REJECTED_CHUNK.find("\"invalid\"").unwrap();
++            assert_eq!(failed["diagnostic"]["span_start"], expected_start);
++            assert_eq!(
++                failed["diagnostic"]["span_end"],
++                expected_start + "\"invalid\"".len()
++            );
++            assert_eq!(run[5]["status"], "success");
++            assert_eq!(run[5]["case"], "recovery");
++            assert_eq!(run[5]["reused_failed_binding"], true);
++        }
++    }
++
++    #[test]
++    fn sibling_sessions_do_not_share_new_names_or_nominal_metadata() {
++        let prepared = Prepared::new().unwrap();
++        let mut original = prepared.resolver().unwrap();
++        let mut sibling = original.clone();
++        let mut original_scar = prepared.snapshot.compile_prefix().restored_scar_session();
++        let mut sibling_scar = original_scar.clone();
++        let ast = spire::parse("defrecord ProfileSibling(value: Int)").unwrap();
++        let resolved = sibling.resolve(ast).unwrap();
++        sibling_scar
++            .typecheck_staged_program(prepared.program(resolved))
++            .unwrap();
++        assert!(sibling.lookup_uid("ProfileSibling").is_some());
++        assert!(original.lookup_uid("ProfileSibling").is_none());
++        assert!(sibling_scar.lookup_type_def("ProfileSibling").is_some());
++        assert!(original_scar.lookup_type_def("ProfileSibling").is_none());
++        let ast = spire::parse("defrecord ProfileSibling(value: String)").unwrap();
++        let resolved = original.resolve(ast).unwrap();
++        original_scar
++            .typecheck_staged_program(prepared.program(resolved))
++            .unwrap();
++    }
++}
+diff --git a/tests/profile/scar_compile/measure_session.py b/tests/profile/scar_compile/measure_session.py
+new file mode 100644
+index 00000000..ab648323
+--- /dev/null
++++ b/tests/profile/scar_compile/measure_session.py
+@@ -0,0 +1,265 @@
++#!/usr/bin/env python3
++"""Record process-warm and incremental Scar baselines (no VM execution)."""
++
++import argparse
++import json
++import math
++import os
++from pathlib import Path
++import re
++import statistics
++import subprocess
++import time
++
++from measure import ROOT, digest, probe, save
++
++TIMING_FIELDS = {"parse", "resolve", "scar", "restore", "checkpoint", "rollback",
++                 "resolver_restore", "resolver_checkpoint", "resolver_rollback",
++                 "resolved_clone", "frontend_total"}
++
++
++def source_state():
++    paths = set(ROOT.glob("crates/**/*.rs"))
++    paths.update(ROOT.glob("crates/**/Cargo.toml"))
++    paths.update(ROOT.glob("lib/**/*.srt"))
++    paths.update(ROOT.glob("tests/profile/scar_compile/**/*.py"))
++    paths.update(ROOT.glob("tests/profile/scar_compile/**/*.srt"))
++    paths.update(ROOT / name for name in ("Cargo.toml", "Cargo.lock", "rust-toolchain.toml"))
++    return {str(path.relative_to(ROOT)): digest(path)
++            for path in sorted(paths) if path.is_file()}
++
++
++def validate_invocation(rows, mode, api, size, iterations):
++    if mode not in ("warm", "incremental") or api not in ("transactional", "in_place"):
++        raise ValueError("invalid mode/API")
++    if mode == "incremental" and api != "transactional":
++        raise ValueError("incremental requires transactional API")
++    if type(size) is not int or size < 1 or type(iterations) is not int or iterations < 1:
++        raise ValueError("size/iterations must be positive integers")
++    if any(type(row) is not dict for row in rows):
++        raise ValueError("rows must be objects")
++    setup = [row for row in rows if row.get("event") == "setup"]
++    if len(setup) != 1 or rows[0].get("event") != "setup":
++        raise ValueError("expected exactly one initial setup event")
++    if any(row.get("event") not in ("setup", "sample") for row in rows):
++        raise ValueError("unexpected event")
++    for key, value in (("mode", mode), ("api", api), ("size", size), ("iterations", iterations)):
++        if setup[0].get(key) != value:
++            raise ValueError(f"setup {key} mismatch")
++    expected = {(iteration, chunk): ("expected_failure" if mode == "incremental" and chunk == size + 1
++                                    else "success")
++                for iteration in range(iterations)
++                for chunk in range(1 if mode == "warm" else size + 3)}
++    seen = set()
++    timing_keys = {}
++    semantics = {}
++    for row in rows[1:]:
++        if any(row.get(key) != value for key, value in (("mode", mode), ("api", api), ("size", size))):
++            raise ValueError("sample mode/API/size mismatch")
++        if type(row.get("iteration")) is not int or type(row.get("chunk")) is not int:
++            raise ValueError("sample iteration/chunk must be integers")
++        key = (row["iteration"], row["chunk"])
++        if key in seen or key not in expected or row.get("status") != expected[key]:
++            raise ValueError("duplicate, unexpected, or incorrectly classified sample")
++        seen.add(key)
++        timings = row.get("timings_us")
++        if type(timings) is not dict or not TIMING_FIELDS <= timings.keys():
++            raise ValueError("missing required session timing")
++        for name, value in timings.items():
++            if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
++                raise ValueError(f"invalid timing: {name}={value}")
++        chunk = row["chunk"]
++        if chunk in timing_keys and timing_keys[chunk] != timings.keys():
++            raise ValueError("timing fields differ between repetitions")
++        timing_keys[chunk] = timings.keys()
++        for field in ("source_sha256", "semantic_signature"):
++            value = row.get(field)
++            if field == "semantic_signature" and row["status"] == "expected_failure":
++                if field not in row or value is not None:
++                    raise ValueError("rejected sample has a typed signature")
++            elif type(value) is not str or not re.fullmatch("[0-9a-f]{64}", value):
++                raise ValueError(f"invalid {field}")
++        for field, minimum in (("input_bytes", 1), ("retained_user_definitions_before", 0),
++                               ("retained_user_definitions_after", 0)):
++            if type(row.get(field)) is not int or row[field] < minimum:
++                raise ValueError(f"invalid {field}")
++        for field, value in (("resolved_clone_in_scar", False), ("resolved_clone_performed", False),
++                             ("typed_metadata_in_scar", True), ("session_restore_in_scar", False)):
++            if row.get(field) is not value:
++                raise ValueError(f"unexpected timing boundary: {field}")
++        before, after = row["retained_user_definitions_before"], row["retained_user_definitions_after"]
++        if mode == "warm":
++            if before != 0:
++                raise ValueError("warm sample retained prior user declarations")
++        else:
++            expected_counts = ((chunk, chunk + 1) if chunk < size else
++                               (size, size + 3) if chunk == size else
++                               (size + 3, size + 3 + (chunk == size + 2)))
++            if (before, after) != expected_counts:
++                raise ValueError("incremental retained declaration counts mismatch")
++        if row["status"] == "expected_failure":
++            diagnostic = row.get("diagnostic")
++            if (type(diagnostic) is not dict
++                    or diagnostic.get("reason") != "Some(ReturnTypeMismatch)"
++                    or type(diagnostic.get("span_start")) is not int or diagnostic["span_start"] <= 0
++                    or type(diagnostic.get("span_end")) is not int
++                    or diagnostic["span_end"] <= diagnostic["span_start"]
++                    or type(diagnostic.get("message")) is not str or not diagnostic["message"]
++                    or row.get("resolver_rollback_verified") is not True
++                    or "typed_top_level_nodes" not in row or row["typed_top_level_nodes"] is not None):
++                raise ValueError("unexpected rejection or unverified rollback")
++        elif (type(row.get("typed_top_level_nodes")) is not int or row["typed_top_level_nodes"] < 0
++              or "diagnostic" not in row or row["diagnostic"] is not None):
++            raise ValueError("invalid successful typed output")
++        if mode == "incremental" and chunk == size + 2 and row.get("reused_failed_binding") is not True:
++            raise ValueError("recovery did not reuse the rejected name")
++        stable = {field: row[field] for field in ("source_sha256", "input_bytes", "semantic_signature",
++                  "typed_top_level_nodes", "retained_user_definitions_before", "retained_user_definitions_after",
++                  "diagnostic")}
++        if chunk in semantics and semantics[chunk] != stable:
++            raise ValueError("source or typed semantics changed between repetitions")
++        semantics[chunk] = stable
++    if seen != expected.keys():
++        raise ValueError("missing samples")
++
++
++def summarize(rows, iterations):
++    grouped = {}
++    for row in rows:
++        if row.get("event") != "sample":
++            continue
++        key = tuple(row[name] for name in ("case", "mode", "api", "size", "chunk", "status"))
++        group = grouped.setdefault(key, {"iterations": set(), "timings": {}})
++        iteration = row["iteration"]
++        if type(iteration) is not int or not 0 <= iteration < iterations:
++            raise ValueError(f"invalid iteration: {iteration}")
++        if iteration in group["iterations"]:
++            raise ValueError(f"duplicate sample: {key}, iteration {iteration}")
++        group["iterations"].add(iteration)
++        timings = row["timings_us"]
++        if "scar" not in timings or "frontend_total" not in timings:
++            raise ValueError("missing Scar/frontend timing")
++        for name, value in timings.items():
++            if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
++                raise ValueError(f"invalid timing: {name}={value}")
++            group["timings"].setdefault(name, []).append(value)
++    if not grouped:
++        raise ValueError("no samples")
++    result = []
++    for key, group in grouped.items():
++        if group["iterations"] != set(range(iterations)):
++            raise ValueError(f"incomplete repetitions: {key}")
++        record = dict(zip(("case", "mode", "api", "size", "chunk", "status"), key))
++        record["timings_us"] = {
++            name: {"count": len(values), "median": statistics.median(values),
++                   "min": min(values), "max": max(values)}
++            for name, values in group["timings"].items()
++        }
++        result.append(record)
++    return {"duration_unit": "us", "results": result}
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--binary", type=Path, required=True)
++    parser.add_argument("--build-manifest", type=Path, required=True)
++    parser.add_argument("--output", type=Path, required=True)
++    parser.add_argument("--iterations", type=int, default=10)
++    parser.add_argument("--power-condition", required=True)
++    parser.add_argument("--timeout", type=float, default=300)
++    options = parser.parse_args()
++    if options.iterations < 1 or options.timeout <= 0:
++        parser.error("iterations and timeout must be positive")
++    binary = options.binary.resolve(strict=True)
++    build = json.loads(options.build_manifest.read_text())
++    before = {"sources": source_state(), "binary": digest(binary)}
++    if build["sources"] != before["sources"] or build["binary"] != before["binary"]:
++        parser.error("build manifest does not match current sources/binary")
++    output = options.output.resolve()
++    output.mkdir(parents=True, exist_ok=False)
++    environment = dict(os.environ, SURTR_STDLIB_CACHE_DIR=str(output / "cache"))
++    removed = sorted(key for key in environment
++                     if key == "RUST_MIN_STACK" or (key.startswith("SURTR_")
++                     and ("PROFILE" in key or "COUNTER" in key)))
++    for key in removed:
++        del environment[key]
++    inputs = [("stdlib_prewarm", "tests/profile/stdlib_prewarm.srt"),
++              ("patterns", "tests/profile/scar_compile/features/patterns.srt"),
++              ("monad_carriers", "tests/profile/scar_compile/features/monad_carriers.srt")]
++    for series, sizes in (("generic_chain", (16, 32, 64)),
++                          ("error_definitions", (64, 128, 256)),
++                          ("trait_impls", (16, 32, 64))):
++        inputs.extend((f"{series}_{size:03}",
++                       f"tests/profile/scar_compile/generated/{series}_{size:03}.srt")
++                      for size in sizes)
++    cases = [(name, "warm", 0, path) for name, path in inputs]
++    cases += [(f"incremental_{size:03}", "incremental", size, None) for size in (16, 32, 64)]
++    manifest = {"build": build, "cwd": str(ROOT), "iterations": options.iterations,
++                "power_condition": options.power_condition, "removed_environment": removed,
++                "environment": {key: value for key, value in environment.items()
++                                if key.startswith(("SURTR_", "CARGO_", "RUST"))},
++                "host": probe(["uname", "-a"]), "cpu": probe(["sysctl", "-n", "machdep.cpu.brand_string"]),
++                "power": probe(["pmset", "-g", "batt"]), "commands": []}
++    # Include control inputs outside scar_compile in the immutability check.
++    input_hashes = {path: digest(ROOT / path) for _, path in inputs}
++    manifest["inputs"] = input_hashes
++    save(output / "manifest.json", manifest)
++    rows = []
++    try:
++        for name, mode, size, path in cases:
++            for api in (("transactional", "in_place") if mode == "warm" else ("transactional",)):
++                command = [str(binary), "--mode", mode, "--api", api,
++                           "--iterations", str(options.iterations), "--size", str(size or 16)]
++                if path:
++                    command += ["--input", path]
++                stem = output / f"{name}-{api}"
++                start = time.monotonic()
++                try:
++                    process = subprocess.run(command, cwd=ROOT, env=environment, capture_output=True,
++                                             text=True, timeout=options.timeout)
++                except subprocess.TimeoutExpired as error:
++                    stem.with_suffix(".stdout").write_bytes(error.stdout or b"")
++                    stem.with_suffix(".stderr").write_bytes(error.stderr or b"")
++                    manifest["commands"].append({"case": name, "api": api, "args": command,
++                                                 "exit_code": None, "error": "timeout",
++                                                 "wall_seconds": time.monotonic() - start})
++                    save(output / "manifest.json", manifest)
++                    raise
++                stem.with_suffix(".stdout").write_text(process.stdout)
++                stem.with_suffix(".stderr").write_text(process.stderr)
++                invocation = {"case": name, "api": api, "args": command,
++                              "exit_code": process.returncode, "wall_seconds": time.monotonic() - start,
++                              "stdout": stem.name + ".stdout", "stderr": stem.name + ".stderr"}
++                manifest["commands"].append(invocation)
++                save(output / "manifest.json", manifest)
++                if process.returncode:
++                    raise ValueError(f"{name}/{api}: exit {process.returncode}; see {stem.name}.stderr")
++                samples = [json.loads(line) for line in process.stdout.splitlines()]
++                validate_invocation(samples, mode, api, size or 16, options.iterations)
++                if path and any(row["source_sha256"] != input_hashes[path]["sha256"]
++                                or row["input_bytes"] != input_hashes[path]["bytes"]
++                                for row in samples[1:]):
++                    raise ValueError("sample does not match the requested input file")
++                for row in samples:
++                    row["sample_case"] = row.get("case")
++                    row["case"] = name
++                    if row.get("event") == "sample" and (row["mode"] != mode or row["api"] != api):
++                        raise ValueError("sample mode/API mismatch")
++                summarize(samples, options.iterations)
++                rows.extend(samples)
++                with (output / "runs.jsonl").open("a") as stream:
++                    for row in samples:
++                        stream.write(json.dumps(row, ensure_ascii=False) + "\n")
++        after = {"sources": source_state(), "binary": digest(binary)}
++        if before != after or input_hashes != {path: digest(ROOT / path) for _, path in inputs}:
++            raise ValueError("sources, inputs, or binary changed during measurement")
++        manifest["final_hash_verification"] = "unchanged"
++        save(output / "manifest.json", manifest)
++        save(output / "summary.json", summarize(rows, options.iterations))
++    except Exception as error:
++        save(output / "failure.json", {"error": str(error)})
++        raise
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/tests/profile/scar_compile/test_measure_session.py b/tests/profile/scar_compile/test_measure_session.py
+new file mode 100644
+index 00000000..0fdf2658
+--- /dev/null
++++ b/tests/profile/scar_compile/test_measure_session.py
+@@ -0,0 +1,239 @@
++"""Evidence acceptance tests for the manual session baseline recorder."""
++
++import copy
++import math
++import unittest
++
++import measure_session
++
++
++def evidence(mode="incremental", api="transactional", size=2, iterations=2):
++    rows = [{"event": "setup", "mode": mode, "api": api,
++             "size": size, "iterations": iterations}]
++    cases = [("growing", "success")] * size + [
++        ("trait_impl", "success"), ("rejection", "expected_failure"),
++        ("recovery", "success")]
++    if mode == "warm":
++        cases = [("independent_suffix", "success")]
++    for iteration in range(iterations):
++        for chunk, (case, status) in enumerate(cases):
++            if mode == "warm":
++                before, after = 0, size
++            elif chunk < size:
++                before, after = chunk, chunk + 1
++            elif chunk == size:
++                before, after = size, size + 3
++            else:
++                before, after = size + 3, size + 3 + (case == "recovery")
++            rows.append({"event": "sample", "mode": mode, "api": api,
++                         "size": size, "iteration": iteration, "chunk": chunk,
++                         "case": case, "status": status,
++                         "source_sha256": f"{chunk + 1:064x}", "input_bytes": 100,
++                         "semantic_signature": f"{chunk + 17:064x}" if status == "success" else None,
++                         "typed_top_level_nodes": 3 if status == "success" else None,
++                         "retained_user_definitions_before": before,
++                         "retained_user_definitions_after": after,
++                         "resolved_clone_in_scar": False, "resolved_clone_performed": False,
++                         "typed_metadata_in_scar": True, "session_restore_in_scar": False,
++                         "resolver_rollback_verified": case == "rejection",
++                         "reused_failed_binding": case == "recovery",
++                         "diagnostic": {"reason": "Some(ReturnTypeMismatch)",
++                                        "message": "Expected Int but found String",
++                                        "span_start": 70, "span_end": 79, "hint": None}
++                         if status == "expected_failure" else None,
++                         "timings_us": {"scar": 3 + iteration,
++                                        "frontend_total": 10 + iteration,
++                                        "parse": 1, "resolve": 1, "restore": 1,
++                                        "checkpoint": 1, "rollback": 0,
++                                        "resolver_restore": 1, "resolver_checkpoint": 1,
++                                        "resolver_rollback": 0, "resolved_clone": 0}})
++    return rows
++
++
++class InvocationAcceptanceTests(unittest.TestCase):
++    def accept(self, rows, mode="incremental", api="transactional", size=2, iterations=2):
++        return measure_session.validate_invocation(rows, mode, api, size, iterations)
++
++    def reject(self, rows, **options):
++        with self.assertRaises((ValueError, KeyError, TypeError)):
++            self.accept(rows, **options)
++
++    def test_complete_incremental_and_both_warm_apis_are_accepted(self):
++        self.accept(evidence())
++        for api in ("transactional", "in_place"):
++            with self.subTest(api=api):
++                self.accept(evidence("warm", api), mode="warm", api=api)
++
++    def test_omitting_a_whole_chunk_does_not_create_a_complete_baseline(self):
++        rows = evidence()
++        for omitted in range(5):
++            with self.subTest(chunk=omitted):
++                self.reject([row for row in rows if row.get("chunk") != omitted])
++
++    def test_rejection_and_recovery_cannot_be_reported_as_other_statuses(self):
++        for chunk, replacement in ((3, "success"), (4, "expected_failure"), (0, "skipped")):
++            with self.subTest(chunk=chunk, status=replacement):
++                rows = evidence()
++                for row in rows:
++                    if row.get("chunk") == chunk:
++                        row["status"] = replacement
++                self.reject(rows)
++
++    def test_missing_or_repeated_setup_is_rejected(self):
++        rows = evidence()
++        self.reject(rows[1:])
++        self.reject([rows[0], *rows])
++
++    def test_missing_repetition_and_duplicate_sample_are_rejected(self):
++        rows = evidence()
++        self.reject(rows[:-1])
++        self.reject(rows + [copy.deepcopy(rows[1])])
++        self.reject([row for row in rows if row.get("iteration") != 1])
++
++    def test_warm_requires_one_independent_success_per_iteration(self):
++        rows = evidence("warm")
++        self.reject(rows[:-1], mode="warm")
++        for row in rows[1:]:
++            row["chunk"] = 1
++        self.reject(rows, mode="warm")
++
++    def test_mismatched_invocation_fields_are_rejected(self):
++        for event_index in (0, 1):
++            for field, value in (("mode", "other"), ("api", "other"), ("size", 3)):
++                with self.subTest(event=event_index, field=field):
++                    rows = evidence()
++                    rows[event_index][field] = value
++                    self.reject(rows)
++
++    def test_invalid_iteration_and_chunk_ids_are_rejected(self):
++        for field, value in (("iteration", -1), ("iteration", 2),
++                             ("iteration", True), ("iteration", 0.0),
++                             ("chunk", -1), ("chunk", 5), ("chunk", True)):
++            with self.subTest(field=field, value=value):
++                rows = evidence()
++                rows[1][field] = value
++                self.reject(rows)
++
++    def test_unknown_events_and_missing_status_are_rejected(self):
++        rows = evidence()
++        self.reject(rows + [{"event": "omitted_due_to_error"}])
++        del rows[1]["status"]
++        self.reject(rows)
++
++    def test_invalid_timings_cannot_enter_the_summary(self):
++        for value in (-1, math.inf, -math.inf, math.nan, True, "3", None):
++            with self.subTest(value=value):
++                rows = evidence()
++                rows[1]["timings_us"]["scar"] = value
++                self.reject(rows)
++
++    def test_partial_timing_columns_and_missing_core_timings_are_rejected(self):
++        for column in ("scar", "frontend_total", "checkpoint"):
++            with self.subTest(column=column):
++                rows = evidence()
++                del rows[1]["timings_us"][column]
++                self.reject(rows)
++
++    def test_omitting_restore_or_rollback_entirely_cannot_hide_their_cost(self):
++        for column in ("parse", "resolve", "restore", "checkpoint", "rollback",
++                       "resolver_restore", "resolver_checkpoint", "resolver_rollback",
++                       "resolved_clone"):
++            with self.subTest(column=column):
++                rows = evidence()
++                for row in rows[1:]:
++                    del row["timings_us"][column]
++                self.reject(rows)
++
++    def test_semantic_and_input_metadata_are_required(self):
++        for column in ("source_sha256", "input_bytes", "semantic_signature",
++                       "typed_top_level_nodes", "retained_user_definitions_before",
++                       "retained_user_definitions_after", "resolved_clone_in_scar",
++                       "typed_metadata_in_scar", "session_restore_in_scar"):
++            with self.subTest(column=column):
++                rows = evidence()
++                del rows[1][column]
++                self.reject(rows)
++
++    def test_hashes_and_input_size_must_describe_a_real_sample(self):
++        for column, value in (("source_sha256", ""), ("source_sha256", "x" * 64),
++                              ("semantic_signature", None), ("semantic_signature", "short"),
++                              ("input_bytes", 0), ("input_bytes", True),
++                              ("typed_top_level_nodes", True), ("typed_top_level_nodes", -1),
++                              ("typed_top_level_nodes", None)):
++            with self.subTest(column=column, value=value):
++                rows = evidence()
++                rows[1][column] = value
++                self.reject(rows)
++
++    def test_incremental_retention_tracks_success_and_rejects_leaked_state(self):
++        for chunk, column, value in ((0, "retained_user_definitions_before", 1),
++                                     (1, "retained_user_definitions_after", 1),
++                                     (2, "retained_user_definitions_after", 4),
++                                     (3, "retained_user_definitions_after", 6),
++                                     (4, "retained_user_definitions_before", 6),
++                                     (4, "retained_user_definitions_after", 5),
++                                     (0, "retained_user_definitions_before", False)):
++            with self.subTest(chunk=chunk, column=column):
++                rows = evidence()
++                rows[chunk + 1][column] = value
++                self.reject(rows)
++
++    def test_warm_samples_require_independent_prefix_state(self):
++        for column, value in (("retained_user_definitions_before", 1),
++                              ("retained_user_definitions_after", -1)):
++            with self.subTest(column=column):
++                rows = evidence("warm")
++                rows[1][column] = value
++                self.reject(rows, mode="warm")
++
++    def test_flags_must_match_the_recorded_timing_boundaries(self):
++        for column, value in (("resolved_clone_in_scar", True),
++                              ("typed_metadata_in_scar", False),
++                              ("session_restore_in_scar", True)):
++            with self.subTest(column=column):
++                rows = evidence()
++                rows[1][column] = value
++                self.reject(rows)
++
++    def test_rejection_requires_the_intended_diagnostic_and_both_phase_recovery(self):
++        for column, value in (("resolver_rollback_verified", False),
++                              ("diagnostic", None), ("typed_top_level_nodes", 1),
++                              ("semantic_signature", "a" * 64)):
++            with self.subTest(column=column):
++                rows = evidence()
++                rows[4][column] = value
++                self.reject(rows)
++        for column, value in (("reason", "Some(TypeMismatch)"), ("span_start", 0),
++                              ("span_end", 70), ("message", "")):
++            with self.subTest(diagnostic_column=column):
++                rows = evidence()
++                rows[4]["diagnostic"][column] = value
++                self.reject(rows)
++        rows = evidence()
++        rows[5]["reused_failed_binding"] = False
++        self.reject(rows)
++
++    def test_semantics_and_sources_cannot_drift_between_repetitions(self):
++        for mode in ("warm", "incremental"):
++            for column in ("semantic_signature", "source_sha256"):
++                with self.subTest(mode=mode, column=column):
++                    rows = evidence(mode)
++                    last_iteration_first_chunk = next(row for row in rows[1:]
++                                                      if row["iteration"] == 1 and row["chunk"] == 0)
++                    last_iteration_first_chunk[column] = "f" * 64
++                    self.reject(rows, mode=mode)
++
++
++class SummaryTests(unittest.TestCase):
++    def test_summary_preserves_each_group_and_all_observations(self):
++        rows = evidence()
++        result = measure_session.summarize(rows, 2)
++        self.assertEqual(result["duration_unit"], "us")
++        self.assertEqual(len(result["results"]), 5)
++        for record in result["results"]:
++            self.assertEqual(record["timings_us"]["scar"],
++                             {"count": 2, "median": 3.5, "min": 3, "max": 4})
++
++
++if __name__ == "__main__":
++    unittest.main()

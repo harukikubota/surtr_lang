@@ -1,0 +1,4 @@
+   Compiling xldr v0.1.0 (/Users/haruca/work/rust/surtr/crates/xldr)
+   Compiling rune v0.1.0 (/Users/haruca/work/rust/surtr/crates/rune)
+    Finished `dev` profile [unoptimized] target(s) in 3.64s
+     Running `target/debug/surtr test --quiet --all`

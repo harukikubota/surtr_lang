@@ -18,13 +18,15 @@
 
 **P3の実施（2026-10-16）:** `deferror` scopeの変数表全コピーを変更差分のundoへ置き換えた。全24入口・960回の比較で、Error 256宣言のdisk-hit typecheckは78.61%、小入力coldのcompile totalは19.72%短縮した。最終CI profileは2,640件成功。初回Scar検証の2件timeoutと後続全件成功も区別して [08_state_copy.md](08_state_copy.md) に記録した。
 
+**P4・残る計測の実施（2026-10-16）:** canonical trait identity検索のindex化と全33入口の比較は [09_trait_identity.md](09_trait_identity.md) に記録した。process warm / incremental専用harnessも追加し、27process・1,450sampleの現在の基準値を収集した。状態復元と検証結果は [10_session_measurement.md](10_session_measurement.md) を参照。
+
 ## 調査結果
 
 | 項目 | 結論 | 詳細 |
 |---|---|---|
 | テストケースの追加 | 既存の成功・拒否に加え、nested probe、失敗後の再試行、通常／in-place API、full／prefix compile の比較を補った。P0 の7群、P1 の5群を追加・拡張済み | [01_test_plan.md](01_test_plan.md) |
 | ファイル分割 | 責務別の移動を実施済み。`checker/mod.rs` は553行、`expr/mod.rs` は1,018行となり、入口と共通型を残した。状態所有者の再設計は行っていない | [02_file_split.md](02_file_split.md) |
-| `.srt` コンパイル時間 | P1のmetadata複製削減、P2のTrait前処理・specialization走査削減、P3の変数表複製削減を実施。それぞれ全24入力でbefore / afterを測定 | [03_compile_time.md](03_compile_time.md)、[P1結果](06_deferror_scope.md)、[P2結果](07_specialization_predeclare.md)、[P3結果](08_state_copy.md) |
+| `.srt` コンパイル時間 | P1〜P4の最適化とcold / disk hit比較を実施。process warm / incrementalの現在の基準値も収集 | [03_compile_time.md](03_compile_time.md)、[P1結果](06_deferror_scope.md)、[P2結果](07_specialization_predeclare.md)、[P3結果](08_state_copy.md)、[P4結果](09_trait_identity.md)、[session計測](10_session_measurement.md) |
 | 基準値 | release binary で 3 入力 × cold / disk hit × 5 回を計測。追加 profile 6 回と生ログを保存 | [04_baseline.md](04_baseline.md) |
 | 測定入力の整備 | 現行の機能別入力、規模系列、宣言順比較、複数 module を追加。計測対象 24 入口の一覧を保存 | [05_compile_inputs.md](05_compile_inputs.md) |
 
@@ -91,4 +93,4 @@ cold の標準定義 load は約 407〜410 ms（各条件の中央値）。別�
 - 別エージェントのレビューを実施。既に scope 化済みの経路を再提案していた箇所と、rollback 後の関数番号再割当を禁止しかねないテスト条件を修正した。
 - 初回調査では Scar / workspace の nextest、標準テスト、生成 bytecode の実行は未実施。後続の入力整備では標準テスト全件の成功を確認した。コンパイル成功をリファクタリング後の回帰検証とは扱わない。
 
-回帰テスト追加、ファイル分割、P1 / P2a / P2b / P3の性能改善と全24入口の反復比較は2026-10-16に実施した。残件はP4、session transactional cloneと診断用child probeの最適化、process warm / incremental専用の性能測定。公開契約を保ち、P1では宣言metadataの複製、P2では走査と検索、P3では変数表の複製を減らした。
+回帰テスト追加、ファイル分割、P1〜P4の改善とcold / disk hit比較、process warm / incremental専用計測を2026-10-16に実施した。今回の計画に明示された未実施項目はない。session transactional cloneの削減、診断用child probe、永続summaryは、費用や状態分離の仕様を確認してから選ぶ候補として保留する。公開契約と保存形式を維持している。

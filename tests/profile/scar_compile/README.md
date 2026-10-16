@@ -109,3 +109,60 @@ build manifest は各 binary のビルド時に用意した JSON を必ず渡す
 - `failure.json`: 失敗した走行または測定中の hash 変化。失敗時は完成した `summary.json` を生成しない。
 
 host の toolchain 情報は測定環境の記録であり、build manifest の toolchain を置き換えない。OS の page cache、同時実行負荷、電源設定をスクリプトが固定することはない。測定中は binary・入力・標準ソースを更新せず、before / after に対応する target を別のタスクで使わない。
+
+## process warm / incremental の計測
+
+[scar-session-profile](../../../crates/rune/examples/scar-session-profile.rs) は、同一processで標準snapshotを準備し、既存のSigil / Scar公開APIを直接呼ぶ手動harness。Pは同じcheckpointから独立したsuffixを反復し、Iは同じsessionへchunkを追加する。Iの入力はscriptとしてparseするため、REPLの入力構文・CLI・VMの計測ではない。
+
+Pはtransactional / in-placeを分け、Iはtransactional APIでgeneric関数の追加・過去定義の参照・trait/impl追加・失敗後の両phase復元・成功を通す。入力の生成・file I/O、標準snapshot準備、結果のJSON化・signature生成・dropは試行時間に含めない。Scar呼出しはTypedProgram metadata生成を含む。Resolved入力のcloneは行わず、session復元・checkpoint・rollbackを別計時する。外側は `frontend_total` とし、CLIの `compile_total` と区別する。
+
+単独で実行する例:
+
+```sh
+cargo run --release -p rune --example scar-session-profile -- \
+  --mode warm --api in_place --iterations 10 --size 16 \
+  --input tests/profile/scar_compile/generated/generic_chain_016.srt
+cargo run --release -p rune --example scar-session-profile -- \
+  --mode incremental --api transactional --iterations 10 --size 64
+```
+
+JSONLはsetup 1行と各sample。Pは1反復1sample、Iは指定数のgeneric追加chunkとtrait/impl・拒否・復帰の3chunkを含む。入力hash・bytes、受理したtop-levelユーザー宣言の累計、返却されたtop-level typed node数も保存する。内部の生成specialization数とは異なる。
+
+反復ごとにTypedProgramのsignatureと診断を照合する。process共通counterで割り当てる生成局所bindingのUIDだけを一対一にalpha正規化し、参照関係、型、literal、canonical名、dispatch先、関数index、spanを比較に残す。生の生成UIDが増えるだけの違いを意味の差とは扱わない。
+
+固定suiteの収集には [measure_session.py](measure_session.py) を使う。まずリポジトリルートでbuild時のsource / binaryの証拠を保存する。以下の `session_build_dir` は新しい作業先へ変更してよい。
+
+```sh
+session_build_dir=$(mktemp -d /tmp/surtr-scar-session-build.XXXXXX)
+export SESSION_BUILD_DIR="$session_build_dir"
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=tests/profile/scar_compile python3 - <<'PY'
+import os, subprocess
+from pathlib import Path
+from measure import ROOT, digest, probe, save
+from measure_session import source_state
+output = Path(os.environ['SESSION_BUILD_DIR'])
+sources = source_state()
+command = ['cargo', 'build', '--release', '-p', 'rune', '--example', 'scar-session-profile']
+with (output / 'build.log').open('w') as log:
+    subprocess.run(command, check=True, stdout=log, stderr=subprocess.STDOUT)
+assert sources == source_state(), 'sources changed during build'
+target = Path(os.environ.get('CARGO_TARGET_DIR', str(ROOT / 'target')))
+save(output / 'build-manifest.json', {
+    'sources': sources, 'binary': digest(target / 'release/examples/scar-session-profile'),
+    'command': command, 'exit_code': 0, 'cwd': str(ROOT), 'profile': 'release',
+    'head': probe(['git', 'rev-parse', 'HEAD']), 'diff': probe(['git', 'diff', '--binary']),
+    'status': probe(['git', 'status', '--short']), 'toolchain': probe(['rustc', '-Vv']),
+    'environment': {k: v for k, v in os.environ.items() if k.startswith(('CARGO_', 'RUST'))}})
+PY
+PYTHONDONTWRITEBYTECODE=1 python3 tests/profile/scar_compile/measure_session.py \
+  --binary "${CARGO_TARGET_DIR:-target}/release/examples/scar-session-profile" \
+  --build-manifest "$session_build_dir/build-manifest.json" \
+  --iterations 10 --output "$session_build_dir/results" \
+  --power-condition '実際の電源条件・他のビルドやテストを止めたかを記入'
+```
+
+Pは12入力・2 API、Iは16 / 32 / 64 chunkの3規模・transactional APIを測る。標準snapshotは各processのsetupで準備し、そのprocess内の10反復から除外する。setupでdisk cacheが使われても、反復をdisk-hit CLI測定とは呼ばない。profilerと `RUST_MIN_STACK` は収集側で解除する。
+
+出力は `manifest.json`、各processのstdout / stderr、setupを含む `runs.jsonl`、各sample条件の中央値・最小最大を持つ `summary.json`。不完全なchunk、反復欠落、意図しない拒否、診断・signature・入力hashの不一致、測定中のsource / binary変更は失敗とし、`failure.json` を保存して集計を完成させない。このsuiteは現在の基準値を得る入口で、transactional状態clone単独の費用やP1〜P4の改善率を求める比較ではない。
+
+収集側の検証は `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests/profile/scar_compile -p test_measure_session.py -v`、harnessの状態分離・復元は `cargo test -p rune --example scar-session-profile` で確認する。

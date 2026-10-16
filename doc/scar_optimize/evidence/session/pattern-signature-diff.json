@@ -1,0 +1,32 @@
+[
+  {
+    "path": "/nodes/3/node/Def/6/node/Block/0/node/SafeBind/3/EnclosingMonadFail/call/node/TraitCall/args/0/node/Var/unique_id",
+    "before": 3000000000,
+    "after": 3000000004
+  },
+  {
+    "path": "/nodes/3/node/Def/6/node/Block/0/node/SafeBind/3/EnclosingMonadFail/error_id/unique_id",
+    "before": 3000000000,
+    "after": 3000000004
+  },
+  {
+    "path": "/nodes/14/node/Bind/1/node/TraitCall/args/1/node/Closure/0/0/id/unique_id",
+    "before": 3000000001,
+    "after": 3000000005
+  },
+  {
+    "path": "/nodes/14/node/Bind/1/node/TraitCall/args/1/node/Closure/2/node/DoSafeBind/failure_target/DoMonadFail/call/node/TraitCall/args/0/node/Var/unique_id",
+    "before": 3000000003,
+    "after": 3000000007
+  },
+  {
+    "path": "/nodes/14/node/Bind/1/node/TraitCall/args/1/node/Closure/2/node/DoSafeBind/failure_target/DoMonadFail/error_id/unique_id",
+    "before": 3000000003,
+    "after": 3000000007
+  },
+  {
+    "path": "/nodes/14/node/Bind/1/node/TraitCall/args/1/node/Closure/2/node/DoSafeBind/rhs/node/Var/unique_id",
+    "before": 3000000001,
+    "after": 3000000005
+  }
+]

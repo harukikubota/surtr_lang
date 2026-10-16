@@ -1,0 +1,521 @@
+.FFFFFFFFFFFFFFFFFFF.........FFFFFFFFFFFFFFFFFFFFFF..FF.
+======================================================================
+FAIL: test_flags_must_match_the_recorded_timing_boundaries (test_measure_session.InvocationAcceptanceTests.test_flags_must_match_the_recorded_timing_boundaries) (column='resolved_clone_in_scar')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 196, in test_flags_must_match_the_recorded_timing_boundaries
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_flags_must_match_the_recorded_timing_boundaries (test_measure_session.InvocationAcceptanceTests.test_flags_must_match_the_recorded_timing_boundaries) (column='typed_metadata_in_scar')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 196, in test_flags_must_match_the_recorded_timing_boundaries
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_flags_must_match_the_recorded_timing_boundaries (test_measure_session.InvocationAcceptanceTests.test_flags_must_match_the_recorded_timing_boundaries) (column='session_restore_in_scar')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 196, in test_flags_must_match_the_recorded_timing_boundaries
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_hashes_and_input_size_must_describe_a_real_sample (test_measure_session.InvocationAcceptanceTests.test_hashes_and_input_size_must_describe_a_real_sample) (column='source_sha256', value='')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 166, in test_hashes_and_input_size_must_describe_a_real_sample
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_hashes_and_input_size_must_describe_a_real_sample (test_measure_session.InvocationAcceptanceTests.test_hashes_and_input_size_must_describe_a_real_sample) (column='source_sha256', value='xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 166, in test_hashes_and_input_size_must_describe_a_real_sample
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_hashes_and_input_size_must_describe_a_real_sample (test_measure_session.InvocationAcceptanceTests.test_hashes_and_input_size_must_describe_a_real_sample) (column='semantic_signature', value=None)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 166, in test_hashes_and_input_size_must_describe_a_real_sample
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_hashes_and_input_size_must_describe_a_real_sample (test_measure_session.InvocationAcceptanceTests.test_hashes_and_input_size_must_describe_a_real_sample) (column='semantic_signature', value='short')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 166, in test_hashes_and_input_size_must_describe_a_real_sample
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_hashes_and_input_size_must_describe_a_real_sample (test_measure_session.InvocationAcceptanceTests.test_hashes_and_input_size_must_describe_a_real_sample) (column='input_bytes', value=0)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 166, in test_hashes_and_input_size_must_describe_a_real_sample
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_hashes_and_input_size_must_describe_a_real_sample (test_measure_session.InvocationAcceptanceTests.test_hashes_and_input_size_must_describe_a_real_sample) (column='input_bytes', value=True)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 166, in test_hashes_and_input_size_must_describe_a_real_sample
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_hashes_and_input_size_must_describe_a_real_sample (test_measure_session.InvocationAcceptanceTests.test_hashes_and_input_size_must_describe_a_real_sample) (column='typed_top_level_nodes', value=True)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 166, in test_hashes_and_input_size_must_describe_a_real_sample
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_hashes_and_input_size_must_describe_a_real_sample (test_measure_session.InvocationAcceptanceTests.test_hashes_and_input_size_must_describe_a_real_sample) (column='typed_top_level_nodes', value=-1)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 166, in test_hashes_and_input_size_must_describe_a_real_sample
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_hashes_and_input_size_must_describe_a_real_sample (test_measure_session.InvocationAcceptanceTests.test_hashes_and_input_size_must_describe_a_real_sample) (column='typed_top_level_nodes', value=None)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 166, in test_hashes_and_input_size_must_describe_a_real_sample
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_incremental_retention_tracks_success_and_rejects_leaked_state (test_measure_session.InvocationAcceptanceTests.test_incremental_retention_tracks_success_and_rejects_leaked_state) (chunk=0, column='retained_user_definitions_before')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 179, in test_incremental_retention_tracks_success_and_rejects_leaked_state
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_incremental_retention_tracks_success_and_rejects_leaked_state (test_measure_session.InvocationAcceptanceTests.test_incremental_retention_tracks_success_and_rejects_leaked_state) (chunk=1, column='retained_user_definitions_after')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 179, in test_incremental_retention_tracks_success_and_rejects_leaked_state
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_incremental_retention_tracks_success_and_rejects_leaked_state (test_measure_session.InvocationAcceptanceTests.test_incremental_retention_tracks_success_and_rejects_leaked_state) (chunk=2, column='retained_user_definitions_after')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 179, in test_incremental_retention_tracks_success_and_rejects_leaked_state
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_incremental_retention_tracks_success_and_rejects_leaked_state (test_measure_session.InvocationAcceptanceTests.test_incremental_retention_tracks_success_and_rejects_leaked_state) (chunk=3, column='retained_user_definitions_after')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 179, in test_incremental_retention_tracks_success_and_rejects_leaked_state
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_incremental_retention_tracks_success_and_rejects_leaked_state (test_measure_session.InvocationAcceptanceTests.test_incremental_retention_tracks_success_and_rejects_leaked_state) (chunk=4, column='retained_user_definitions_before')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 179, in test_incremental_retention_tracks_success_and_rejects_leaked_state
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_incremental_retention_tracks_success_and_rejects_leaked_state (test_measure_session.InvocationAcceptanceTests.test_incremental_retention_tracks_success_and_rejects_leaked_state) (chunk=4, column='retained_user_definitions_after')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 179, in test_incremental_retention_tracks_success_and_rejects_leaked_state
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_incremental_retention_tracks_success_and_rejects_leaked_state (test_measure_session.InvocationAcceptanceTests.test_incremental_retention_tracks_success_and_rejects_leaked_state) (chunk=0, column='retained_user_definitions_before')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 179, in test_incremental_retention_tracks_success_and_rejects_leaked_state
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_rejection_requires_the_intended_diagnostic_and_both_phase_recovery (test_measure_session.InvocationAcceptanceTests.test_rejection_requires_the_intended_diagnostic_and_both_phase_recovery) (column='resolver_rollback_verified')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 205, in test_rejection_requires_the_intended_diagnostic_and_both_phase_recovery
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_rejection_requires_the_intended_diagnostic_and_both_phase_recovery (test_measure_session.InvocationAcceptanceTests.test_rejection_requires_the_intended_diagnostic_and_both_phase_recovery) (column='diagnostic')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 205, in test_rejection_requires_the_intended_diagnostic_and_both_phase_recovery
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_rejection_requires_the_intended_diagnostic_and_both_phase_recovery (test_measure_session.InvocationAcceptanceTests.test_rejection_requires_the_intended_diagnostic_and_both_phase_recovery) (column='typed_top_level_nodes')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 205, in test_rejection_requires_the_intended_diagnostic_and_both_phase_recovery
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_rejection_requires_the_intended_diagnostic_and_both_phase_recovery (test_measure_session.InvocationAcceptanceTests.test_rejection_requires_the_intended_diagnostic_and_both_phase_recovery) (column='semantic_signature')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 205, in test_rejection_requires_the_intended_diagnostic_and_both_phase_recovery
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_rejection_requires_the_intended_diagnostic_and_both_phase_recovery (test_measure_session.InvocationAcceptanceTests.test_rejection_requires_the_intended_diagnostic_and_both_phase_recovery) (diagnostic_column='reason')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 211, in test_rejection_requires_the_intended_diagnostic_and_both_phase_recovery
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_rejection_requires_the_intended_diagnostic_and_both_phase_recovery (test_measure_session.InvocationAcceptanceTests.test_rejection_requires_the_intended_diagnostic_and_both_phase_recovery) (diagnostic_column='span_start')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 211, in test_rejection_requires_the_intended_diagnostic_and_both_phase_recovery
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_rejection_requires_the_intended_diagnostic_and_both_phase_recovery (test_measure_session.InvocationAcceptanceTests.test_rejection_requires_the_intended_diagnostic_and_both_phase_recovery) (diagnostic_column='span_end')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 211, in test_rejection_requires_the_intended_diagnostic_and_both_phase_recovery
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_rejection_requires_the_intended_diagnostic_and_both_phase_recovery (test_measure_session.InvocationAcceptanceTests.test_rejection_requires_the_intended_diagnostic_and_both_phase_recovery) (diagnostic_column='message')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 211, in test_rejection_requires_the_intended_diagnostic_and_both_phase_recovery
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_rejection_requires_the_intended_diagnostic_and_both_phase_recovery (test_measure_session.InvocationAcceptanceTests.test_rejection_requires_the_intended_diagnostic_and_both_phase_recovery)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 214, in test_rejection_requires_the_intended_diagnostic_and_both_phase_recovery
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_semantic_and_input_metadata_are_required (test_measure_session.InvocationAcceptanceTests.test_semantic_and_input_metadata_are_required) (column='source_sha256')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 155, in test_semantic_and_input_metadata_are_required
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_semantic_and_input_metadata_are_required (test_measure_session.InvocationAcceptanceTests.test_semantic_and_input_metadata_are_required) (column='input_bytes')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 155, in test_semantic_and_input_metadata_are_required
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_semantic_and_input_metadata_are_required (test_measure_session.InvocationAcceptanceTests.test_semantic_and_input_metadata_are_required) (column='semantic_signature')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 155, in test_semantic_and_input_metadata_are_required
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_semantic_and_input_metadata_are_required (test_measure_session.InvocationAcceptanceTests.test_semantic_and_input_metadata_are_required) (column='typed_top_level_nodes')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 155, in test_semantic_and_input_metadata_are_required
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_semantic_and_input_metadata_are_required (test_measure_session.InvocationAcceptanceTests.test_semantic_and_input_metadata_are_required) (column='retained_user_definitions_before')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 155, in test_semantic_and_input_metadata_are_required
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_semantic_and_input_metadata_are_required (test_measure_session.InvocationAcceptanceTests.test_semantic_and_input_metadata_are_required) (column='retained_user_definitions_after')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 155, in test_semantic_and_input_metadata_are_required
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_semantic_and_input_metadata_are_required (test_measure_session.InvocationAcceptanceTests.test_semantic_and_input_metadata_are_required) (column='resolved_clone_in_scar')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 155, in test_semantic_and_input_metadata_are_required
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_semantic_and_input_metadata_are_required (test_measure_session.InvocationAcceptanceTests.test_semantic_and_input_metadata_are_required) (column='typed_metadata_in_scar')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 155, in test_semantic_and_input_metadata_are_required
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_semantic_and_input_metadata_are_required (test_measure_session.InvocationAcceptanceTests.test_semantic_and_input_metadata_are_required) (column='session_restore_in_scar')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 155, in test_semantic_and_input_metadata_are_required
+    self.reject(rows)
+    ~~~~~~~~~~~^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_semantics_and_sources_cannot_drift_between_repetitions (test_measure_session.InvocationAcceptanceTests.test_semantics_and_sources_cannot_drift_between_repetitions) (mode='warm', column='semantic_signature')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 224, in test_semantics_and_sources_cannot_drift_between_repetitions
+    self.reject(rows, mode=mode)
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_semantics_and_sources_cannot_drift_between_repetitions (test_measure_session.InvocationAcceptanceTests.test_semantics_and_sources_cannot_drift_between_repetitions) (mode='warm', column='source_sha256')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 224, in test_semantics_and_sources_cannot_drift_between_repetitions
+    self.reject(rows, mode=mode)
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_semantics_and_sources_cannot_drift_between_repetitions (test_measure_session.InvocationAcceptanceTests.test_semantics_and_sources_cannot_drift_between_repetitions) (mode='incremental', column='semantic_signature')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 224, in test_semantics_and_sources_cannot_drift_between_repetitions
+    self.reject(rows, mode=mode)
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_semantics_and_sources_cannot_drift_between_repetitions (test_measure_session.InvocationAcceptanceTests.test_semantics_and_sources_cannot_drift_between_repetitions) (mode='incremental', column='source_sha256')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 224, in test_semantics_and_sources_cannot_drift_between_repetitions
+    self.reject(rows, mode=mode)
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_warm_samples_require_independent_prefix_state (test_measure_session.InvocationAcceptanceTests.test_warm_samples_require_independent_prefix_state) (column='retained_user_definitions_before')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 187, in test_warm_samples_require_independent_prefix_state
+    self.reject(rows, mode="warm")
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+======================================================================
+FAIL: test_warm_samples_require_independent_prefix_state (test_measure_session.InvocationAcceptanceTests.test_warm_samples_require_independent_prefix_state) (column='retained_user_definitions_after')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 187, in test_warm_samples_require_independent_prefix_state
+    self.reject(rows, mode="warm")
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/Users/haruca/work/rust/surtr/tests/profile/scar_compile/test_measure_session.py", line 58, in reject
+    with self.assertRaises((ValueError, KeyError, TypeError)):
+         ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (<class 'ValueError'>, <class 'KeyError'>, <class 'TypeError'>) not raised
+
+----------------------------------------------------------------------
+Ran 20 tests in 0.010s
+
+FAILED (failures=43)

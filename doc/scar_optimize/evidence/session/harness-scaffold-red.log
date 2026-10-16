@@ -1,0 +1,70 @@
+   Compiling xldr v0.1.0 (/Users/haruca/work/rust/surtr/crates/xldr)
+   Compiling rune v0.1.0 (/Users/haruca/work/rust/surtr/crates/rune)
+warning: unused import: `json`
+ --> crates/rune/examples/scar-session-profile.rs:2:18
+  |
+2 | use serde_json::{json, Value};
+  |                  ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `name` is never used
+  --> crates/rune/examples/scar-session-profile.rs:15:8
+   |
+14 | impl Api {
+   | -------- method in this implementation
+15 |     fn name(self) -> &'static str {
+   |        ^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `mode`, `api`, `iterations`, and `size` are never read
+  --> crates/rune/examples/scar-session-profile.rs:23:5
+   |
+22 | struct Options {
+   |        ------- fields in this struct
+23 |     mode: Mode,
+   |     ^^^^
+24 |     api: Api,
+   |     ^^^
+25 |     iterations: usize,
+   |     ^^^^^^^^^^
+26 |     size: usize,
+   |     ^^^^
+
+warning: `rune` (example "scar-session-profile" test) generated 3 warnings (run `cargo fix --example "scar-session-profile" -p rune --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized] target(s) in 3.03s
+     Running unittests examples/scar-session-profile.rs (target/debug/examples/scar_session_profile-507657abdefd43f8)
+
+running 3 tests
+test tests::warm_siblings_do_not_retain_user_names ... FAILED
+test tests::incremental_retains_bindings_and_restores_both_phases_after_late_failure ... FAILED
+test tests::warm_replays_identical_suffix_from_independent_checkpoints ... FAILED
+
+failures:
+
+---- tests::warm_siblings_do_not_retain_user_names stdout ----
+
+thread 'tests::warm_siblings_do_not_retain_user_names' (5427442) panicked at crates/rune/examples/scar-session-profile.rs:97:35:
+called `Result::unwrap()` on an `Err` value: "session measurement harness is not implemented"
+
+---- tests::incremental_retains_bindings_and_restores_both_phases_after_late_failure stdout ----
+
+thread 'tests::incremental_retains_bindings_and_restores_both_phases_after_late_failure' (5427440) panicked at crates/rune/examples/scar-session-profile.rs:69:77:
+called `Result::unwrap()` on an `Err` value: "session measurement harness is not implemented"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- tests::warm_replays_identical_suffix_from_independent_checkpoints stdout ----
+
+thread 'tests::warm_replays_identical_suffix_from_independent_checkpoints' (5427441) panicked at crates/rune/examples/scar-session-profile.rs:53:59:
+called `Result::unwrap()` on an `Err` value: "session measurement harness is not implemented"
+
+
+failures:
+    tests::incremental_retains_bindings_and_restores_both_phases_after_late_failure
+    tests::warm_replays_identical_suffix_from_independent_checkpoints
+    tests::warm_siblings_do_not_retain_user_names
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p rune --example scar-session-profile`

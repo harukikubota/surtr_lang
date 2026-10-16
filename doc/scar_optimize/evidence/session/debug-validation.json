@@ -1,0 +1,85 @@
+{
+  "binary": {
+    "sha256": "14a631b2236b43cee140cd578e021bbe1a2bec9d55edddebc394ed3dbab7af84",
+    "bytes": 33254400
+  },
+  "profile": "debug",
+  "stack_limit_bytes": [
+    8372224,
+    67092480
+  ],
+  "RUST_MIN_STACK": "unset",
+  "cache": "/tmp/surtr-scar-session-20261016-175327/debug-cache",
+  "runs": [
+    {
+      "command": [
+        "/Users/haruca/work/rust/surtr/target/debug/examples/scar-session-profile",
+        "--mode",
+        "incremental",
+        "--api",
+        "transactional",
+        "--iterations",
+        "1",
+        "--size",
+        "16"
+      ],
+      "exit_code": 0,
+      "samples": 19,
+      "stdout": "debug-incremental-016.stdout",
+      "stderr": "debug-incremental-016.stderr"
+    },
+    {
+      "command": [
+        "/Users/haruca/work/rust/surtr/target/debug/examples/scar-session-profile",
+        "--mode",
+        "incremental",
+        "--api",
+        "transactional",
+        "--iterations",
+        "1",
+        "--size",
+        "32"
+      ],
+      "exit_code": 0,
+      "samples": 35,
+      "stdout": "debug-incremental-032.stdout",
+      "stderr": "debug-incremental-032.stderr"
+    },
+    {
+      "command": [
+        "/Users/haruca/work/rust/surtr/target/debug/examples/scar-session-profile",
+        "--mode",
+        "incremental",
+        "--api",
+        "transactional",
+        "--iterations",
+        "1",
+        "--size",
+        "64"
+      ],
+      "exit_code": 0,
+      "samples": 67,
+      "stdout": "debug-incremental-064.stdout",
+      "stderr": "debug-incremental-064.stderr"
+    },
+    {
+      "command": [
+        "/Users/haruca/work/rust/surtr/target/debug/examples/scar-session-profile",
+        "--mode",
+        "warm",
+        "--api",
+        "in_place",
+        "--iterations",
+        "1",
+        "--size",
+        "64",
+        "--input",
+        "tests/profile/scar_compile/generated/generic_chain_064.srt"
+      ],
+      "exit_code": 0,
+      "samples": 1,
+      "stdout": "debug-warm-064.stdout",
+      "stderr": "debug-warm-064.stderr"
+    }
+  ]
+}

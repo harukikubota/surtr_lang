@@ -8,6 +8,8 @@
 
 **2026-10-16の実施:** P1に続きP2a / P2bを実装した。P1の全24入力・各条件10回の比較とdebug stack修正は [06_deferror_scope.md](06_deferror_scope.md)、P2のsummary共有・逆辺worklist・trait前宣言の局所化と同条件960回の比較は [07_specialization_predeclare.md](07_specialization_predeclare.md) を参照。P3の変数表複製削減は [08_state_copy.md](08_state_copy.md) に記録する。以下のP1 / P2のコード説明は調査時点の挙動である。P4のcanonical trait identity検索は [09_trait_identity.md](09_trait_identity.md) に実装・検証・性能比較を記録する。
 
+**残る計測の実施:** process warm / incremental専用harnessを追加し、Pは12入力・2 API、Iは16 / 32 / 64 chunkで各10反復、計1,450sampleを収集した。失敗後の両phase復元も含む。現在の基準値と検証結果は [10_session_measurement.md](10_session_measurement.md) を参照。
+
 ## 1. 最初に測るもの
 
 主指標は、同じ `.srt` 入力をコンパイルしたときの対象フェーズと `compile_total` の時間とする。
@@ -190,12 +192,12 @@ P4ではCheckerごとに遅延構築するUID→key indexで二つのlookupを�
 | P: process warm | 同じ process で stdlib snapshot を準備し、独立した同じ suffix を繰り返す | Scar 本体と session 復元を別計測 | 現行 `build` CLI を複数回起動してもこの条件にはならない |
 | I: incremental | 同じ session に成功 chunk を追加し、失敗→復元→成功も測る | 各 chunk、checkpoint/rollback、保持済み定義数 | 前 chunk の状態で結果が変わるので P と混ぜない |
 
-P/I の専用計測 harness は今回追加していない。実装ターンでは既存の `ScarSession` / `ScarCheckpoint` と
-Sigil の resume state を使い、parse/resolve を含む外側と Scar 呼び出しだけの内側を分ける。
-`Resolved` 入力の clone、session の生成/復元、TypedProgram metadata 生成を測定区間に含めたかを記録する。
-同じ Resolved ID を成長中の session に無条件に再投入せず、P は同一 checkpoint に戻し、
-I は正しい resolver resume state から新しい chunk を作る。
-REPL 全体のテスト時間を、この専用計測の代用にしない。
+P/I の専用計測 harness は [scar-session-profile](../../crates/rune/examples/scar-session-profile.rs) に追加した。
+既存の `ScarSession` / `ScarCheckpoint` と Sigil の公開sessionを使い、parse/resolveを含む外側とScar呼出しの内側を分ける。
+`Resolved` 入力のcloneは行わず、sessionの生成/復元、checkpoint/rollbackを別計時する。TypedProgram metadata生成はScar呼出しに含む。
+Pは同一checkpointから独立したsuffixを作る。Iは名前束縛も保持する `SigilSession` で新しいchunkをresolveし、拒否後はSigil / Scarの両方を復元する。
+script構文を使うcompiler sessionの計測であり、REPLの構文・CLI・VM実行は対象外。
+詳細な計時境界と記録は [10_session_measurement.md](10_session_measurement.md) に示す。
 
 ### 既存入力と不足する入力
 
@@ -293,5 +295,6 @@ SURTR_SCAR_PROFILE=1 SURTR_STDLIB_CACHE_DIR="$measure_dir/generic_extractor_spec
 4. 最初の実装は一回の compile 呼び出し内に閉じた改善を優先する。
 5. 採用条件を満たしてから、session をまたぐ summary 保持や状態表現の変更を別仕様にする。
 
-P1、P2a / P2b、P3は実装・検証・性能比較済み。それぞれ規模別入力も含む全24入口を各条件10回測定した。P2の正順64段の10%目安は未達であり、逆順の改善・処理量・代表入力の比較を合わせた採用判断を実施記録に示した。P3はError 256宣言のdisk-hit typecheckを78.61%、小入力coldのcompile totalを19.72%短縮した。条件と全件検証は [08_state_copy.md](08_state_copy.md) に示す。P4は [09_trait_identity.md](09_trait_identity.md) に記録する。process warm / incremental専用harnessは未実施である。
+P1、P2a / P2b、P3は実装・検証・性能比較済み。それぞれ規模別入力も含む全24入口を各条件10回測定した。P2の正順64段の10%目安は未達であり、逆順の改善・処理量・代表入力の比較を合わせた採用判断を実施記録に示した。P3はError 256宣言のdisk-hit typecheckを78.61%、小入力coldのcompile totalを19.72%短縮した。条件と全件検証は [08_state_copy.md](08_state_copy.md) に示す。P4は [09_trait_identity.md](09_trait_identity.md) に記録する。process warm / incremental専用harnessと現在の基準測定も [10_session_measurement.md](10_session_measurement.md) で実施した。
+本書のP1〜P4と四つの測定シナリオC / D / P / Iは実施済み。transactional cloneの削減、診断用child probe、永続summaryなど、費用や別仕様の確認を必要とする候補は保留する。今回のP/I基準値を、これらの改善実績とは扱わない。
 コードから確認できた反復処理を、まだ確認していない性能効果に読み替えない。

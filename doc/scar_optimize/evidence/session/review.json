@@ -1,0 +1,39 @@
+{
+  "reviewer": "final_review subagent",
+  "status": "completed",
+  "unresolved_code_findings": 0,
+  "resolved_findings": [
+    "incomplete evidence metadata was accepted by collector; added required metadata and consistency checks",
+    "raw TypedProgram hash differed on process-global generated local UIDs; bijective alpha-normalization preserves binding relations and all other semantic fields"
+  ],
+  "independent_checks": {
+    "python_tests_passed": 20,
+    "processes": 27,
+    "setup_rows": 27,
+    "samples": 1450,
+    "success": 1420,
+    "expected_failures": 30,
+    "summary_groups_recomputed": 145,
+    "all_timings_recomputed": true,
+    "source_hashes": 483,
+    "input_hashes": 12,
+    "binary_hash_matches": true,
+    "build_diff_matches_current_executable_files": true,
+    "incomplete_initial_measurement_excluded": true
+  },
+  "unresolved_findings": 0,
+  "final_docs_checks": {
+    "published_table_cells_recomputed": true,
+    "debug_samples": 122,
+    "debug_success": 119,
+    "debug_expected_failures": 3,
+    "debug_recovery": 3,
+    "debug_stack_KiB": 8176,
+    "relative_links_verified": 133,
+    "ci_passed": 2643,
+    "ci_binaries": 70,
+    "stdlib_quiet_exit_code": 0,
+    "scope_and_no_before_after_claims_verified": true
+  },
+  "final_report": "Final docs/validation review passed; no must-fix findings. Code, evidence/provenance, every published table value, debug results, relative links, CI/stdlib statements, and completed versus deferred scope were independently checked."
+}

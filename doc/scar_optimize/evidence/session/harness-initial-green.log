@@ -1,0 +1,11 @@
+   Compiling rune v0.1.0 (/Users/haruca/work/rust/surtr/crates/rune)
+    Finished `test` profile [unoptimized] target(s) in 1.87s
+     Running unittests examples/scar-session-profile.rs (target/debug/examples/scar_session_profile-507657abdefd43f8)
+
+running 3 tests
+test tests::sibling_sessions_do_not_share_new_names_or_nominal_metadata ... ok
+test tests::incremental_retains_bindings_and_restores_both_phases_after_late_failure ... ok
+test tests::warm_replays_identical_suffix_from_independent_checkpoints ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.02s
+
