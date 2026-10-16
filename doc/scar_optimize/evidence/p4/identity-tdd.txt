@@ -1,0 +1,7 @@
+Red command: rtk cargo nextest run -p scar canonical_trait_identity_visits_definitions_once_for_repeated_proofs
+Red exit: 100; identity lookup revisited 624 definitions for 23 traits. This ran the shared lookup helper with the original linear iter().find and cfg(test) entry counting.
+Green command: same command
+Green exit: 0; 1 passed, 422 skipped.
+Final focused command: rtk cargo nextest run -p scar canonical_
+Final focused exit: 0; 29 passed, 396 skipped.
+An earlier compile-only error used a string instead of TypeName::Int in the test; it was fixed before Red and is not counted as TDD Red.

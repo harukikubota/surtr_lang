@@ -1,0 +1,295 @@
+diff --git a/crates/scar/src/checker/mod.rs b/crates/scar/src/checker/mod.rs
+index 17810a15..30fcea15 100644
+--- a/crates/scar/src/checker/mod.rs
++++ b/crates/scar/src/checker/mod.rs
+@@ -4,7 +4,6 @@ use std::cell::RefCell;
+ use std::collections::{BTreeSet, HashMap, HashSet};
+ use std::rc::Rc;
+ use std::sync::Arc;
+-#[cfg(test)]
+ use std::sync::OnceLock;
+ 
+ use serde::{Deserialize, Serialize};
+diff --git a/crates/scar/src/checker/predeclare/traits.rs b/crates/scar/src/checker/predeclare/traits.rs
+index d2c46888..7389e0fa 100644
+--- a/crates/scar/src/checker/predeclare/traits.rs
++++ b/crates/scar/src/checker/predeclare/traits.rs
+@@ -1682,6 +1682,7 @@ impl Checker {
+                 methods: method_map,
+             };
+             self.traits.insert(trait_key, Arc::new(trait_info));
++            self.canonical_traits_by_uid.take();
+ 
+             let _ = span;
+         }
+diff --git a/crates/scar/src/checker/state.rs b/crates/scar/src/checker/state.rs
+index fa246d27..64b1d979 100644
+--- a/crates/scar/src/checker/state.rs
++++ b/crates/scar/src/checker/state.rs
+@@ -63,6 +63,8 @@ pub(super) struct Checker {
+     pub(super) seen_builtin_type_decls: HashMap<String, (Vec<String>, Span)>,
+     pub(super) facet_path_kind_decls: HashMap<String, Vec<String>>,
+     pub(super) traits: TraitDefinitions,
++    /// Derived only when canonical proof needs UID lookup; never serialized.
++    pub(super) canonical_traits_by_uid: OnceLock<HashMap<u32, String>>,
+     pub(super) trait_impls: TraitImplementations,
+     pub(super) constructor_mapping_resolution: ConstructorMappingResolution,
+     pub(super) trait_impl_index_by_base_trait: TraitImplIndex,
+@@ -76,6 +78,8 @@ pub(super) struct Checker {
+     pub(super) warnings: WarningBuffer,
+     #[cfg(test)]
+     pub(super) candidate_probe_checkpoint_count: Cell<usize>,
++    #[cfg(test)]
++    pub(super) trait_identity_entries_visited: Cell<usize>,
+ }
+ 
+ impl Checker {
+@@ -130,6 +134,7 @@ impl Checker {
+             seen_builtin_type_decls: HashMap::new(),
+             facet_path_kind_decls: HashMap::new(),
+             traits: state.traits,
++            canonical_traits_by_uid: OnceLock::new(),
+             trait_impls: state.trait_impls,
+             constructor_mapping_resolution: ConstructorMappingResolution::default(),
+             trait_impl_index_by_base_trait: state.trait_impl_index_by_base_trait,
+@@ -142,6 +147,8 @@ impl Checker {
+             warnings: WarningBuffer::default(),
+             #[cfg(test)]
+             candidate_probe_checkpoint_count: Cell::new(0),
++            #[cfg(test)]
++            trait_identity_entries_visited: Cell::new(0),
+         }
+     }
+ 
+diff --git a/crates/scar/src/checker/trait_selection.rs b/crates/scar/src/checker/trait_selection.rs
+index a7733b07..aa92980b 100644
+--- a/crates/scar/src/checker/trait_selection.rs
++++ b/crates/scar/src/checker/trait_selection.rs
+@@ -1712,6 +1712,24 @@ impl Checker {
+             .map(|index| vec![index])
+     }
+ 
++    fn canonical_trait_by_uid(&self, trait_id: u32) -> Option<(&str, &TraitInfo)> {
++        let identities = self.canonical_traits_by_uid.get_or_init(|| {
++            self.traits
++                .iter()
++                .map(|(key, info)| {
++                    #[cfg(test)]
++                    self.trait_identity_entries_visited
++                        .set(self.trait_identity_entries_visited.get() + 1);
++                    (info.id.unique_id, key.clone())
++                })
++                .collect()
++        });
++        let key = identities.get(&trait_id)?;
++        self.traits
++            .get(key)
++            .map(|info| (key.as_str(), info.as_ref()))
++    }
++
+     fn prove_canonical_constraints(
+         &self,
+         constraints: &CanonicalConstraintSet,
+@@ -1731,9 +1749,7 @@ impl Checker {
+             let constructor_head_proved =
+                 matches!(constraint.subject.head, CanonicalTypeHead::Variable(_))
+                     && self
+-                        .traits
+-                        .iter()
+-                        .find(|(_, info)| info.id.unique_id == trait_id)
++                        .canonical_trait_by_uid(trait_id)
+                         .is_some_and(|(trait_key, info)| {
+                             !info.constructor_slots.is_empty()
+                                 && self.canonical_to_ty(&subject).ok().is_some_and(|subject| {
+@@ -1771,23 +1787,21 @@ impl Checker {
+         next_variable: &mut u32,
+     ) -> Result<ApplicabilityProof, TypeError> {
+         let trait_key = self
+-            .traits
+-            .iter()
+-            .find(|(_, info)| info.id.unique_id == trait_id)
+-            .map(|(key, _)| key.clone())
++            .canonical_trait_by_uid(trait_id)
++            .map(|(key, _)| key)
+             .ok_or_else(|| {
+                 TypeError::new(
+                     "Internal error: canonical Trait identity missing",
+                     Span { start: 0, end: 0 },
+                 )
+             })?;
+-        if let Some(evidence) = self.exact_capability_evidence(subject, &trait_key) {
++        if let Some(evidence) = self.exact_capability_evidence(subject, trait_key) {
+             return Ok(ApplicabilityProof::Satisfied(evidence));
+         }
+         if let CanonicalTypeHead::Variable(var) = subject.head {
+             if self.rigid_tyvars.contains(&var) {
+                 return Ok(self
+-                    .rigid_capability_evidence(var, &trait_key)
++                    .rigid_capability_evidence(var, trait_key)
+                     .map(ApplicabilityProof::Satisfied)
+                     .unwrap_or(ApplicabilityProof::Unsatisfied));
+             }
+@@ -1806,7 +1820,7 @@ impl Checker {
+                     data: diagnostics::DiagnosticData::TraitDispatch(
+                         diagnostics::TraitDispatchData {
+                             impl_declaration: None,
+-                            trait_name: self.trait_display_name(&trait_key),
++                            trait_name: self.trait_display_name(trait_key),
+                             trait_arguments: Vec::new(),
+                             method: None,
+                             subject_type: Some(self.canonical_type_name(subject)),
+@@ -1823,7 +1837,7 @@ impl Checker {
+                 },
+             ));
+         }
+-        let candidates = self.trait_impl_candidate_keys(&trait_key);
++        let candidates = self.trait_impl_candidate_keys(trait_key);
+         let mut deferred = Vec::new();
+         for key in candidates {
+             let info = self.trait_impls[&key].clone();
+@@ -1865,13 +1879,11 @@ impl Checker {
+             return Ok(ApplicabilityProof::Deferred(deferred));
+         }
+         let subject_ty = self.canonical_to_ty(subject)?;
+-        Ok(
+-            if self.compiler_trait_impl_exists(&trait_key, &subject_ty) {
+-                ApplicabilityProof::Satisfied(Vec::new())
+-            } else {
+-                ApplicabilityProof::Unsatisfied
+-            },
+-        )
++        Ok(if self.compiler_trait_impl_exists(trait_key, &subject_ty) {
++            ApplicabilityProof::Satisfied(Vec::new())
++        } else {
++            ApplicabilityProof::Unsatisfied
++        })
+     }
+ 
+     fn canonical_constructor_identity_request(
+diff --git a/crates/scar/src/checker/trait_selection/tests.rs b/crates/scar/src/checker/trait_selection/tests.rs
+index d74ba6f5..ce783cdc 100644
+--- a/crates/scar/src/checker/trait_selection/tests.rs
++++ b/crates/scar/src/checker/trait_selection/tests.rs
+@@ -15,6 +15,122 @@ mod applicability_tests {
+         checker
+     }
+ 
++    #[test]
++    fn canonical_trait_identity_visits_definitions_once_for_repeated_proofs() {
++        let checker = checker("deftrait IdentityMarker {}\nimpl IdentityMarker for Int {}\n");
++        checker.trait_identity_entries_visited.set(0);
++        let mut next_variable = 1_000_000;
++        for _ in 0..2 {
++            for (key, info) in &checker.traits {
++                assert_eq!(
++                    checker.canonical_trait_by_uid(info.id.unique_id).unwrap().0,
++                    key
++                );
++            }
++            assert!(checker.canonical_trait_by_uid(u32::MAX).is_none());
++            let marker =
++                &checker.traits[&checker.trait_key_by_short_name("IdentityMarker").unwrap()];
++            assert!(matches!(
++                checker
++                    .prove_canonical_capability(
++                        marker.id.unique_id,
++                        &CanonicalTy::builtin(TypeName::Int, vec![]),
++                        &mut HashSet::new(),
++                        &mut next_variable,
++                    )
++                    .unwrap(),
++                ApplicabilityProof::Satisfied(_)
++            ));
++        }
++        assert!(
++            checker.trait_identity_entries_visited.get() <= checker.traits.len(),
++            "identity lookup revisited {} definitions for {} traits",
++            checker.trait_identity_entries_visited.get(),
++            checker.traits.len(),
++        );
++    }
++
++    #[test]
++    fn canonical_trait_identity_refreshes_after_registration_and_checkpoint_restore() {
++        const FIRST: &str = "deftrait IdentityFirst {}";
++        const BOTH: &str = "deftrait IdentityFirst {}\ndeftrait IdentityLater {}";
++        let mut original = checker(FIRST);
++        let first = original.traits[&original.trait_key_by_short_name("IdentityFirst").unwrap()]
++            .id
++            .unique_id;
++        assert!(original.canonical_trait_by_uid(first).is_some());
++        let checkpoint = original
++            .persistent_state_with_env(original.env.clone())
++            .checkpoint(Vec::new());
++        let bytes = bincode::serialize(&checkpoint).unwrap();
++        let sibling = original.spawn_child_checker(original.env.clone());
++        let ast = spire::parse_with_context(BOTH, spire::ParserContext::project(0)).unwrap();
++        let suffix = crate::test_support::resolve_ast_with_builtin_prelude(ast)
++            .unwrap()
++            .into_iter()
++            .skip(1)
++            .collect::<Vec<_>>();
++        let Resolved::TraitDef(_, declaration, ..) = &suffix[0] else {
++            panic!("expected a trait declaration");
++        };
++        let later = declaration.unique_id;
++        assert!(original.canonical_trait_by_uid(later).is_none());
++        original.check_program(suffix).unwrap();
++        let later_key = original.trait_key_by_short_name("IdentityLater").unwrap();
++        assert_eq!(original.canonical_trait_by_uid(later).unwrap().0, later_key);
++        assert!(original.canonical_trait_by_uid(first).is_some());
++        assert!(sibling.canonical_trait_by_uid(later).is_none());
++        assert_eq!(bincode::serialize(&checkpoint).unwrap(), bytes);
++
++        let restored: ScarCheckpoint = bincode::deserialize(&bytes).unwrap();
++        let restored_checker =
++            Checker::with_persistent_state(restored.clone().into(), TypecheckContext::default());
++        assert!(restored_checker.canonical_trait_by_uid(first).is_some());
++        assert!(restored_checker.canonical_trait_by_uid(later).is_none());
++        let mut session = ScarSession::new();
++        session.state = original.into_persistent_state();
++        session.rollback(restored);
++        let rolled_back =
++            Checker::with_persistent_state(session.state, TypecheckContext::default());
++        assert!(rolled_back.canonical_trait_by_uid(first).is_some());
++        assert!(rolled_back.canonical_trait_by_uid(later).is_none());
++    }
++
++    #[test]
++    fn canonical_identity_lookup_keeps_proof_outcomes_and_missing_identity_error() {
++        let checker = checker("deftrait IdentityMarker {}\nimpl IdentityMarker for Int {}\n");
++        let marker = checker.traits[&checker.trait_key_by_short_name("IdentityMarker").unwrap()]
++            .id
++            .unique_id;
++        let mut next_variable = 1_000_000;
++        let mut prove = |trait_id, subject| {
++            checker.prove_canonical_capability(
++                trait_id,
++                &subject,
++                &mut HashSet::new(),
++                &mut next_variable,
++            )
++        };
++        assert!(
++            matches!(prove(marker, CanonicalTy::variable(999_999)).unwrap(),
++            ApplicabilityProof::Deferred(waiting) if waiting == vec![999_999])
++        );
++        assert!(matches!(
++            prove(marker, CanonicalTy::builtin(TypeName::Int, vec![])).unwrap(),
++            ApplicabilityProof::Satisfied(_)
++        ));
++        assert!(matches!(
++            prove(marker, CanonicalTy::builtin(TypeName::String, vec![])).unwrap(),
++            ApplicabilityProof::Unsatisfied
++        ));
++        let error = prove(u32::MAX, CanonicalTy::builtin(TypeName::Int, vec![])).unwrap_err();
++        assert_eq!(
++            error.message,
++            "Internal error: canonical Trait identity missing"
++        );
++        assert_eq!(error.span, Span { start: 0, end: 0 });
++    }
++
+     #[test]
+     fn checked_method_obligations_detach_only_the_child_implementation() {
+         let source = "deftrait Needed { def need(self: Self) -> Int }\nimpl Needed for Int { def need(self: Self) -> Int { self } }\ndeftrait Carrier { def carry(self: Self) -> Int }\nimpl Carrier for Int { def carry(self: Self) -> Int { Needed::need(self) } }";

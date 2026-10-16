@@ -1,0 +1,13 @@
+{
+  "all_saved_after_rust_matches_working_tree": true,
+  "changed_rust_files": [
+    "crates/scar/src/checker/mod.rs",
+    "crates/scar/src/checker/predeclare/traits.rs",
+    "crates/scar/src/checker/state.rs",
+    "crates/scar/src/checker/trait_selection.rs",
+    "crates/scar/src/checker/trait_selection/tests.rs"
+  ],
+  "lib_sources_equal": true,
+  "toolchain_equal": true,
+  "cargo_files_equal": true
+}

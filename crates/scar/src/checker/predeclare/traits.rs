@@ -1682,6 +1682,7 @@ impl Checker {
                 methods: method_map,
             };
             self.traits.insert(trait_key, Arc::new(trait_info));
+            self.canonical_traits_by_uid.take();
 
             let _ = span;
         }

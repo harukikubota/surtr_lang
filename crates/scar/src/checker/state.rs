@@ -63,6 +63,8 @@ pub(super) struct Checker {
     pub(super) seen_builtin_type_decls: HashMap<String, (Vec<String>, Span)>,
     pub(super) facet_path_kind_decls: HashMap<String, Vec<String>>,
     pub(super) traits: TraitDefinitions,
+    /// Derived only when canonical proof needs UID lookup; never serialized.
+    pub(super) canonical_traits_by_uid: OnceLock<HashMap<u32, String>>,
     pub(super) trait_impls: TraitImplementations,
     pub(super) constructor_mapping_resolution: ConstructorMappingResolution,
     pub(super) trait_impl_index_by_base_trait: TraitImplIndex,
@@ -76,6 +78,8 @@ pub(super) struct Checker {
     pub(super) warnings: WarningBuffer,
     #[cfg(test)]
     pub(super) candidate_probe_checkpoint_count: Cell<usize>,
+    #[cfg(test)]
+    pub(super) trait_identity_entries_visited: Cell<usize>,
 }
 
 impl Checker {
@@ -130,6 +134,7 @@ impl Checker {
             seen_builtin_type_decls: HashMap::new(),
             facet_path_kind_decls: HashMap::new(),
             traits: state.traits,
+            canonical_traits_by_uid: OnceLock::new(),
             trait_impls: state.trait_impls,
             constructor_mapping_resolution: ConstructorMappingResolution::default(),
             trait_impl_index_by_base_trait: state.trait_impl_index_by_base_trait,
@@ -142,6 +147,8 @@ impl Checker {
             warnings: WarningBuffer::default(),
             #[cfg(test)]
             candidate_probe_checkpoint_count: Cell::new(0),
+            #[cfg(test)]
+            trait_identity_entries_visited: Cell::new(0),
         }
     }
 

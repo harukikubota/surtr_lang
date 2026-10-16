@@ -2,7 +2,7 @@
 
 現行機能の組合せと、定義数・依存の深さを分けて測るための手動入力。通常の nextest gate には登録しない。**測定入口は `surtr build`** とし、VM の実行時間を含めない。
 
-全入口は [cases.json](cases.json) に列挙した。パスはリポジトリルートからの相対パス。新規 22 入口と、既存の小入力・具体型中心の入力 2 件を合わせた 24 件である。module の補助ファイル 2 本は `dependencies` に置き、単独コンパイルしない。
+全入口は [cases.json](cases.json) に列挙した。パスはリポジトリルートからの相対パス。既存の 24 入口に P4 用の 9 入口を加えた 33 件である。module の補助ファイル 2 本は `dependencies` に置き、単独コンパイルしない。
 
 ## 機能別の入力
 
@@ -29,10 +29,18 @@
 | `generic_chain_reverse` | [16](generated/generic_chain_reverse_016.srt) / [32](generated/generic_chain_reverse_032.srt) / [64](generated/generic_chain_reverse_064.srt) | 上記と同じ定義・body・呼出しで宣言順だけ逆転。function index に沿った固定点走査の順序依存を比較する |
 | `trait_impls` | [16](generated/trait_impls_016.srt) / [32](generated/trait_impls_032.srt) / [64](generated/trait_impls_064.srt) | 一つの Trait に対する非重複 impl 数。dispatch は先頭・末尾の 2 箇所。nominal 型と method 本体も増えるため、候補検索だけの時間とはしない |
 | `nominal_chain` | [16](generated/nominal_chain_016.srt) / [32](generated/nominal_chain_032.srt) / [64](generated/nominal_chain_064.srt) | record 型の依存、field access の深さ。構築を平坦な binding に分け、構文の括弧の深さを増やさない。型依存と式検査の合計を測る |
+| `canonical_trait_count` | [64](generated/canonical_trait_count_064.srt) / [256](generated/canonical_trait_count_256.srt) / [1024](generated/canonical_trait_count_1024.srt) / [4096](generated/canonical_trait_count_4096.srt) / [16384](generated/canonical_trait_count_16384.srt) | user trait 数。制約付き dispatch は256箇所、nominal 型1個・impl 2個・method 本体2個で固定。空の trait 宣言だけを増やし、UID から trait key を探す表の大きさを変える |
+| `canonical_obligation_count` | [64](generated/canonical_obligation_count_064.srt) / [256](generated/canonical_obligation_count_256.srt) / [1024](generated/canonical_obligation_count_1024.srt) / [4096](generated/canonical_obligation_count_4096.srt) | 制約付き dispatch の箇所数。user trait 数64・nominal 型1個・impl 2個・method 本体2個で固定。呼出しごとに generic impl の canonical obligation を証明する負荷を変える |
 
 `generic_chain` の順方向は、現在の昇順走査で要求が伝わりやすい順序。逆順も組にして、短い固定点処理だけを測らないようにする。ただし、宣言順で変わる時間は前宣言や別の走査も含む。固定点の更新回数は別に計測する。
 
 Trait の探索 index だけを評価する場合は、同数の型・method を持つ対照などを追加して切り分ける。今回の系列をそのまま個別アルゴリズムの benchmark と呼ばない。
+
+P4の2系列は、`ProfileUse for ProfileProofBox<$A> where $A: ProfileMarker`のimplと、`ProfileMarker<Int> for Int`のparameterized implを共通に持つ。各`ProfileUse::use(ProfileProofBox::Box(Int))`呼出しの候補選択でimpl制約の型変数をfresh化し、`prove_canonical_constraints`から`prove_canonical_capability`を通して証明する。obligation数は、この制約を要求するdispatchの箇所数を表す。内部の証明呼出し数には前宣言や具体化による追加処理も含まれるため、箇所数と同一とは限らない。
+
+trait数は標準定義を除く宣言数で、2個の使用traitと残りの空traitを含む。2系列ともmethod本体は2個で固定する。`canonical_trait_count_064`と`canonical_obligation_count_256`は規模の説明コメントを除いて同じ入力となる交点である。
+
+trait 数系列にも前宣言・表の保持・serialization の費用、obligation 数系列にも式・binding の検査費用が含まれる。UID 検索だけの短縮と判断するには、対象処理の計時や探索件数を併せて確認する。
 
 生成内容の確認と再生成は、リポジトリルートで実行する。
 
@@ -70,7 +78,7 @@ SURTR_STDLIB_CACHE_DIR="$measure_dir/cache" "$CARGO_TARGET_DIR/release/surtr" bu
 
 一括処理では `cases.json` の `entry` だけを使う。`*.srt` の再帰 glob は補助 module も拾うため使わない。入力と依存ソースの hash、compiler の commit・差分・binary hash、cold / disk hit、各回の時間を保存する。少なくとも複数回を測り、cold と disk hit を別集計にする。
 
-追加時の確認は [入力整備と検証記録](../../../doc/scar_optimize/05_compile_inputs.md) に記載した。24 入口の cold / disk hit 各 1 回はコンパイル可否と cache 経路の確認であり、安定した性能基準値や機能の実行結果を保証する測定ではない。
+初期整備時の24入口の確認は [入力整備と検証記録](../../../doc/scar_optimize/05_compile_inputs.md) に記載した。この24入口のcold / disk hit各1回はコンパイル可否とcache経路の確認であり、安定した性能基準値や機能の実行結果を保証する測定ではない。P4で追加した9入口の生成・構成・コンパイル確認は [入力検証JSON](../../../doc/scar_optimize/evidence/p4/input-validation.json) に記録する。
 
 ## before / after の一括測定
 
@@ -86,7 +94,7 @@ python3 tests/profile/scar_compile/measure.py \
   --output /tmp/scar-comparison-new
 ```
 
-`--output` は存在しないディレクトリを指定する。`--iterations`、`--timeout` で反復数・processごとの秒数を変更できる。小規模な入口確認には `--case stdlib_prewarm` のように入力IDを指定する。`--case` は複数回指定できる。10回未満や一部入口のみの結果は、全24入口の採用測定の代わりにしない。
+`--output` は存在しないディレクトリを指定する。`--iterations`、`--timeout` で反復数・processごとの秒数を変更できる。小規模な入口確認には `--case stdlib_prewarm` のように入力IDを指定する。`--case` は複数回指定できる。10回未満や一部入口のみの結果は、全33入口の採用測定の代わりにしない。
 
 build manifest は各 binary のビルド時に用意した JSON を必ず渡す。内容はそのまま測定 manifest に保存する。source root、commit、差分とその hash、build profile・flags、target directory、Rust toolchain、binary hash を記録し、元の差分ファイルも保管する。スクリプトは任意の JSON を受け取るため、記載内容と binary の対応までは保証しない。異なる build 条件や古い binary の比較を、manifest があるだけで正当化しない。測定時の cwd はこのスクリプトを置いたリポジトリのルートに固定される。
 

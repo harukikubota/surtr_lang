@@ -62,12 +62,47 @@ def nominal_chain(size):
     ] + constructions + [f'print(to_string(unwrap(node{size - 1:03d})))']
 
 
+def canonical_trait_proofs(traits, obligations):
+    # Empty traits vary only identity-table size; the two active traits, nominal
+    # type, impls, and method bodies are identical in both workload families.
+    lines = [f'deftrait ProfilePadding{i:04d} {{}}' for i in range(traits - 2)]
+    lines += [
+        '',
+        'defenum ProfileProofBox<$A> { Box($A), }',
+        '',
+        'deftrait ProfileMarker<$Tag> {',
+        '  def mark::<$Tag>(self: Self) -> $Tag',
+        '}',
+        'deftrait ProfileUse { def use(self: Self) -> Int }',
+        '',
+        'impl ProfileMarker<Int> for Int {',
+        '  def mark::<Int>(self: Int) -> Int { self }',
+        '}',
+        'impl ProfileUse for ProfileProofBox<$A>',
+        'where',
+        '  $A: ProfileMarker',
+        '{',
+        '  def use(self: ProfileProofBox<$A>) -> Int {',
+        '    match self { ProfileProofBox::Box(value) => ProfileMarker::mark::<Int>(value) }',
+        '  }',
+        '}',
+        '',
+    ]
+    lines += [
+        f'proof{i:04d} = ProfileUse::use(ProfileProofBox::Box({i}))'
+        for i in range(obligations)
+    ]
+    return lines + [f'print(to_string(proof{obligations - 1:04d}))']
+
+
 FAMILIES = {
     'error_definitions': ((64, 128, 256), error_definitions, 'Flat Error declarations; two constructor calls at every size.'),
     'generic_chain': ((16, 32, 64), generic_chain, 'Generic call depth; three calls with Int/String/Int payloads at every size.'),
     'generic_chain_reverse': ((16, 32, 64), lambda size: generic_chain(size, reverse=True), 'Same generic chain and calls, with declarations reversed to vary propagation order.'),
     'trait_impls': ((16, 32, 64), trait_impls, 'Disjoint impl count for one trait; two dispatch sites at every size.'),
     'nominal_chain': ((16, 32, 64), nominal_chain, 'Record dependency depth; flat constructor bindings avoid parser nesting limits.'),
+    'canonical_trait_count': ((64, 256, 1024, 4096, 16384), lambda size: canonical_trait_proofs(size, 256), 'User trait count; 256 constrained dispatch sites, one nominal type and two impl bodies fixed.'),
+    'canonical_obligation_count': ((64, 256, 1024, 4096), lambda size: canonical_trait_proofs(64, size), 'Constrained dispatch sites; 64 user traits, one nominal type and two impl bodies fixed.'),
 }
 
 

@@ -1,0 +1,146 @@
+{
+  "method": "Paired after-before duration_us; batches each 10 alternating before/after iterations. Median bootstrap percentile CI with fixed seed 20261016 and 100000 resamples. One-sided exact sign test as descriptive auxiliary evidence.",
+  "batches": [
+    "extended",
+    "confirm"
+  ],
+  "total_runs": 80,
+  "results": [
+    {
+      "cache_condition": "cold",
+      "phase": "typecheck",
+      "pairs": 20,
+      "after_faster_pairs": 14,
+      "paired_differences_us": [
+        -19912,
+        -6301,
+        -6520,
+        31168,
+        3370,
+        -2449,
+        347,
+        -19767,
+        -16227,
+        -21872,
+        6184,
+        16330,
+        -18054,
+        -2412,
+        -16527,
+        -15581,
+        -18583,
+        980,
+        -19591,
+        -2518
+      ],
+      "paired_median_delta_us": -6410.5,
+      "bootstrap_95_percentile_ci_us": [
+        -17290.5,
+        -1032.5
+      ],
+      "one_sided_sign_p": 0.057659149169921875
+    },
+    {
+      "cache_condition": "cold",
+      "phase": "compile_total",
+      "pairs": 20,
+      "after_faster_pairs": 13,
+      "paired_differences_us": [
+        -6983,
+        16758,
+        -6578,
+        27080,
+        -1007,
+        -17101,
+        -12869,
+        -23556,
+        -41630,
+        -51240,
+        8824,
+        -6851,
+        835,
+        4612,
+        6965,
+        -10512,
+        -10691,
+        -28127,
+        -60539,
+        29665
+      ],
+      "paired_median_delta_us": -6917.0,
+      "bootstrap_95_percentile_ci_us": [
+        -14985.0,
+        2723.5
+      ],
+      "one_sided_sign_p": 0.13158798217773438
+    },
+    {
+      "cache_condition": "disk_hit",
+      "phase": "typecheck",
+      "pairs": 20,
+      "after_faster_pairs": 16,
+      "paired_differences_us": [
+        -16062,
+        -31659,
+        -7972,
+        -2177,
+        -27201,
+        7123,
+        -2394,
+        -6270,
+        8674,
+        -29567,
+        -36218,
+        1324,
+        -16328,
+        -12388,
+        -9827,
+        -1404,
+        -14933,
+        5238,
+        -13920,
+        -23357
+      ],
+      "paired_median_delta_us": -11107.5,
+      "bootstrap_95_percentile_ci_us": [
+        -16195.0,
+        -2285.5
+      ],
+      "one_sided_sign_p": 0.005908966064453125
+    },
+    {
+      "cache_condition": "disk_hit",
+      "phase": "compile_total",
+      "pairs": 20,
+      "after_faster_pairs": 13,
+      "paired_differences_us": [
+        -40085,
+        -54863,
+        -24622,
+        36108,
+        -25599,
+        -17728,
+        -15202,
+        -12302,
+        -2883,
+        -3031,
+        -18431,
+        28310,
+        6545,
+        -17852,
+        -18867,
+        18371,
+        -29796,
+        37061,
+        32187,
+        5786
+      ],
+      "paired_median_delta_us": -13752.0,
+      "bootstrap_95_percentile_ci_us": [
+        -18649.0,
+        6165.5
+      ],
+      "one_sided_sign_p": 0.13158798217773438
+    }
+  ]
+}

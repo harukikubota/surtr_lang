@@ -1,0 +1,1403 @@
+{
+  "purpose": "Profile attribution only; not adoption performance evidence",
+  "runs_before": 66,
+  "runs_after": 66,
+  "exit_codes": "all 0",
+  "cache_validation": "all expected cold/disk_hit, artifact=not_used, typecheck=executed, execute=skipped",
+  "same_lookup_calls": "all user suffix counts identical",
+  "notes": [
+    "Before compared counts actual visited trait entries in linear UID search.",
+    "After compared=0 denotes no linear UID search; internal HashMap comparisons are not observed.",
+    "After index build entries and nanos are separate counters; index build nanos are included in lookup nanos.",
+    "Each input and condition has only one profiler-enabled sample; HashMap random iteration and build load affect timings.",
+    "Cold first check_program is stdlib; remaining groups count as user suffix. Disk hit groups all count as user suffix."
+  ],
+  "results": [
+    {
+      "case": "stdlib_prewarm",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "stdlib_prewarm",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "heavy_compile",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "heavy_compile",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "error_constructors",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "error_constructors",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "closures_lazy",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "closures_lazy",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "facet_paths",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "facet_paths",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "generic_calls",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "generic_calls",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "monad_carriers",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 46,
+        "compared": 526,
+        "nanos": 2708
+      },
+      "after": {
+        "site": "total",
+        "calls": 46,
+        "compared": 0,
+        "nanos": 4380
+      },
+      "after_index_build": {
+        "builds": 1,
+        "entries": 22,
+        "nanos": 1000
+      }
+    },
+    {
+      "case": "monad_carriers",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 46,
+        "compared": 424,
+        "nanos": 1834
+      },
+      "after": {
+        "site": "total",
+        "calls": 46,
+        "compared": 0,
+        "nanos": 3876
+      },
+      "after_index_build": {
+        "builds": 1,
+        "entries": 22,
+        "nanos": 875
+      }
+    },
+    {
+      "case": "patterns",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 2,
+        "compared": 26,
+        "nanos": 209
+      },
+      "after": {
+        "site": "total",
+        "calls": 2,
+        "compared": 0,
+        "nanos": 1876
+      },
+      "after_index_build": {
+        "builds": 1,
+        "entries": 22,
+        "nanos": 1250
+      }
+    },
+    {
+      "case": "patterns",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 2,
+        "compared": 8,
+        "nanos": 125
+      },
+      "after": {
+        "site": "total",
+        "calls": 2,
+        "compared": 0,
+        "nanos": 1583
+      },
+      "after_index_build": {
+        "builds": 1,
+        "entries": 22,
+        "nanos": 1250
+      }
+    },
+    {
+      "case": "error_definitions_064",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "error_definitions_064",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "error_definitions_128",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "error_definitions_128",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "error_definitions_256",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "error_definitions_256",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "generic_chain_016",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "generic_chain_016",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "generic_chain_032",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "generic_chain_032",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "generic_chain_064",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "generic_chain_064",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "nominal_chain_016",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "nominal_chain_016",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "nominal_chain_032",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "nominal_chain_032",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "nominal_chain_064",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "nominal_chain_064",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "trait_impls_016",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "trait_impls_016",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "trait_impls_032",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "trait_impls_032",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "trait_impls_064",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "trait_impls_064",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "modules",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 4,
+        "compared": 80,
+        "nanos": 666
+      },
+      "after": {
+        "site": "total",
+        "calls": 4,
+        "compared": 0,
+        "nanos": 1708
+      },
+      "after_index_build": {
+        "builds": 1,
+        "entries": 23,
+        "nanos": 1083
+      }
+    },
+    {
+      "case": "modules",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 4,
+        "compared": 52,
+        "nanos": 500
+      },
+      "after": {
+        "site": "total",
+        "calls": 4,
+        "compared": 0,
+        "nanos": 1875
+      },
+      "after_index_build": {
+        "builds": 1,
+        "entries": 23,
+        "nanos": 1500
+      }
+    },
+    {
+      "case": "generic_chain_reverse_016",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "generic_chain_reverse_016",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "generic_chain_reverse_032",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "generic_chain_reverse_032",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "generic_chain_reverse_064",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "generic_chain_reverse_064",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after": {
+        "site": "total",
+        "calls": 0,
+        "compared": 0,
+        "nanos": 0
+      },
+      "after_index_build": {
+        "builds": 0,
+        "entries": 0,
+        "nanos": 0
+      }
+    },
+    {
+      "case": "canonical_trait_count_064",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 512,
+        "compared": 18944,
+        "nanos": 33250
+      },
+      "after": {
+        "site": "total",
+        "calls": 512,
+        "compared": 0,
+        "nanos": 58954
+      },
+      "after_index_build": {
+        "builds": 1,
+        "entries": 86,
+        "nanos": 5708
+      }
+    },
+    {
+      "case": "canonical_trait_count_064",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 512,
+        "compared": 5120,
+        "nanos": 11913
+      },
+      "after": {
+        "site": "total",
+        "calls": 512,
+        "compared": 0,
+        "nanos": 56799
+      },
+      "after_index_build": {
+        "builds": 1,
+        "entries": 86,
+        "nanos": 4083
+      }
+    },
+    {
+      "case": "canonical_trait_count_256",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 512,
+        "compared": 4096,
+        "nanos": 12040
+      },
+      "after": {
+        "site": "total",
+        "calls": 512,
+        "compared": 0,
+        "nanos": 63455
+      },
+      "after_index_build": {
+        "builds": 1,
+        "entries": 278,
+        "nanos": 9542
+      }
+    },
+    {
+      "case": "canonical_trait_count_256",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 512,
+        "compared": 141312,
+        "nanos": 284471
+      },
+      "after": {
+        "site": "total",
+        "calls": 512,
+        "compared": 0,
+        "nanos": 60797
+      },
+      "after_index_build": {
+        "builds": 1,
+        "entries": 278,
+        "nanos": 9708
+      }
+    },
+    {
+      "case": "canonical_trait_count_1024",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 512,
+        "compared": 256000,
+        "nanos": 2933434
+      },
+      "after": {
+        "site": "total",
+        "calls": 512,
+        "compared": 0,
+        "nanos": 83775
+      },
+      "after_index_build": {
+        "builds": 1,
+        "entries": 1046,
+        "nanos": 30958
+      }
+    },
+    {
+      "case": "canonical_trait_count_1024",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 512,
+        "compared": 84992,
+        "nanos": 199704
+      },
+      "after": {
+        "site": "total",
+        "calls": 512,
+        "compared": 0,
+        "nanos": 87248
+      },
+      "after_index_build": {
+        "builds": 1,
+        "entries": 1046,
+        "nanos": 33791
+      }
+    },
+    {
+      "case": "canonical_obligation_count_064",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 128,
+        "compared": 7296,
+        "nanos": 20744
+      },
+      "after": {
+        "site": "total",
+        "calls": 128,
+        "compared": 0,
+        "nanos": 19750
+      },
+      "after_index_build": {
+        "builds": 1,
+        "entries": 86,
+        "nanos": 5375
+      }
+    },
+    {
+      "case": "canonical_obligation_count_064",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 128,
+        "compared": 9216,
+        "nanos": 8462
+      },
+      "after": {
+        "site": "total",
+        "calls": 128,
+        "compared": 0,
+        "nanos": 17824
+      },
+      "after_index_build": {
+        "builds": 1,
+        "entries": 86,
+        "nanos": 3834
+      }
+    },
+    {
+      "case": "canonical_obligation_count_256",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 512,
+        "compared": 16896,
+        "nanos": 28376
+      },
+      "after": {
+        "site": "total",
+        "calls": 512,
+        "compared": 0,
+        "nanos": 67215
+      },
+      "after_index_build": {
+        "builds": 1,
+        "entries": 86,
+        "nanos": 6375
+      }
+    },
+    {
+      "case": "canonical_obligation_count_256",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 512,
+        "compared": 41984,
+        "nanos": 38257
+      },
+      "after": {
+        "site": "total",
+        "calls": 512,
+        "compared": 0,
+        "nanos": 60791
+      },
+      "after_index_build": {
+        "builds": 1,
+        "entries": 86,
+        "nanos": 3583
+      }
+    },
+    {
+      "case": "canonical_obligation_count_1024",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 2048,
+        "compared": 6144,
+        "nanos": 71009
+      },
+      "after": {
+        "site": "total",
+        "calls": 2048,
+        "compared": 0,
+        "nanos": 222639
+      },
+      "after_index_build": {
+        "builds": 1,
+        "entries": 86,
+        "nanos": 5083
+      }
+    },
+    {
+      "case": "canonical_obligation_count_1024",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 2048,
+        "compared": 167936,
+        "nanos": 195945
+      },
+      "after": {
+        "site": "total",
+        "calls": 2048,
+        "compared": 0,
+        "nanos": 226501
+      },
+      "after_index_build": {
+        "builds": 1,
+        "entries": 86,
+        "nanos": 3458
+      }
+    },
+    {
+      "case": "canonical_trait_count_4096",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 512,
+        "compared": 743936,
+        "nanos": 1875453
+      },
+      "after": {
+        "site": "total",
+        "calls": 512,
+        "compared": 0,
+        "nanos": 215244
+      },
+      "after_index_build": {
+        "builds": 1,
+        "entries": 4118,
+        "nanos": 157041
+      }
+    },
+    {
+      "case": "canonical_trait_count_4096",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 512,
+        "compared": 786944,
+        "nanos": 1102688
+      },
+      "after": {
+        "site": "total",
+        "calls": 512,
+        "compared": 0,
+        "nanos": 206538
+      },
+      "after_index_build": {
+        "builds": 1,
+        "entries": 4118,
+        "nanos": 150500
+      }
+    },
+    {
+      "case": "canonical_obligation_count_4096",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 8192,
+        "compared": 73728,
+        "nanos": 296509
+      },
+      "after": {
+        "site": "total",
+        "calls": 8192,
+        "compared": 0,
+        "nanos": 912834
+      },
+      "after_index_build": {
+        "builds": 1,
+        "entries": 86,
+        "nanos": 5542
+      }
+    },
+    {
+      "case": "canonical_obligation_count_4096",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 8192,
+        "compared": 475136,
+        "nanos": 592668
+      },
+      "after": {
+        "site": "total",
+        "calls": 8192,
+        "compared": 0,
+        "nanos": 909638
+      },
+      "after_index_build": {
+        "builds": 1,
+        "entries": 86,
+        "nanos": 4833
+      }
+    },
+    {
+      "case": "canonical_trait_count_16384",
+      "condition": "cold",
+      "before": {
+        "site": "total",
+        "calls": 512,
+        "compared": 535040,
+        "nanos": 835699
+      },
+      "after": {
+        "site": "total",
+        "calls": 512,
+        "compared": 0,
+        "nanos": 808499
+      },
+      "after_index_build": {
+        "builds": 1,
+        "entries": 16406,
+        "nanos": 747542
+      }
+    },
+    {
+      "case": "canonical_trait_count_16384",
+      "condition": "disk_hit",
+      "before": {
+        "site": "total",
+        "calls": 512,
+        "compared": 4147712,
+        "nanos": 8659007
+      },
+      "after": {
+        "site": "total",
+        "calls": 512,
+        "compared": 0,
+        "nanos": 816540
+      },
+      "after_index_build": {
+        "builds": 1,
+        "entries": 16406,
+        "nanos": 750042
+      }
+    }
+  ]
+}

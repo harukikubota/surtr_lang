@@ -1,0 +1,35 @@
+{
+  "total_runs": 1360,
+  "total_cases": 33,
+  "batches": [
+    {
+      "cases": 32,
+      "iterations_per_variant_cache": 10,
+      "runs": 1280,
+      "manifest": "manifest.json",
+      "raw": "runs.jsonl.gz",
+      "summary": "initial-summary.json"
+    },
+    {
+      "cases": 1,
+      "case": "canonical_trait_count_16384",
+      "iterations_per_variant_cache": 10,
+      "runs": 40,
+      "manifest": "extended-manifest.json",
+      "raw": "extended-runs.jsonl.gz",
+      "batch_key": "extended"
+    },
+    {
+      "cases": 1,
+      "case": "canonical_trait_count_16384",
+      "iterations_per_variant_cache": 10,
+      "runs": 40,
+      "manifest": "confirm-manifest.json",
+      "raw": "extended-runs.jsonl.gz",
+      "batch_key": "confirm"
+    }
+  ],
+  "overall_summary": "summary.json",
+  "product_rust_unchanged_after_full_ci": true,
+  "note": "The fifth trait scale was added after the initial 32-input comparison. No initial input or product code was changed. Each batch independently alternates before/after with fresh caches."
+}

@@ -1,0 +1,8 @@
+Preparation attempt 1 (not a measurement):
+- instrument_before.py could not resolve rustfmt in the archive cwd PATH.
+- cargo invocation could not resolve cargo; exit status 127.
+- No binary was produced by this failed invocation.
+Recovery:
+- Invoked /Users/haruca/.cargo/bin/rustfmt directly.
+- Invoked /Users/haruca/.cargo/bin/cargo with PATH=/Users/haruca/.cargo/bin:$PATH.
+- Dedicated target: /tmp/surtr-scar-p4-20261016-151832/before-profile-target.

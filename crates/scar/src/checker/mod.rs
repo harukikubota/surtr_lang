@@ -4,7 +4,6 @@ use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
-#[cfg(test)]
 use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};

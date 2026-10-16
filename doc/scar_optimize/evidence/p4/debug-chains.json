@@ -1,0 +1,89 @@
+{
+  "binary": "/Users/haruca/work/rust/surtr/target/debug/surtr",
+  "binary_sha256": "f00a121f15527b9a0a00f6e4de8138f467ab998729ce4616cdb4c37c033c1ba9",
+  "stack_soft_hard_bytes": [
+    8372224,
+    67092480
+  ],
+  "RUST_MIN_STACK": "unset",
+  "rows": [
+    {
+      "entry": "tests/profile/scar_compile/generated/generic_chain_016.srt",
+      "args": [
+        "/Users/haruca/work/rust/surtr/target/debug/surtr",
+        "build",
+        "tests/profile/scar_compile/generated/generic_chain_016.srt",
+        "/tmp/surtr-scar-p4-20261016-151832/debug-chains/generic_chain_016.eldr",
+        "--phase-times-json"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "{\"cache\":{\"artifact\":\"not_used\",\"artifact_store\":\"not_used\",\"stdlib\":\"cold\"},\"compile_total\":{\"duration_ms\":1458,\"duration_us\":1458904,\"status\":\"executed\"},\"compile_total_us\":1458904,\"input\":\"tests/profile/scar_compile/generated/generic_chain_016.srt\",\"input_path\":\"tests/profile/scar_compile/generated/generic_chain_016.srt\",\"phases\":{\"bytecode_encode\":{\"duration_ms\":9,\"duration_us\":9659,\"status\":\"executed\"},\"codegen\":{\"duration_ms\":2,\"duration_us\":2463,\"status\":\"executed\"},\"compile\":{\"duration_ms\":1458,\"duration_us\":1458904,\"status\":\"executed\"},\"compile_plan\":{\"duration_ms\":10,\"duration_us\":10569,\"status\":\"executed\"},\"compile_total\":{\"duration_ms\":1458,\"duration_us\":1458904,\"status\":\"executed\"},\"decode\":{\"status\":\"skipped\"},\"execute\":{\"status\":\"skipped\"},\"output_write\":{\"duration_ms\":0,\"duration_us\":691,\"status\":\"executed\"},\"parse\":{\"duration_ms\":1,\"duration_us\":1115,\"status\":\"executed\"},\"parse_modules\":{\"duration_ms\":0,\"duration_us\":5,\"status\":\"executed\"},\"parse_user\":{\"duration_ms\":1,\"duration_us\":1110,\"status\":\"executed\"},\"resolve\":{\"duration_ms\":32,\"duration_us\":32026,\"status\":\"executed\"},\"source_read\":{\"duration_ms\":0,\"duration_us\":877,\"status\":\"executed\"},\"stdlib_load\":{\"duration_ms\":1364,\"duration_us\":1364331,\"status\":\"executed\"},\"total\":{\"duration_ms\":1459,\"duration_us\":1459844,\"status\":\"executed\"},\"typecheck\":{\"duration_ms\":14,\"duration_us\":14914,\"status\":\"executed\"}},\"schema_version\":1,\"total\":{\"duration_ms\":1459,\"duration_us\":1459844,\"status\":\"executed\"},\"total_us\":1459844}\n"
+    },
+    {
+      "entry": "tests/profile/scar_compile/generated/generic_chain_032.srt",
+      "args": [
+        "/Users/haruca/work/rust/surtr/target/debug/surtr",
+        "build",
+        "tests/profile/scar_compile/generated/generic_chain_032.srt",
+        "/tmp/surtr-scar-p4-20261016-151832/debug-chains/generic_chain_032.eldr",
+        "--phase-times-json"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "{\"cache\":{\"artifact\":\"not_used\",\"artifact_store\":\"not_used\",\"stdlib\":\"disk_hit\"},\"compile_total\":{\"duration_ms\":186,\"duration_us\":186257,\"status\":\"executed\"},\"compile_total_us\":186257,\"input\":\"tests/profile/scar_compile/generated/generic_chain_032.srt\",\"input_path\":\"tests/profile/scar_compile/generated/generic_chain_032.srt\",\"phases\":{\"bytecode_encode\":{\"duration_ms\":9,\"duration_us\":9916,\"status\":\"executed\"},\"codegen\":{\"duration_ms\":3,\"duration_us\":3040,\"status\":\"executed\"},\"compile\":{\"duration_ms\":186,\"duration_us\":186257,\"status\":\"executed\"},\"compile_plan\":{\"duration_ms\":1,\"duration_us\":1953,\"status\":\"executed\"},\"compile_total\":{\"duration_ms\":186,\"duration_us\":186257,\"status\":\"executed\"},\"decode\":{\"status\":\"skipped\"},\"execute\":{\"status\":\"skipped\"},\"output_write\":{\"duration_ms\":0,\"duration_us\":531,\"status\":\"executed\"},\"parse\":{\"duration_ms\":1,\"duration_us\":1724,\"status\":\"executed\"},\"parse_modules\":{\"duration_ms\":0,\"duration_us\":4,\"status\":\"executed\"},\"parse_user\":{\"duration_ms\":1,\"duration_us\":1719,\"status\":\"executed\"},\"resolve\":{\"duration_ms\":53,\"duration_us\":53545,\"status\":\"executed\"},\"source_read\":{\"duration_ms\":0,\"duration_us\":146,\"status\":\"executed\"},\"stdlib_load\":{\"duration_ms\":78,\"duration_us\":78257,\"status\":\"executed\"},\"total\":{\"duration_ms\":186,\"duration_us\":186405,\"status\":\"executed\"},\"typecheck\":{\"duration_ms\":23,\"duration_us\":23112,\"status\":\"executed\"}},\"schema_version\":1,\"total\":{\"duration_ms\":186,\"duration_us\":186405,\"status\":\"executed\"},\"total_us\":186405}\n"
+    },
+    {
+      "entry": "tests/profile/scar_compile/generated/generic_chain_064.srt",
+      "args": [
+        "/Users/haruca/work/rust/surtr/target/debug/surtr",
+        "build",
+        "tests/profile/scar_compile/generated/generic_chain_064.srt",
+        "/tmp/surtr-scar-p4-20261016-151832/debug-chains/generic_chain_064.eldr",
+        "--phase-times-json"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "{\"cache\":{\"artifact\":\"not_used\",\"artifact_store\":\"not_used\",\"stdlib\":\"disk_hit\"},\"compile_total\":{\"duration_ms\":244,\"duration_us\":244387,\"status\":\"executed\"},\"compile_total_us\":244387,\"input\":\"tests/profile/scar_compile/generated/generic_chain_064.srt\",\"input_path\":\"tests/profile/scar_compile/generated/generic_chain_064.srt\",\"phases\":{\"bytecode_encode\":{\"duration_ms\":10,\"duration_us\":10405,\"status\":\"executed\"},\"codegen\":{\"duration_ms\":3,\"duration_us\":3995,\"status\":\"executed\"},\"compile\":{\"duration_ms\":244,\"duration_us\":244387,\"status\":\"executed\"},\"compile_plan\":{\"duration_ms\":3,\"duration_us\":3265,\"status\":\"executed\"},\"compile_total\":{\"duration_ms\":244,\"duration_us\":244387,\"status\":\"executed\"},\"decode\":{\"status\":\"skipped\"},\"execute\":{\"status\":\"skipped\"},\"output_write\":{\"duration_ms\":1,\"duration_us\":1228,\"status\":\"executed\"},\"parse\":{\"duration_ms\":2,\"duration_us\":2954,\"status\":\"executed\"},\"parse_modules\":{\"duration_ms\":0,\"duration_us\":3,\"status\":\"executed\"},\"parse_user\":{\"duration_ms\":2,\"duration_us\":2951,\"status\":\"executed\"},\"resolve\":{\"duration_ms\":96,\"duration_us\":96185,\"status\":\"executed\"},\"source_read\":{\"duration_ms\":0,\"duration_us\":177,\"status\":\"executed\"},\"stdlib_load\":{\"duration_ms\":73,\"duration_us\":73837,\"status\":\"executed\"},\"total\":{\"duration_ms\":244,\"duration_us\":244566,\"status\":\"executed\"},\"typecheck\":{\"duration_ms\":37,\"duration_us\":37816,\"status\":\"executed\"}},\"schema_version\":1,\"total\":{\"duration_ms\":244,\"duration_us\":244566,\"status\":\"executed\"},\"total_us\":244566}\n"
+    },
+    {
+      "entry": "tests/profile/scar_compile/generated/generic_chain_reverse_016.srt",
+      "args": [
+        "/Users/haruca/work/rust/surtr/target/debug/surtr",
+        "build",
+        "tests/profile/scar_compile/generated/generic_chain_reverse_016.srt",
+        "/tmp/surtr-scar-p4-20261016-151832/debug-chains/generic_chain_reverse_016.eldr",
+        "--phase-times-json"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "{\"cache\":{\"artifact\":\"not_used\",\"artifact_store\":\"not_used\",\"stdlib\":\"disk_hit\"},\"compile_total\":{\"duration_ms\":150,\"duration_us\":150722,\"status\":\"executed\"},\"compile_total_us\":150722,\"input\":\"tests/profile/scar_compile/generated/generic_chain_reverse_016.srt\",\"input_path\":\"tests/profile/scar_compile/generated/generic_chain_reverse_016.srt\",\"phases\":{\"bytecode_encode\":{\"duration_ms\":9,\"duration_us\":9628,\"status\":\"executed\"},\"codegen\":{\"duration_ms\":2,\"duration_us\":2539,\"status\":\"executed\"},\"compile\":{\"duration_ms\":150,\"duration_us\":150722,\"status\":\"executed\"},\"compile_plan\":{\"duration_ms\":1,\"duration_us\":1302,\"status\":\"executed\"},\"compile_total\":{\"duration_ms\":150,\"duration_us\":150722,\"status\":\"executed\"},\"decode\":{\"status\":\"skipped\"},\"execute\":{\"status\":\"skipped\"},\"output_write\":{\"duration_ms\":0,\"duration_us\":804,\"status\":\"executed\"},\"parse\":{\"duration_ms\":1,\"duration_us\":1050,\"status\":\"executed\"},\"parse_modules\":{\"duration_ms\":0,\"duration_us\":3,\"status\":\"executed\"},\"parse_user\":{\"duration_ms\":1,\"duration_us\":1046,\"status\":\"executed\"},\"resolve\":{\"duration_ms\":32,\"duration_us\":32576,\"status\":\"executed\"},\"source_read\":{\"duration_ms\":0,\"duration_us\":187,\"status\":\"executed\"},\"stdlib_load\":{\"duration_ms\":73,\"duration_us\":73609,\"status\":\"executed\"},\"total\":{\"duration_ms\":150,\"duration_us\":150911,\"status\":\"executed\"},\"typecheck\":{\"duration_ms\":15,\"duration_us\":15638,\"status\":\"executed\"}},\"schema_version\":1,\"total\":{\"duration_ms\":150,\"duration_us\":150911,\"status\":\"executed\"},\"total_us\":150911}\n"
+    },
+    {
+      "entry": "tests/profile/scar_compile/generated/generic_chain_reverse_032.srt",
+      "args": [
+        "/Users/haruca/work/rust/surtr/target/debug/surtr",
+        "build",
+        "tests/profile/scar_compile/generated/generic_chain_reverse_032.srt",
+        "/tmp/surtr-scar-p4-20261016-151832/debug-chains/generic_chain_reverse_032.eldr",
+        "--phase-times-json"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "{\"cache\":{\"artifact\":\"not_used\",\"artifact_store\":\"not_used\",\"stdlib\":\"disk_hit\"},\"compile_total\":{\"duration_ms\":180,\"duration_us\":180965,\"status\":\"executed\"},\"compile_total_us\":180965,\"input\":\"tests/profile/scar_compile/generated/generic_chain_reverse_032.srt\",\"input_path\":\"tests/profile/scar_compile/generated/generic_chain_reverse_032.srt\",\"phases\":{\"bytecode_encode\":{\"duration_ms\":9,\"duration_us\":9896,\"status\":\"executed\"},\"codegen\":{\"duration_ms\":2,\"duration_us\":2993,\"status\":\"executed\"},\"compile\":{\"duration_ms\":180,\"duration_us\":180965,\"status\":\"executed\"},\"compile_plan\":{\"duration_ms\":1,\"duration_us\":1922,\"status\":\"executed\"},\"compile_total\":{\"duration_ms\":180,\"duration_us\":180965,\"status\":\"executed\"},\"decode\":{\"status\":\"skipped\"},\"execute\":{\"status\":\"skipped\"},\"output_write\":{\"duration_ms\":0,\"duration_us\":501,\"status\":\"executed\"},\"parse\":{\"duration_ms\":1,\"duration_us\":1672,\"status\":\"executed\"},\"parse_modules\":{\"duration_ms\":0,\"duration_us\":3,\"status\":\"executed\"},\"parse_user\":{\"duration_ms\":1,\"duration_us\":1669,\"status\":\"executed\"},\"resolve\":{\"duration_ms\":53,\"duration_us\":53381,\"status\":\"executed\"},\"source_read\":{\"duration_ms\":0,\"duration_us\":181,\"status\":\"executed\"},\"stdlib_load\":{\"duration_ms\":73,\"duration_us\":73700,\"status\":\"executed\"},\"total\":{\"duration_ms\":181,\"duration_us\":181148,\"status\":\"executed\"},\"typecheck\":{\"duration_ms\":22,\"duration_us\":22923,\"status\":\"executed\"}},\"schema_version\":1,\"total\":{\"duration_ms\":181,\"duration_us\":181148,\"status\":\"executed\"},\"total_us\":181148}\n"
+    },
+    {
+      "entry": "tests/profile/scar_compile/generated/generic_chain_reverse_064.srt",
+      "args": [
+        "/Users/haruca/work/rust/surtr/target/debug/surtr",
+        "build",
+        "tests/profile/scar_compile/generated/generic_chain_reverse_064.srt",
+        "/tmp/surtr-scar-p4-20261016-151832/debug-chains/generic_chain_reverse_064.eldr",
+        "--phase-times-json"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "{\"cache\":{\"artifact\":\"not_used\",\"artifact_store\":\"not_used\",\"stdlib\":\"disk_hit\"},\"compile_total\":{\"duration_ms\":247,\"duration_us\":247382,\"status\":\"executed\"},\"compile_total_us\":247382,\"input\":\"tests/profile/scar_compile/generated/generic_chain_reverse_064.srt\",\"input_path\":\"tests/profile/scar_compile/generated/generic_chain_reverse_064.srt\",\"phases\":{\"bytecode_encode\":{\"duration_ms\":11,\"duration_us\":11339,\"status\":\"executed\"},\"codegen\":{\"duration_ms\":4,\"duration_us\":4359,\"status\":\"executed\"},\"compile\":{\"duration_ms\":247,\"duration_us\":247382,\"status\":\"executed\"},\"compile_plan\":{\"duration_ms\":3,\"duration_us\":3223,\"status\":\"executed\"},\"compile_total\":{\"duration_ms\":247,\"duration_us\":247382,\"status\":\"executed\"},\"decode\":{\"status\":\"skipped\"},\"execute\":{\"status\":\"skipped\"},\"output_write\":{\"duration_ms\":0,\"duration_us\":643,\"status\":\"executed\"},\"parse\":{\"duration_ms\":2,\"duration_us\":2909,\"status\":\"executed\"},\"parse_modules\":{\"duration_ms\":0,\"duration_us\":3,\"status\":\"executed\"},\"parse_user\":{\"duration_ms\":2,\"duration_us\":2905,\"status\":\"executed\"},\"resolve\":{\"duration_ms\":96,\"duration_us\":96369,\"status\":\"executed\"},\"source_read\":{\"duration_ms\":0,\"duration_us\":347,\"status\":\"executed\"},\"stdlib_load\":{\"duration_ms\":72,\"duration_us\":72621,\"status\":\"executed\"},\"total\":{\"duration_ms\":247,\"duration_us\":247731,\"status\":\"executed\"},\"typecheck\":{\"duration_ms\":40,\"duration_us\":40620,\"status\":\"executed\"}},\"schema_version\":1,\"total\":{\"duration_ms\":247,\"duration_us\":247731,\"status\":\"executed\"},\"total_us\":247731}\n"
+    }
+  ]
+}

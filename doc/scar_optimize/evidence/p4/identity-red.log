@@ -1,0 +1,21 @@
+FAIL [   2.930s] (1/1) scar checker::trait_selection::tests::applicability_tests::canonical_trait_identity_visits_definitions_once_for_repeated_proofs
+  stdout ───
+
+    running 1 test
+    test checker::trait_selection::tests::applicability_tests::canonical_trait_identity_visits_definitions_once_for_repeated_proofs ... FAILED
+
+    failures:
+
+    failures:
+        checker::trait_selection::tests::applicability_tests::canonical_trait_identity_visits_definitions_once_for_repeated_proofs
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 113 filtered out; finished in 2.89s
+
+  stderr ───
+
+    thread 'checker::trait_selection::tests::applicability_tests::canonical_trait_identity_visits_definitions_once_for_repeated_proofs' (4880914) panicked at crates/scar/src/checker/trait_selection/tests.rs:39:9:
+    identity lookup revisited 624 definitions for 23 traits
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+cargo nextest: 0 passed, 1 failed, 422 skipped (39 binaries, 2.945s)
+[full output: "$HOME/Library/Application Support/rtk/tee/1792131676_cargo_nextest.log"]

@@ -1712,6 +1712,24 @@ impl Checker {
             .map(|index| vec![index])
     }
 
+    fn canonical_trait_by_uid(&self, trait_id: u32) -> Option<(&str, &TraitInfo)> {
+        let identities = self.canonical_traits_by_uid.get_or_init(|| {
+            self.traits
+                .iter()
+                .map(|(key, info)| {
+                    #[cfg(test)]
+                    self.trait_identity_entries_visited
+                        .set(self.trait_identity_entries_visited.get() + 1);
+                    (info.id.unique_id, key.clone())
+                })
+                .collect()
+        });
+        let key = identities.get(&trait_id)?;
+        self.traits
+            .get(key)
+            .map(|info| (key.as_str(), info.as_ref()))
+    }
+
     fn prove_canonical_constraints(
         &self,
         constraints: &CanonicalConstraintSet,
@@ -1731,9 +1749,7 @@ impl Checker {
             let constructor_head_proved =
                 matches!(constraint.subject.head, CanonicalTypeHead::Variable(_))
                     && self
-                        .traits
-                        .iter()
-                        .find(|(_, info)| info.id.unique_id == trait_id)
+                        .canonical_trait_by_uid(trait_id)
                         .is_some_and(|(trait_key, info)| {
                             !info.constructor_slots.is_empty()
                                 && self.canonical_to_ty(&subject).ok().is_some_and(|subject| {
@@ -1771,23 +1787,21 @@ impl Checker {
         next_variable: &mut u32,
     ) -> Result<ApplicabilityProof, TypeError> {
         let trait_key = self
-            .traits
-            .iter()
-            .find(|(_, info)| info.id.unique_id == trait_id)
-            .map(|(key, _)| key.clone())
+            .canonical_trait_by_uid(trait_id)
+            .map(|(key, _)| key)
             .ok_or_else(|| {
                 TypeError::new(
                     "Internal error: canonical Trait identity missing",
                     Span { start: 0, end: 0 },
                 )
             })?;
-        if let Some(evidence) = self.exact_capability_evidence(subject, &trait_key) {
+        if let Some(evidence) = self.exact_capability_evidence(subject, trait_key) {
             return Ok(ApplicabilityProof::Satisfied(evidence));
         }
         if let CanonicalTypeHead::Variable(var) = subject.head {
             if self.rigid_tyvars.contains(&var) {
                 return Ok(self
-                    .rigid_capability_evidence(var, &trait_key)
+                    .rigid_capability_evidence(var, trait_key)
                     .map(ApplicabilityProof::Satisfied)
                     .unwrap_or(ApplicabilityProof::Unsatisfied));
             }
@@ -1806,7 +1820,7 @@ impl Checker {
                     data: diagnostics::DiagnosticData::TraitDispatch(
                         diagnostics::TraitDispatchData {
                             impl_declaration: None,
-                            trait_name: self.trait_display_name(&trait_key),
+                            trait_name: self.trait_display_name(trait_key),
                             trait_arguments: Vec::new(),
                             method: None,
                             subject_type: Some(self.canonical_type_name(subject)),
@@ -1823,7 +1837,7 @@ impl Checker {
                 },
             ));
         }
-        let candidates = self.trait_impl_candidate_keys(&trait_key);
+        let candidates = self.trait_impl_candidate_keys(trait_key);
         let mut deferred = Vec::new();
         for key in candidates {
             let info = self.trait_impls[&key].clone();
@@ -1865,13 +1879,11 @@ impl Checker {
             return Ok(ApplicabilityProof::Deferred(deferred));
         }
         let subject_ty = self.canonical_to_ty(subject)?;
-        Ok(
-            if self.compiler_trait_impl_exists(&trait_key, &subject_ty) {
-                ApplicabilityProof::Satisfied(Vec::new())
-            } else {
-                ApplicabilityProof::Unsatisfied
-            },
-        )
+        Ok(if self.compiler_trait_impl_exists(trait_key, &subject_ty) {
+            ApplicabilityProof::Satisfied(Vec::new())
+        } else {
+            ApplicabilityProof::Unsatisfied
+        })
     }
 
     fn canonical_constructor_identity_request(

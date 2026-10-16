@@ -1,0 +1,172 @@
+--- a/crates/scar/src/checker/profile.rs
++++ b/crates/scar/src/checker/profile.rs
+@@ -51,6 +51,12 @@
+ 
+ #[derive(Default)]
+ struct ProfileData {
++    canonical_index_build: ProfileCounter,
++    canonical_index_entries: AtomicU64,
++    canonical_constraints_lookup: ProfileCounter,
++    canonical_constraints_comparisons: AtomicU64,
++    canonical_capability_lookup: ProfileCounter,
++    canonical_capability_comparisons: AtomicU64,
+     types_compatible: ProfileCounter,
+     bind_tyvar: ProfileCounter,
+     instantiate_ty_with_fresh: ProfileCounter,
+@@ -171,10 +177,55 @@
+         }
+     }
+ 
++    pub(super) fn canonical_index_build(&self, entries: u64, start: Option<Instant>) {
++        let Some(start) = start else { return };
++        let elapsed = start.elapsed();
++        self.data.canonical_index_build.add(elapsed);
++        self.data
++            .canonical_index_entries
++            .fetch_add(entries, Ordering::Relaxed);
++    }
++
++    pub(super) fn canonical_identity_lookup(
++        &self,
++        capability: bool,
++        comparisons: u64,
++        start: Option<Instant>,
++    ) {
++        let Some(start) = start else { return };
++        // End timing before updating aggregates.
++        let elapsed = start.elapsed();
++        let (lookup, compared) = if capability {
++            (
++                &self.data.canonical_capability_lookup,
++                &self.data.canonical_capability_comparisons,
++            )
++        } else {
++            (
++                &self.data.canonical_constraints_lookup,
++                &self.data.canonical_constraints_comparisons,
++            )
++        };
++        lookup.add(elapsed);
++        compared.fetch_add(comparisons, Ordering::Relaxed);
++    }
++
+     pub(super) fn reset(&self) {
+         if !self.enabled {
+             return;
+         }
++        self.data.canonical_index_build.reset();
++        self.data
++            .canonical_index_entries
++            .store(0, Ordering::Relaxed);
++        self.data.canonical_constraints_lookup.reset();
++        self.data
++            .canonical_constraints_comparisons
++            .store(0, Ordering::Relaxed);
++        self.data.canonical_capability_lookup.reset();
++        self.data
++            .canonical_capability_comparisons
++            .store(0, Ordering::Relaxed);
+         self.data.types_compatible.reset();
+         self.data.bind_tyvar.reset();
+         self.data.instantiate_ty_with_fresh.reset();
+@@ -268,6 +319,36 @@
+         if !self.enabled {
+             return;
+         }
++        let (index_builds, index_ns) = self.data.canonical_index_build.snapshot();
++        let index_entries = self.data.canonical_index_entries.load(Ordering::Relaxed);
++        eprintln!(
++            "scar-p4-index builds={} entries={} nanos={}",
++            index_builds, index_entries, index_ns
++        );
++        let (constraint_calls, constraint_ns) = self.data.canonical_constraints_lookup.snapshot();
++        let (capability_calls, capability_ns) = self.data.canonical_capability_lookup.snapshot();
++        let constraint_compared = self
++            .data
++            .canonical_constraints_comparisons
++            .load(Ordering::Relaxed);
++        let capability_compared = self
++            .data
++            .canonical_capability_comparisons
++            .load(Ordering::Relaxed);
++        eprintln!(
++            "scar-p4-identity site=constraints calls={} compared={} nanos={}",
++            constraint_calls, constraint_compared, constraint_ns
++        );
++        eprintln!(
++            "scar-p4-identity site=capability calls={} compared={} nanos={}",
++            capability_calls, capability_compared, capability_ns
++        );
++        eprintln!(
++            "scar-p4-identity site=total calls={} compared={} nanos={}",
++            constraint_calls + capability_calls,
++            constraint_compared + capability_compared,
++            constraint_ns + capability_ns
++        );
+         if total < Duration::from_millis(5) {
+             return;
+         }
+--- a/crates/scar/src/checker/trait_selection.rs
++++ b/crates/scar/src/checker/trait_selection.rs
+@@ -1714,7 +1714,9 @@
+ 
+     fn canonical_trait_by_uid(&self, trait_id: u32) -> Option<(&str, &TraitInfo)> {
+         let identities = self.canonical_traits_by_uid.get_or_init(|| {
+-            self.traits
++            let index_start = self.profiler.start();
++            let index = self
++                .traits
+                 .iter()
+                 .map(|(key, info)| {
+                     #[cfg(test)]
+@@ -1722,7 +1724,10 @@
+                         .set(self.trait_identity_entries_visited.get() + 1);
+                     (info.id.unique_id, key.clone())
+                 })
+-                .collect()
++                .collect();
++            self.profiler
++                .canonical_index_build(self.traits.len() as u64, index_start);
++            index
+         });
+         let key = identities.get(&trait_id)?;
+         self.traits
+@@ -1730,6 +1735,20 @@
+             .map(|info| (key.as_str(), info.as_ref()))
+     }
+ 
++    // Temporary measurement-only helper. Index build is inside elapsed time.
++    fn profile_canonical_trait_identity(
++        &self,
++        trait_id: u32,
++        capability: bool,
++    ) -> Option<(&str, &TraitInfo)> {
++        let start = self.profiler.start();
++        let found = self.canonical_trait_by_uid(trait_id);
++        // No linear trait entry traversal; HashMap internal key comparisons are not observed.
++        self.profiler
++            .canonical_identity_lookup(capability, 0, start);
++        found
++    }
++
+     fn prove_canonical_constraints(
+         &self,
+         constraints: &CanonicalConstraintSet,
+@@ -1749,7 +1768,7 @@
+             let constructor_head_proved =
+                 matches!(constraint.subject.head, CanonicalTypeHead::Variable(_))
+                     && self
+-                        .canonical_trait_by_uid(trait_id)
++                        .profile_canonical_trait_identity(trait_id, false)
+                         .is_some_and(|(trait_key, info)| {
+                             !info.constructor_slots.is_empty()
+                                 && self.canonical_to_ty(&subject).ok().is_some_and(|subject| {
+@@ -1787,7 +1806,7 @@
+         next_variable: &mut u32,
+     ) -> Result<ApplicabilityProof, TypeError> {
+         let trait_key = self
+-            .canonical_trait_by_uid(trait_id)
++            .profile_canonical_trait_identity(trait_id, true)
+             .map(|(key, _)| key)
+             .ok_or_else(|| {
+                 TypeError::new(

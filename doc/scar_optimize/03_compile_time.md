@@ -6,7 +6,7 @@
 
 追加依頼で、以下の候補に対応する複数の測定入力を整備した。[入力一覧](../../tests/profile/scar_compile/README.md) と [検証記録](05_compile_inputs.md) を参照。
 
-**2026-10-16の実施:** P1に続きP2a / P2bを実装した。P1の全24入力・各条件10回の比較とdebug stack修正は [06_deferror_scope.md](06_deferror_scope.md)、P2のsummary共有・逆辺worklist・trait前宣言の局所化と同条件960回の比較は [07_specialization_predeclare.md](07_specialization_predeclare.md) を参照。P3の変数表複製削減は [08_state_copy.md](08_state_copy.md) に記録する。以下のP1 / P2のコード説明は調査時点の挙動である。P4は未実施。
+**2026-10-16の実施:** P1に続きP2a / P2bを実装した。P1の全24入力・各条件10回の比較とdebug stack修正は [06_deferror_scope.md](06_deferror_scope.md)、P2のsummary共有・逆辺worklist・trait前宣言の局所化と同条件960回の比較は [07_specialization_predeclare.md](07_specialization_predeclare.md) を参照。P3の変数表複製削減は [08_state_copy.md](08_state_copy.md) に記録する。以下のP1 / P2のコード説明は調査時点の挙動である。P4のcanonical trait identity検索は [09_trait_identity.md](09_trait_identity.md) に実装・検証・性能比較を記録する。
 
 ## 1. 最初に測るもの
 
@@ -155,8 +155,8 @@ typevar/tag/function index の整合、warnings の重複なし、失敗後の c
 ### P4: canonical trait proof の identity 検索
 
 [trait_selection.rs](../../crates/scar/src/checker/trait_selection.rs) の
-`prove_canonical_constraints` と `prove_canonical_capability` は、trait UID に対応する
-trait を `self.traits.iter().find(...)` で探す。
+調査時の `prove_canonical_constraints` と `prove_canonical_capability` は、trait UID に対応する
+trait を `self.traits.iter().find(...)` で探していた。
 base trait ごとの impl index は既存だが、この UID→trait key の探索は別である。
 
 追加 index が有利か、trait proof を行う一回の処理で lookup を共有すれば十分かを測る。
@@ -171,6 +171,8 @@ constructor witness、追加 impl、循環検出が結果に影響する。
 
 **契約:** parameterized obligation、generic/specific impl の選択、曖昧性・循環の拒否、
 constructor carrier、capability 消費、source location を保つ。
+
+P4ではCheckerごとに遅延構築するUID→key indexで二つのlookupを共有した。trait登録で無効化し、checkpointの保存形式へ加えない。五規模のtrait数・四規模のdispatch数系列と比較結果は [09_trait_identity.md](09_trait_identity.md) を参照。
 
 ### 保留する案
 
@@ -291,5 +293,5 @@ SURTR_SCAR_PROFILE=1 SURTR_STDLIB_CACHE_DIR="$measure_dir/generic_extractor_spec
 4. 最初の実装は一回の compile 呼び出し内に閉じた改善を優先する。
 5. 採用条件を満たしてから、session をまたぐ summary 保持や状態表現の変更を別仕様にする。
 
-P1、P2a / P2b、P3は実装・検証・性能比較済み。それぞれ規模別入力も含む全24入口を各条件10回測定した。P2の正順64段の10%目安は未達であり、逆順の改善・処理量・代表入力の比較を合わせた採用判断を実施記録に示した。P3はError 256宣言のdisk-hit typecheckを78.61%、小入力coldのcompile totalを19.72%短縮した。条件と全件検証は [08_state_copy.md](08_state_copy.md) に示す。P4とprocess warm / incremental専用harnessは未実施である。
+P1、P2a / P2b、P3は実装・検証・性能比較済み。それぞれ規模別入力も含む全24入口を各条件10回測定した。P2の正順64段の10%目安は未達であり、逆順の改善・処理量・代表入力の比較を合わせた採用判断を実施記録に示した。P3はError 256宣言のdisk-hit typecheckを78.61%、小入力coldのcompile totalを19.72%短縮した。条件と全件検証は [08_state_copy.md](08_state_copy.md) に示す。P4は [09_trait_identity.md](09_trait_identity.md) に記録する。process warm / incremental専用harnessは未実施である。
 コードから確認できた反復処理を、まだ確認していない性能効果に読み替えない。

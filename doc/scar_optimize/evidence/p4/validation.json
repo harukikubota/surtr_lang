@@ -1,0 +1,123 @@
+{
+  "level": 2,
+  "validation": [
+    {
+      "command": "rtk cargo nextest run -p scar canonical_",
+      "exit_code": 0,
+      "passed": 29,
+      "skipped": 396,
+      "log": "identity-contract.log"
+    },
+    {
+      "command": "rtk cargo nextest run --profile ci --workspace",
+      "exit_code": 0,
+      "passed": 2643,
+      "binaries": 70,
+      "log": "workspace-ci.log"
+    },
+    {
+      "command": [
+        "rtk",
+        "proxy",
+        "cargo",
+        "run",
+        "--release",
+        "-p",
+        "rune",
+        "--bin",
+        "surtr",
+        "--manifest-path",
+        "/tmp/surtr-scar-p4-20261016-151832/after/Cargo.toml",
+        "--",
+        "test",
+        "--quiet",
+        "--all"
+      ],
+      "environment": {
+        "CARGO_TARGET_DIR": "/tmp/surtr-scar-p4-20261016-151832/after-target"
+      },
+      "exit_code": 0,
+      "note": "quiet output has no count",
+      "log": "stdlib-tests.log"
+    },
+    {
+      "command": "normal debug surtr build; generic_chain and generic_chain_reverse 16/32/64",
+      "exit_code": 0,
+      "passed_inputs": 6,
+      "log": "debug-chains.json"
+    },
+    {
+      "command": "rustfmt --check --edition 2021 on changed Rust files",
+      "exit_code": 0,
+      "log": "rustfmt.log"
+    },
+    {
+      "command": "python3 tests/profile/scar_compile/generate.py --check",
+      "exit_code": 0,
+      "generated_inputs": 24,
+      "cases": 33
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "not_performed": [
+    "dedicated process-warm performance harness",
+    "dedicated incremental performance harness"
+  ],
+  "measurement_status": "completed",
+  "measurement": {
+    "command": [
+      "python3",
+      "tests/profile/scar_compile/measure.py",
+      "--before",
+      "/tmp/surtr-scar-p4-20261016-151832/before-target/release/surtr",
+      "--after",
+      "/tmp/surtr-scar-p4-20261016-151832/after-target/release/surtr",
+      "--before-manifest",
+      "/tmp/surtr-scar-p4-20261016-151832/before-manifest.json",
+      "--after-manifest",
+      "/tmp/surtr-scar-p4-20261016-151832/after-manifest.json",
+      "--iterations",
+      "10",
+      "--power-condition",
+      "AC電源、対象ビルド・テスト停止。OS page cache・CPU周波数・他アプリ負荷は固定していない",
+      "--output",
+      "/tmp/surtr-scar-p4-20261016-151832/comparison"
+    ],
+    "exit_code": 0,
+    "completed_runs": 1280,
+    "cases": 32,
+    "iterations_per_binary_cache_case": 10,
+    "final_hash_verification": "unchanged",
+    "log": "comparison.log"
+  },
+  "total_completed_measurement_runs": 1360,
+  "total_case_count": 33,
+  "additional_measurements": [
+    {
+      "log_directory": "/tmp/surtr-scar-p4-20261016-151832/comparison-extended",
+      "manifest": "extended-manifest.json",
+      "exit_code": 0,
+      "completed_runs": 40,
+      "iterations_per_binary_cache_case": 10,
+      "case": "canonical_trait_count_16384",
+      "final_hash_verification": "unchanged"
+    },
+    {
+      "log_directory": "/tmp/surtr-scar-p4-20261016-151832/comparison-confirm",
+      "manifest": "confirm-manifest.json",
+      "exit_code": 0,
+      "completed_runs": 40,
+      "iterations_per_binary_cache_case": 10,
+      "case": "canonical_trait_count_16384",
+      "final_hash_verification": "unchanged"
+    }
+  ],
+  "review": {
+    "status": "completed",
+    "unresolved_findings": 0,
+    "log": "review.json"
+  }
+}

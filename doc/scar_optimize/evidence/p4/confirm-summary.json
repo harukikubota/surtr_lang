@@ -1,0 +1,478 @@
+{
+  "duration_unit": "us",
+  "change_percent": "(after-before)/before*100; negative is faster",
+  "results": [
+    {
+      "case": "canonical_trait_count_16384",
+      "cache_condition": "cold",
+      "variants": {
+        "before": {
+          "bytecode_encode": {
+            "count": 10,
+            "median_us": 4972.0,
+            "min_us": 4732,
+            "max_us": 5773
+          },
+          "codegen": {
+            "count": 10,
+            "median_us": 11253.5,
+            "min_us": 10972,
+            "max_us": 14695
+          },
+          "compile": {
+            "count": 10,
+            "median_us": 668331.0,
+            "min_us": 653492,
+            "max_us": 691125
+          },
+          "compile_plan": {
+            "count": 10,
+            "median_us": 12820.5,
+            "min_us": 12413,
+            "max_us": 13898
+          },
+          "compile_total": {
+            "count": 10,
+            "median_us": 668331.0,
+            "min_us": 653492,
+            "max_us": 691125
+          },
+          "output_write": {
+            "count": 10,
+            "median_us": 4782.5,
+            "min_us": 2869,
+            "max_us": 6896
+          },
+          "parse": {
+            "count": 10,
+            "median_us": 12451.5,
+            "min_us": 12205,
+            "max_us": 13264
+          },
+          "parse_modules": {
+            "count": 10,
+            "median_us": 0.0,
+            "min_us": 0,
+            "max_us": 1
+          },
+          "parse_user": {
+            "count": 10,
+            "median_us": 12450.5,
+            "min_us": 12204,
+            "max_us": 13263
+          },
+          "resolve": {
+            "count": 10,
+            "median_us": 230298.0,
+            "min_us": 208396,
+            "max_us": 244446
+          },
+          "source_read": {
+            "count": 10,
+            "median_us": 108.0,
+            "min_us": 100,
+            "max_us": 115
+          },
+          "stdlib_load": {
+            "count": 10,
+            "median_us": 271227.0,
+            "min_us": 267503,
+            "max_us": 277713
+          },
+          "total": {
+            "count": 10,
+            "median_us": 668441.0,
+            "min_us": 653603,
+            "max_us": 691227
+          },
+          "typecheck": {
+            "count": 10,
+            "median_us": 115017.0,
+            "min_us": 97333,
+            "max_us": 117370
+          }
+        },
+        "after": {
+          "bytecode_encode": {
+            "count": 10,
+            "median_us": 4881.0,
+            "min_us": 4727,
+            "max_us": 5332
+          },
+          "codegen": {
+            "count": 10,
+            "median_us": 11153.0,
+            "min_us": 10872,
+            "max_us": 12098
+          },
+          "compile": {
+            "count": 10,
+            "median_us": 662902.5,
+            "min_us": 630586,
+            "max_us": 698326
+          },
+          "compile_plan": {
+            "count": 10,
+            "median_us": 12770.5,
+            "min_us": 12544,
+            "max_us": 13332
+          },
+          "compile_total": {
+            "count": 10,
+            "median_us": 662902.5,
+            "min_us": 630586,
+            "max_us": 698326
+          },
+          "output_write": {
+            "count": 10,
+            "median_us": 4633.0,
+            "min_us": 3025,
+            "max_us": 7216
+          },
+          "parse": {
+            "count": 10,
+            "median_us": 12206.0,
+            "min_us": 11974,
+            "max_us": 13028
+          },
+          "parse_modules": {
+            "count": 10,
+            "median_us": 0.0,
+            "min_us": 0,
+            "max_us": 0
+          },
+          "parse_user": {
+            "count": 10,
+            "median_us": 12205.0,
+            "min_us": 11973,
+            "max_us": 13027
+          },
+          "resolve": {
+            "count": 10,
+            "median_us": 229362.0,
+            "min_us": 206488,
+            "max_us": 268237
+          },
+          "source_read": {
+            "count": 10,
+            "median_us": 105.5,
+            "min_us": 97,
+            "max_us": 113
+          },
+          "stdlib_load": {
+            "count": 10,
+            "median_us": 266946.5,
+            "min_us": 264122,
+            "max_us": 280502
+          },
+          "total": {
+            "count": 10,
+            "median_us": 663007.0,
+            "min_us": 630697,
+            "max_us": 698434
+          },
+          "typecheck": {
+            "count": 10,
+            "median_us": 100568.5,
+            "min_us": 95359,
+            "max_us": 116908
+          }
+        }
+      },
+      "after_vs_before": {
+        "total": {
+          "delta_us": -5434.0,
+          "change_percent": -0.8129363698516399
+        },
+        "parse": {
+          "delta_us": -245.5,
+          "change_percent": -1.9716500020077903
+        },
+        "source_read": {
+          "delta_us": -2.5,
+          "change_percent": -2.314814814814815
+        },
+        "stdlib_load": {
+          "delta_us": -4280.5,
+          "change_percent": -1.578198335711415
+        },
+        "codegen": {
+          "delta_us": -100.5,
+          "change_percent": -0.8930554938463588
+        },
+        "compile": {
+          "delta_us": -5428.5,
+          "change_percent": -0.8122472248032786
+        },
+        "typecheck": {
+          "delta_us": -14448.5,
+          "change_percent": -12.562056043889164
+        },
+        "resolve": {
+          "delta_us": -936.0,
+          "change_percent": -0.40642992991689025
+        },
+        "parse_user": {
+          "delta_us": -245.5,
+          "change_percent": -1.9718083611099957
+        },
+        "parse_modules": {
+          "delta_us": 0.0,
+          "change_percent": null
+        },
+        "compile_plan": {
+          "delta_us": -50.0,
+          "change_percent": -0.39000039000039
+        },
+        "output_write": {
+          "delta_us": -149.5,
+          "change_percent": -3.12598013591218
+        },
+        "compile_total": {
+          "delta_us": -5428.5,
+          "change_percent": -0.8122472248032786
+        },
+        "bytecode_encode": {
+          "delta_us": -91.0,
+          "change_percent": -1.830249396621078
+        }
+      }
+    },
+    {
+      "case": "canonical_trait_count_16384",
+      "cache_condition": "disk_hit",
+      "variants": {
+        "before": {
+          "bytecode_encode": {
+            "count": 10,
+            "median_us": 4247.5,
+            "min_us": 4129,
+            "max_us": 4506
+          },
+          "codegen": {
+            "count": 10,
+            "median_us": 11003.5,
+            "min_us": 8694,
+            "max_us": 11152
+          },
+          "compile": {
+            "count": 10,
+            "median_us": 399894.0,
+            "min_us": 379993,
+            "max_us": 424598
+          },
+          "compile_plan": {
+            "count": 10,
+            "median_us": 13100.5,
+            "min_us": 12691,
+            "max_us": 13368
+          },
+          "compile_total": {
+            "count": 10,
+            "median_us": 399894.0,
+            "min_us": 379993,
+            "max_us": 424598
+          },
+          "output_write": {
+            "count": 10,
+            "median_us": 4241.5,
+            "min_us": 3278,
+            "max_us": 5914
+          },
+          "parse": {
+            "count": 10,
+            "median_us": 11191.5,
+            "min_us": 11002,
+            "max_us": 11437
+          },
+          "parse_modules": {
+            "count": 10,
+            "median_us": 0.0,
+            "min_us": 0,
+            "max_us": 1
+          },
+          "parse_user": {
+            "count": 10,
+            "median_us": 11191.0,
+            "min_us": 11001,
+            "max_us": 11436
+          },
+          "resolve": {
+            "count": 10,
+            "median_us": 218245.5,
+            "min_us": 212210,
+            "max_us": 239352
+          },
+          "source_read": {
+            "count": 10,
+            "median_us": 113.0,
+            "min_us": 105,
+            "max_us": 118
+          },
+          "stdlib_load": {
+            "count": 10,
+            "median_us": 15936.0,
+            "min_us": 15458,
+            "max_us": 16132
+          },
+          "total": {
+            "count": 10,
+            "median_us": 400009.0,
+            "min_us": 380106,
+            "max_us": 424709
+          },
+          "typecheck": {
+            "count": 10,
+            "median_us": 107566.5,
+            "min_us": 93833,
+            "max_us": 125480
+          }
+        },
+        "after": {
+          "bytecode_encode": {
+            "count": 10,
+            "median_us": 4272.5,
+            "min_us": 4146,
+            "max_us": 4321
+          },
+          "codegen": {
+            "count": 10,
+            "median_us": 11039.0,
+            "min_us": 9797,
+            "max_us": 11298
+          },
+          "compile": {
+            "count": 10,
+            "median_us": 401729.5,
+            "min_us": 382461,
+            "max_us": 430755
+          },
+          "compile_plan": {
+            "count": 10,
+            "median_us": 12825.5,
+            "min_us": 12595,
+            "max_us": 13223
+          },
+          "compile_total": {
+            "count": 10,
+            "median_us": 401729.5,
+            "min_us": 382461,
+            "max_us": 430755
+          },
+          "output_write": {
+            "count": 10,
+            "median_us": 3791.0,
+            "min_us": 2382,
+            "max_us": 4761
+          },
+          "parse": {
+            "count": 10,
+            "median_us": 11303.0,
+            "min_us": 11132,
+            "max_us": 11554
+          },
+          "parse_modules": {
+            "count": 10,
+            "median_us": 0.0,
+            "min_us": 0,
+            "max_us": 0
+          },
+          "parse_user": {
+            "count": 10,
+            "median_us": 11302.0,
+            "min_us": 11132,
+            "max_us": 11554
+          },
+          "resolve": {
+            "count": 10,
+            "median_us": 240043.0,
+            "min_us": 211455,
+            "max_us": 259874
+          },
+          "source_read": {
+            "count": 10,
+            "median_us": 107.5,
+            "min_us": 97,
+            "max_us": 116
+          },
+          "stdlib_load": {
+            "count": 10,
+            "median_us": 15771.5,
+            "min_us": 15030,
+            "max_us": 16156
+          },
+          "total": {
+            "count": 10,
+            "median_us": 401837.5,
+            "min_us": 382577,
+            "max_us": 430864
+          },
+          "typecheck": {
+            "count": 10,
+            "median_us": 96013.5,
+            "min_us": 88046,
+            "max_us": 111776
+          }
+        }
+      },
+      "after_vs_before": {
+        "total": {
+          "delta_us": 1828.5,
+          "change_percent": 0.4571147149189143
+        },
+        "parse": {
+          "delta_us": 111.5,
+          "change_percent": 0.9962918286199348
+        },
+        "source_read": {
+          "delta_us": -5.5,
+          "change_percent": -4.867256637168142
+        },
+        "stdlib_load": {
+          "delta_us": -164.5,
+          "change_percent": -1.032254016064257
+        },
+        "codegen": {
+          "delta_us": 35.5,
+          "change_percent": 0.32262461943926934
+        },
+        "compile": {
+          "delta_us": 1835.5,
+          "change_percent": 0.4589966341080386
+        },
+        "typecheck": {
+          "delta_us": -11553.0,
+          "change_percent": -10.740332724407692
+        },
+        "resolve": {
+          "delta_us": 21797.5,
+          "change_percent": 9.987605700919378
+        },
+        "parse_user": {
+          "delta_us": 111.0,
+          "change_percent": 0.9918684657313912
+        },
+        "parse_modules": {
+          "delta_us": 0.0,
+          "change_percent": null
+        },
+        "compile_plan": {
+          "delta_us": -275.0,
+          "change_percent": -2.099156520743483
+        },
+        "output_write": {
+          "delta_us": -450.5,
+          "change_percent": -10.62124248496994
+        },
+        "compile_total": {
+          "delta_us": 1835.5,
+          "change_percent": 0.4589966341080386
+        },
+        "bytecode_encode": {
+          "delta_us": 25.0,
+          "change_percent": 0.5885815185403178
+        }
+      }
+    }
+  ]
+}

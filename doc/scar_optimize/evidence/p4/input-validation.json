@@ -1,0 +1,856 @@
+{
+  "purpose": "Input generation and compile-only smoke validation; not a before/after timing measurement.",
+  "compiler": "Existing target/debug/surtr; source/binary correspondence was not independently established for this smoke check.",
+  "check": {
+    "command": [
+      "python3",
+      "tests/profile/scar_compile/generate.py",
+      "--check"
+    ],
+    "exit_code": 0,
+    "stdout": "Checked 24 inputs\n",
+    "stderr": ""
+  },
+  "generated_input_count": 24,
+  "notes": [
+    "Trait counts exclude embedded stdlib traits.",
+    "Obligation scale counts constrained dispatch sites, not distinct canonical constraints or exact internal proof invocations.",
+    "Both families hold one nominal type, two impls, and two impl method bodies fixed.",
+    "All six build processes exited 0. A single dedicated cache was shared for this smoke check: the first process was cold and subsequent processes were disk hits.",
+    "VM execution and runtime output were not tested.",
+    "No performance conclusion is drawn from these debug-binary phase reports."
+  ],
+  "cases": [
+    {
+      "id": "canonical_trait_count_064",
+      "entry": "tests/profile/scar_compile/generated/canonical_trait_count_064.srt",
+      "sha256": "3590b308f55600b2ca2e88c7efe25d6be0bc85a5ad811c264b790dfab643fb81",
+      "source_counts": {
+        "user_traits": 64,
+        "nominal_types": 1,
+        "impls": 2,
+        "trait_method_declarations": 2,
+        "impl_method_bodies": 2,
+        "constrained_dispatch_sites": 256
+      },
+      "compile": {
+        "command": [
+          "target/debug/surtr",
+          "build",
+          "tests/profile/scar_compile/generated/canonical_trait_count_064.srt",
+          "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/scar-p4-input-check-t_y10zn9/canonical_trait_count_064.eldr",
+          "--phase-times-json"
+        ],
+        "cwd": "/Users/haruca/work/rust/surtr",
+        "environment_overrides": {
+          "SURTR_STDLIB_CACHE_DIR": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/scar-p4-input-check-t_y10zn9/cache"
+        },
+        "exit_code": 0,
+        "stdout": "",
+        "phase_report": {
+          "cache": {
+            "artifact": "not_used",
+            "artifact_store": "not_used",
+            "stdlib": "cold"
+          },
+          "compile_total": {
+            "duration_ms": 1886,
+            "duration_us": 1886282,
+            "status": "executed"
+          },
+          "compile_total_us": 1886282,
+          "input": "tests/profile/scar_compile/generated/canonical_trait_count_064.srt",
+          "input_path": "tests/profile/scar_compile/generated/canonical_trait_count_064.srt",
+          "phases": {
+            "bytecode_encode": {
+              "duration_ms": 12,
+              "duration_us": 12567,
+              "status": "executed"
+            },
+            "codegen": {
+              "duration_ms": 10,
+              "duration_us": 10040,
+              "status": "executed"
+            },
+            "compile": {
+              "duration_ms": 1886,
+              "duration_us": 1886282,
+              "status": "executed"
+            },
+            "compile_plan": {
+              "duration_ms": 22,
+              "duration_us": 22815,
+              "status": "executed"
+            },
+            "compile_total": {
+              "duration_ms": 1886,
+              "duration_us": 1886282,
+              "status": "executed"
+            },
+            "decode": {
+              "status": "skipped"
+            },
+            "execute": {
+              "status": "skipped"
+            },
+            "output_write": {
+              "duration_ms": 0,
+              "duration_us": 373,
+              "status": "executed"
+            },
+            "parse": {
+              "duration_ms": 5,
+              "duration_us": 5309,
+              "status": "executed"
+            },
+            "parse_modules": {
+              "duration_ms": 0,
+              "duration_us": 15,
+              "status": "executed"
+            },
+            "parse_user": {
+              "duration_ms": 5,
+              "duration_us": 5294,
+              "status": "executed"
+            },
+            "resolve": {
+              "duration_ms": 72,
+              "duration_us": 72153,
+              "status": "executed"
+            },
+            "source_read": {
+              "duration_ms": 0,
+              "duration_us": 944,
+              "status": "executed"
+            },
+            "stdlib_load": {
+              "duration_ms": 1590,
+              "duration_us": 1590122,
+              "status": "executed"
+            },
+            "total": {
+              "duration_ms": 1887,
+              "duration_us": 1887359,
+              "status": "executed"
+            },
+            "typecheck": {
+              "duration_ms": 140,
+              "duration_us": 140626,
+              "status": "executed"
+            }
+          },
+          "schema_version": 1,
+          "total": {
+            "duration_ms": 1887,
+            "duration_us": 1887359,
+            "status": "executed"
+          },
+          "total_us": 1887359
+        }
+      }
+    },
+    {
+      "id": "canonical_trait_count_256",
+      "entry": "tests/profile/scar_compile/generated/canonical_trait_count_256.srt",
+      "sha256": "28ca69931078b56219fd4f4db3d2572962affde4dc493ebdd12859c9819ca57e",
+      "source_counts": {
+        "user_traits": 256,
+        "nominal_types": 1,
+        "impls": 2,
+        "trait_method_declarations": 2,
+        "impl_method_bodies": 2,
+        "constrained_dispatch_sites": 256
+      },
+      "compile": {
+        "command": [
+          "target/debug/surtr",
+          "build",
+          "tests/profile/scar_compile/generated/canonical_trait_count_256.srt",
+          "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/scar-p4-input-check-t_y10zn9/canonical_trait_count_256.eldr",
+          "--phase-times-json"
+        ],
+        "cwd": "/Users/haruca/work/rust/surtr",
+        "environment_overrides": {
+          "SURTR_STDLIB_CACHE_DIR": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/scar-p4-input-check-t_y10zn9/cache"
+        },
+        "exit_code": 0,
+        "stdout": "",
+        "phase_report": {
+          "cache": {
+            "artifact": "not_used",
+            "artifact_store": "not_used",
+            "stdlib": "disk_hit"
+          },
+          "compile_total": {
+            "duration_ms": 388,
+            "duration_us": 388511,
+            "status": "executed"
+          },
+          "compile_total_us": 388511,
+          "input": "tests/profile/scar_compile/generated/canonical_trait_count_256.srt",
+          "input_path": "tests/profile/scar_compile/generated/canonical_trait_count_256.srt",
+          "phases": {
+            "bytecode_encode": {
+              "duration_ms": 12,
+              "duration_us": 12720,
+              "status": "executed"
+            },
+            "codegen": {
+              "duration_ms": 9,
+              "duration_us": 9840,
+              "status": "executed"
+            },
+            "compile": {
+              "duration_ms": 388,
+              "duration_us": 388511,
+              "status": "executed"
+            },
+            "compile_plan": {
+              "duration_ms": 6,
+              "duration_us": 6331,
+              "status": "executed"
+            },
+            "compile_total": {
+              "duration_ms": 388,
+              "duration_us": 388511,
+              "status": "executed"
+            },
+            "decode": {
+              "status": "skipped"
+            },
+            "execute": {
+              "status": "skipped"
+            },
+            "output_write": {
+              "duration_ms": 0,
+              "duration_us": 395,
+              "status": "executed"
+            },
+            "parse": {
+              "duration_ms": 5,
+              "duration_us": 5826,
+              "status": "executed"
+            },
+            "parse_modules": {
+              "duration_ms": 0,
+              "duration_us": 5,
+              "status": "executed"
+            },
+            "parse_user": {
+              "duration_ms": 5,
+              "duration_us": 5821,
+              "status": "executed"
+            },
+            "resolve": {
+              "duration_ms": 108,
+              "duration_us": 108320,
+              "status": "executed"
+            },
+            "source_read": {
+              "duration_ms": 0,
+              "duration_us": 211,
+              "status": "executed"
+            },
+            "stdlib_load": {
+              "duration_ms": 93,
+              "duration_us": 93520,
+              "status": "executed"
+            },
+            "total": {
+              "duration_ms": 388,
+              "duration_us": 388725,
+              "status": "executed"
+            },
+            "typecheck": {
+              "duration_ms": 134,
+              "duration_us": 134926,
+              "status": "executed"
+            }
+          },
+          "schema_version": 1,
+          "total": {
+            "duration_ms": 388,
+            "duration_us": 388725,
+            "status": "executed"
+          },
+          "total_us": 388725
+        }
+      }
+    },
+    {
+      "id": "canonical_trait_count_1024",
+      "entry": "tests/profile/scar_compile/generated/canonical_trait_count_1024.srt",
+      "sha256": "39c511259404ed96ff4315b34658e33ca74fc638932c8da0b3f6162dd55e72b5",
+      "source_counts": {
+        "user_traits": 1024,
+        "nominal_types": 1,
+        "impls": 2,
+        "trait_method_declarations": 2,
+        "impl_method_bodies": 2,
+        "constrained_dispatch_sites": 256
+      },
+      "compile": {
+        "command": [
+          "target/debug/surtr",
+          "build",
+          "tests/profile/scar_compile/generated/canonical_trait_count_1024.srt",
+          "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/scar-p4-input-check-t_y10zn9/canonical_trait_count_1024.eldr",
+          "--phase-times-json"
+        ],
+        "cwd": "/Users/haruca/work/rust/surtr",
+        "environment_overrides": {
+          "SURTR_STDLIB_CACHE_DIR": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/scar-p4-input-check-t_y10zn9/cache"
+        },
+        "exit_code": 0,
+        "stdout": "",
+        "phase_report": {
+          "cache": {
+            "artifact": "not_used",
+            "artifact_store": "not_used",
+            "stdlib": "disk_hit"
+          },
+          "compile_total": {
+            "duration_ms": 441,
+            "duration_us": 441557,
+            "status": "executed"
+          },
+          "compile_total_us": 441557,
+          "input": "tests/profile/scar_compile/generated/canonical_trait_count_1024.srt",
+          "input_path": "tests/profile/scar_compile/generated/canonical_trait_count_1024.srt",
+          "phases": {
+            "bytecode_encode": {
+              "duration_ms": 13,
+              "duration_us": 13635,
+              "status": "executed"
+            },
+            "codegen": {
+              "duration_ms": 11,
+              "duration_us": 11419,
+              "status": "executed"
+            },
+            "compile": {
+              "duration_ms": 441,
+              "duration_us": 441557,
+              "status": "executed"
+            },
+            "compile_plan": {
+              "duration_ms": 9,
+              "duration_us": 9310,
+              "status": "executed"
+            },
+            "compile_total": {
+              "duration_ms": 441,
+              "duration_us": 441557,
+              "status": "executed"
+            },
+            "decode": {
+              "status": "skipped"
+            },
+            "execute": {
+              "status": "skipped"
+            },
+            "output_write": {
+              "duration_ms": 0,
+              "duration_us": 314,
+              "status": "executed"
+            },
+            "parse": {
+              "duration_ms": 8,
+              "duration_us": 8765,
+              "status": "executed"
+            },
+            "parse_modules": {
+              "duration_ms": 0,
+              "duration_us": 7,
+              "status": "executed"
+            },
+            "parse_user": {
+              "duration_ms": 8,
+              "duration_us": 8758,
+              "status": "executed"
+            },
+            "resolve": {
+              "duration_ms": 98,
+              "duration_us": 98091,
+              "status": "executed"
+            },
+            "source_read": {
+              "duration_ms": 0,
+              "duration_us": 268,
+              "status": "executed"
+            },
+            "stdlib_load": {
+              "duration_ms": 91,
+              "duration_us": 91860,
+              "status": "executed"
+            },
+            "total": {
+              "duration_ms": 441,
+              "duration_us": 441829,
+              "status": "executed"
+            },
+            "typecheck": {
+              "duration_ms": 190,
+              "duration_us": 190942,
+              "status": "executed"
+            }
+          },
+          "schema_version": 1,
+          "total": {
+            "duration_ms": 441,
+            "duration_us": 441829,
+            "status": "executed"
+          },
+          "total_us": 441829
+        }
+      }
+    },
+    {
+      "id": "canonical_obligation_count_064",
+      "entry": "tests/profile/scar_compile/generated/canonical_obligation_count_064.srt",
+      "sha256": "779557731b5ea7c7dba9236b1f7abd6a283f3a5ddd400a40a93ea5893209ff7c",
+      "source_counts": {
+        "user_traits": 64,
+        "nominal_types": 1,
+        "impls": 2,
+        "trait_method_declarations": 2,
+        "impl_method_bodies": 2,
+        "constrained_dispatch_sites": 64
+      },
+      "compile": {
+        "command": [
+          "target/debug/surtr",
+          "build",
+          "tests/profile/scar_compile/generated/canonical_obligation_count_064.srt",
+          "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/scar-p4-input-check-t_y10zn9/canonical_obligation_count_064.eldr",
+          "--phase-times-json"
+        ],
+        "cwd": "/Users/haruca/work/rust/surtr",
+        "environment_overrides": {
+          "SURTR_STDLIB_CACHE_DIR": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/scar-p4-input-check-t_y10zn9/cache"
+        },
+        "exit_code": 0,
+        "stdout": "",
+        "phase_report": {
+          "cache": {
+            "artifact": "not_used",
+            "artifact_store": "not_used",
+            "stdlib": "disk_hit"
+          },
+          "compile_total": {
+            "duration_ms": 193,
+            "duration_us": 193602,
+            "status": "executed"
+          },
+          "compile_total_us": 193602,
+          "input": "tests/profile/scar_compile/generated/canonical_obligation_count_064.srt",
+          "input_path": "tests/profile/scar_compile/generated/canonical_obligation_count_064.srt",
+          "phases": {
+            "bytecode_encode": {
+              "duration_ms": 10,
+              "duration_us": 10625,
+              "status": "executed"
+            },
+            "codegen": {
+              "duration_ms": 3,
+              "duration_us": 3511,
+              "status": "executed"
+            },
+            "compile": {
+              "duration_ms": 193,
+              "duration_us": 193602,
+              "status": "executed"
+            },
+            "compile_plan": {
+              "duration_ms": 1,
+              "duration_us": 1998,
+              "status": "executed"
+            },
+            "compile_total": {
+              "duration_ms": 193,
+              "duration_us": 193602,
+              "status": "executed"
+            },
+            "decode": {
+              "status": "skipped"
+            },
+            "execute": {
+              "status": "skipped"
+            },
+            "output_write": {
+              "duration_ms": 0,
+              "duration_us": 347,
+              "status": "executed"
+            },
+            "parse": {
+              "duration_ms": 1,
+              "duration_us": 1797,
+              "status": "executed"
+            },
+            "parse_modules": {
+              "duration_ms": 0,
+              "duration_us": 6,
+              "status": "executed"
+            },
+            "parse_user": {
+              "duration_ms": 1,
+              "duration_us": 1791,
+              "status": "executed"
+            },
+            "resolve": {
+              "duration_ms": 33,
+              "duration_us": 33419,
+              "status": "executed"
+            },
+            "source_read": {
+              "duration_ms": 0,
+              "duration_us": 191,
+              "status": "executed"
+            },
+            "stdlib_load": {
+              "duration_ms": 87,
+              "duration_us": 87337,
+              "status": "executed"
+            },
+            "total": {
+              "duration_ms": 193,
+              "duration_us": 193796,
+              "status": "executed"
+            },
+            "typecheck": {
+              "duration_ms": 39,
+              "duration_us": 39584,
+              "status": "executed"
+            }
+          },
+          "schema_version": 1,
+          "total": {
+            "duration_ms": 193,
+            "duration_us": 193796,
+            "status": "executed"
+          },
+          "total_us": 193796
+        }
+      }
+    },
+    {
+      "id": "canonical_obligation_count_256",
+      "entry": "tests/profile/scar_compile/generated/canonical_obligation_count_256.srt",
+      "sha256": "504be947fabfbee8979f08be6f8c5e6986ca6947a66d53db3be9d9d8ad974207",
+      "source_counts": {
+        "user_traits": 64,
+        "nominal_types": 1,
+        "impls": 2,
+        "trait_method_declarations": 2,
+        "impl_method_bodies": 2,
+        "constrained_dispatch_sites": 256
+      },
+      "compile": {
+        "command": [
+          "target/debug/surtr",
+          "build",
+          "tests/profile/scar_compile/generated/canonical_obligation_count_256.srt",
+          "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/scar-p4-input-check-t_y10zn9/canonical_obligation_count_256.eldr",
+          "--phase-times-json"
+        ],
+        "cwd": "/Users/haruca/work/rust/surtr",
+        "environment_overrides": {
+          "SURTR_STDLIB_CACHE_DIR": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/scar-p4-input-check-t_y10zn9/cache"
+        },
+        "exit_code": 0,
+        "stdout": "",
+        "phase_report": {
+          "cache": {
+            "artifact": "not_used",
+            "artifact_store": "not_used",
+            "stdlib": "disk_hit"
+          },
+          "compile_total": {
+            "duration_ms": 364,
+            "duration_us": 364786,
+            "status": "executed"
+          },
+          "compile_total_us": 364786,
+          "input": "tests/profile/scar_compile/generated/canonical_obligation_count_256.srt",
+          "input_path": "tests/profile/scar_compile/generated/canonical_obligation_count_256.srt",
+          "phases": {
+            "bytecode_encode": {
+              "duration_ms": 11,
+              "duration_us": 11734,
+              "status": "executed"
+            },
+            "codegen": {
+              "duration_ms": 9,
+              "duration_us": 9849,
+              "status": "executed"
+            },
+            "compile": {
+              "duration_ms": 364,
+              "duration_us": 364786,
+              "status": "executed"
+            },
+            "compile_plan": {
+              "duration_ms": 5,
+              "duration_us": 5697,
+              "status": "executed"
+            },
+            "compile_total": {
+              "duration_ms": 364,
+              "duration_us": 364786,
+              "status": "executed"
+            },
+            "decode": {
+              "status": "skipped"
+            },
+            "execute": {
+              "status": "skipped"
+            },
+            "output_write": {
+              "duration_ms": 0,
+              "duration_us": 353,
+              "status": "executed"
+            },
+            "parse": {
+              "duration_ms": 5,
+              "duration_us": 5023,
+              "status": "executed"
+            },
+            "parse_modules": {
+              "duration_ms": 0,
+              "duration_us": 4,
+              "status": "executed"
+            },
+            "parse_user": {
+              "duration_ms": 5,
+              "duration_us": 5018,
+              "status": "executed"
+            },
+            "resolve": {
+              "duration_ms": 93,
+              "duration_us": 93768,
+              "status": "executed"
+            },
+            "source_read": {
+              "duration_ms": 0,
+              "duration_us": 165,
+              "status": "executed"
+            },
+            "stdlib_load": {
+              "duration_ms": 101,
+              "duration_us": 101004,
+              "status": "executed"
+            },
+            "total": {
+              "duration_ms": 364,
+              "duration_us": 364954,
+              "status": "executed"
+            },
+            "typecheck": {
+              "duration_ms": 121,
+              "duration_us": 121785,
+              "status": "executed"
+            }
+          },
+          "schema_version": 1,
+          "total": {
+            "duration_ms": 364,
+            "duration_us": 364954,
+            "status": "executed"
+          },
+          "total_us": 364954
+        }
+      }
+    },
+    {
+      "id": "canonical_obligation_count_1024",
+      "entry": "tests/profile/scar_compile/generated/canonical_obligation_count_1024.srt",
+      "sha256": "fc47f33becf1d7b89eab5fe5299b3dce95fab555d06314fb0abe33f4e2f2c19e",
+      "source_counts": {
+        "user_traits": 64,
+        "nominal_types": 1,
+        "impls": 2,
+        "trait_method_declarations": 2,
+        "impl_method_bodies": 2,
+        "constrained_dispatch_sites": 1024
+      },
+      "compile": {
+        "command": [
+          "target/debug/surtr",
+          "build",
+          "tests/profile/scar_compile/generated/canonical_obligation_count_1024.srt",
+          "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/scar-p4-input-check-t_y10zn9/canonical_obligation_count_1024.eldr",
+          "--phase-times-json"
+        ],
+        "cwd": "/Users/haruca/work/rust/surtr",
+        "environment_overrides": {
+          "SURTR_STDLIB_CACHE_DIR": "/var/folders/g5/r1ds6cgn3rn3_t7qzfr8zy140000gn/T/scar-p4-input-check-t_y10zn9/cache"
+        },
+        "exit_code": 0,
+        "stdout": "",
+        "phase_report": {
+          "cache": {
+            "artifact": "not_used",
+            "artifact_store": "not_used",
+            "stdlib": "disk_hit"
+          },
+          "compile_total": {
+            "duration_ms": 1133,
+            "duration_us": 1133086,
+            "status": "executed"
+          },
+          "compile_total_us": 1133086,
+          "input": "tests/profile/scar_compile/generated/canonical_obligation_count_1024.srt",
+          "input_path": "tests/profile/scar_compile/generated/canonical_obligation_count_1024.srt",
+          "phases": {
+            "bytecode_encode": {
+              "duration_ms": 16,
+              "duration_us": 16641,
+              "status": "executed"
+            },
+            "codegen": {
+              "duration_ms": 84,
+              "duration_us": 84242,
+              "status": "executed"
+            },
+            "compile": {
+              "duration_ms": 1133,
+              "duration_us": 1133086,
+              "status": "executed"
+            },
+            "compile_plan": {
+              "duration_ms": 19,
+              "duration_us": 19987,
+              "status": "executed"
+            },
+            "compile_total": {
+              "duration_ms": 1133,
+              "duration_us": 1133086,
+              "status": "executed"
+            },
+            "decode": {
+              "status": "skipped"
+            },
+            "execute": {
+              "status": "skipped"
+            },
+            "output_write": {
+              "duration_ms": 0,
+              "duration_us": 355,
+              "status": "executed"
+            },
+            "parse": {
+              "duration_ms": 18,
+              "duration_us": 18956,
+              "status": "executed"
+            },
+            "parse_modules": {
+              "duration_ms": 0,
+              "duration_us": 4,
+              "status": "executed"
+            },
+            "parse_user": {
+              "duration_ms": 18,
+              "duration_us": 18952,
+              "status": "executed"
+            },
+            "resolve": {
+              "duration_ms": 298,
+              "duration_us": 298181,
+              "status": "executed"
+            },
+            "source_read": {
+              "duration_ms": 0,
+              "duration_us": 228,
+              "status": "executed"
+            },
+            "stdlib_load": {
+              "duration_ms": 82,
+              "duration_us": 82167,
+              "status": "executed"
+            },
+            "total": {
+              "duration_ms": 1133,
+              "duration_us": 1133317,
+              "status": "executed"
+            },
+            "typecheck": {
+              "duration_ms": 592,
+              "duration_us": 592737,
+              "status": "executed"
+            }
+          },
+          "schema_version": 1,
+          "total": {
+            "duration_ms": 1133,
+            "duration_us": 1133317,
+            "status": "executed"
+          },
+          "total_us": 1133317
+        }
+      }
+    }
+  ],
+  "initial_total_case_count": 30,
+  "total_case_count": 33,
+  "extended_scale_note": "Added 4096 scale for both families after initial lookup times below 1ms; smoke binary source and binary hashes saved in before-manifest.json.",
+  "extended_scale_smoke": [
+    {
+      "entry": "tests/profile/scar_compile/generated/canonical_trait_count_4096.srt",
+      "sha256": "960e27ff31727e85720ee0e35909455e28e06d3cf55d0516718ac897d097bc95",
+      "user_traits": 4096,
+      "constrained_dispatch_sites": 256,
+      "nominal_types": 1,
+      "impls": 2,
+      "impl_method_bodies": 2,
+      "args": [
+        "/tmp/surtr-scar-p4-20261016-151832/before-target/release/surtr",
+        "build",
+        "tests/profile/scar_compile/generated/canonical_trait_count_4096.srt",
+        "/tmp/surtr-scar-p4-20261016-151832/extended-input-smoke/canonical_trait_count.eldr",
+        "--phase-times-json"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "{\"cache\":{\"artifact\":\"not_used\",\"artifact_store\":\"not_used\",\"stdlib\":\"cold\"},\"compile_total\":{\"duration_ms\":1592,\"duration_us\":1592079,\"status\":\"executed\"},\"compile_total_us\":1592079,\"input\":\"tests/profile/scar_compile/generated/canonical_trait_count_4096.srt\",\"input_path\":\"tests/profile/scar_compile/generated/canonical_trait_count_4096.srt\",\"phases\":{\"bytecode_encode\":{\"duration_ms\":3,\"duration_us\":3806,\"status\":\"executed\"},\"codegen\":{\"duration_ms\":10,\"duration_us\":10322,\"status\":\"executed\"},\"compile\":{\"duration_ms\":1592,\"duration_us\":1592079,\"status\":\"executed\"},\"compile_plan\":{\"duration_ms\":7,\"duration_us\":7587,\"status\":\"executed\"},\"compile_total\":{\"duration_ms\":1592,\"duration_us\":1592079,\"status\":\"executed\"},\"decode\":{\"status\":\"skipped\"},\"execute\":{\"status\":\"skipped\"},\"output_write\":{\"duration_ms\":3,\"duration_us\":3560,\"status\":\"executed\"},\"parse\":{\"duration_ms\":4,\"duration_us\":4439,\"status\":\"executed\"},\"parse_modules\":{\"duration_ms\":0,\"duration_us\":1,\"status\":\"executed\"},\"parse_user\":{\"duration_ms\":4,\"duration_us\":4438,\"status\":\"executed\"},\"resolve\":{\"duration_ms\":367,\"duration_us\":367385,\"status\":\"executed\"},\"source_read\":{\"duration_ms\":0,\"duration_us\":96,\"status\":\"executed\"},\"stdlib_load\":{\"duration_ms\":990,\"duration_us\":990693,\"status\":\"executed\"},\"total\":{\"duration_ms\":1592,\"duration_us\":1592175,\"status\":\"executed\"},\"typecheck\":{\"duration_ms\":181,\"duration_us\":181803,\"status\":\"executed\"}},\"schema_version\":1,\"total\":{\"duration_ms\":1592,\"duration_us\":1592175,\"status\":\"executed\"},\"total_us\":1592175}\n"
+    },
+    {
+      "entry": "tests/profile/scar_compile/generated/canonical_obligation_count_4096.srt",
+      "sha256": "1836a54903f3f4a12018926d17afb87fca4886ef79aaaf6ea47c7718b67bff24",
+      "user_traits": 64,
+      "constrained_dispatch_sites": 4096,
+      "nominal_types": 1,
+      "impls": 2,
+      "impl_method_bodies": 2,
+      "args": [
+        "/tmp/surtr-scar-p4-20261016-151832/before-target/release/surtr",
+        "build",
+        "tests/profile/scar_compile/generated/canonical_obligation_count_4096.srt",
+        "/tmp/surtr-scar-p4-20261016-151832/extended-input-smoke/canonical_obligation_count.eldr",
+        "--phase-times-json"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "{\"cache\":{\"artifact\":\"not_used\",\"artifact_store\":\"not_used\",\"stdlib\":\"disk_hit\"},\"compile_total\":{\"duration_ms\":5199,\"duration_us\":5199997,\"status\":\"executed\"},\"compile_total_us\":5199997,\"input\":\"tests/profile/scar_compile/generated/canonical_obligation_count_4096.srt\",\"input_path\":\"tests/profile/scar_compile/generated/canonical_obligation_count_4096.srt\",\"phases\":{\"bytecode_encode\":{\"duration_ms\":5,\"duration_us\":5626,\"status\":\"executed\"},\"codegen\":{\"duration_ms\":380,\"duration_us\":380104,\"status\":\"executed\"},\"compile\":{\"duration_ms\":5199,\"duration_us\":5199997,\"status\":\"executed\"},\"compile_plan\":{\"duration_ms\":18,\"duration_us\":18380,\"status\":\"executed\"},\"compile_total\":{\"duration_ms\":5199,\"duration_us\":5199997,\"status\":\"executed\"},\"decode\":{\"status\":\"skipped\"},\"execute\":{\"status\":\"skipped\"},\"output_write\":{\"duration_ms\":0,\"duration_us\":537,\"status\":\"executed\"},\"parse\":{\"duration_ms\":17,\"duration_us\":17292,\"status\":\"executed\"},\"parse_modules\":{\"duration_ms\":0,\"duration_us\":1,\"status\":\"executed\"},\"parse_user\":{\"duration_ms\":17,\"duration_us\":17291,\"status\":\"executed\"},\"resolve\":{\"duration_ms\":2535,\"duration_us\":2535137,\"status\":\"executed\"},\"source_read\":{\"duration_ms\":0,\"duration_us\":80,\"status\":\"executed\"},\"stdlib_load\":{\"duration_ms\":26,\"duration_us\":26446,\"status\":\"executed\"},\"total\":{\"duration_ms\":5200,\"duration_us\":5200078,\"status\":\"executed\"},\"typecheck\":{\"duration_ms\":2195,\"duration_us\":2195835,\"status\":\"executed\"}},\"schema_version\":1,\"total\":{\"duration_ms\":5200,\"duration_us\":5200078,\"status\":\"executed\"},\"total_us\":5200078}\n"
+    }
+  ],
+  "initial_check": {
+    "command": [
+      "python3",
+      "tests/profile/scar_compile/generate.py",
+      "--check"
+    ],
+    "exit_code": 0,
+    "stdout": "Checked 21 inputs\n",
+    "stderr": ""
+  },
+  "fifth_trait_scale": {
+    "entry": "tests/profile/scar_compile/generated/canonical_trait_count_16384.srt",
+    "sha256": "8974e04d03765764babe5c530634331b8871a0f1e85fc006f1398107690d392a",
+    "user_traits": 16384,
+    "constrained_dispatch_sites": 256,
+    "nominal_types": 1,
+    "impls": 2,
+    "impl_method_bodies": 2,
+    "validation": "Dedicated before/after cold/disk timing runs in extended-manifest.json / extended-runs.jsonl.gz; all exit 0"
+  }
+}

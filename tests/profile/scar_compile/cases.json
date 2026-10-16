@@ -169,5 +169,68 @@
     "group": "generic_chain_reverse",
     "scale": 64,
     "dependencies": []
+  },
+  {
+    "id": "canonical_trait_count_064",
+    "entry": "tests/profile/scar_compile/generated/canonical_trait_count_064.srt",
+    "group": "canonical_trait_count",
+    "scale": 64,
+    "dependencies": []
+  },
+  {
+    "id": "canonical_trait_count_256",
+    "entry": "tests/profile/scar_compile/generated/canonical_trait_count_256.srt",
+    "group": "canonical_trait_count",
+    "scale": 256,
+    "dependencies": []
+  },
+  {
+    "id": "canonical_trait_count_1024",
+    "entry": "tests/profile/scar_compile/generated/canonical_trait_count_1024.srt",
+    "group": "canonical_trait_count",
+    "scale": 1024,
+    "dependencies": []
+  },
+  {
+    "id": "canonical_obligation_count_064",
+    "entry": "tests/profile/scar_compile/generated/canonical_obligation_count_064.srt",
+    "group": "canonical_obligation_count",
+    "scale": 64,
+    "dependencies": []
+  },
+  {
+    "id": "canonical_obligation_count_256",
+    "entry": "tests/profile/scar_compile/generated/canonical_obligation_count_256.srt",
+    "group": "canonical_obligation_count",
+    "scale": 256,
+    "dependencies": []
+  },
+  {
+    "id": "canonical_obligation_count_1024",
+    "entry": "tests/profile/scar_compile/generated/canonical_obligation_count_1024.srt",
+    "group": "canonical_obligation_count",
+    "scale": 1024,
+    "dependencies": []
+  },
+  {
+    "id": "canonical_trait_count_4096",
+    "entry": "tests/profile/scar_compile/generated/canonical_trait_count_4096.srt",
+    "group": "canonical_trait_count",
+    "scale": 4096,
+    "dependencies": []
+  },
+  {
+    "id": "canonical_obligation_count_4096",
+    "entry": "tests/profile/scar_compile/generated/canonical_obligation_count_4096.srt",
+    "group": "canonical_obligation_count",
+    "scale": 4096,
+    "dependencies": []
+  },
+  {
+    "id": "canonical_trait_count_16384",
+    "entry": "tests/profile/scar_compile/generated/canonical_trait_count_16384.srt",
+    "group": "canonical_trait_count",
+    "scale": 16384,
+    "dependencies": []
   }
 ]
