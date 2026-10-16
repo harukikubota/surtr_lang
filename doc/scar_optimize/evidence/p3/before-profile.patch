@@ -1,0 +1,14 @@
+--- /tmp/surtr-scar-p3-20261016-103923/before/crates/scar/src/checker/definitions/nominal.rs	2026-10-16 10:37:00
++++ /tmp/surtr-scar-p3-20261016-103923/before-profile/crates/scar/src/checker/definitions/nominal.rs	2026-10-16 10:39:58
+@@ -360,7 +360,11 @@
+         // Normalization of an outer binding intentionally survives ordinary
+         // expression scopes. Keep a private variable-table snapshot here so
+         // only the deferror boundary restores those normalized bindings.
++        let p3_start = self.profiler.start();
+         let saved_vars = self.env.vars.clone();
++        if let Some(start) = p3_start {
++            eprintln!("scar-p3 vars_snapshot entries={} elapsed_ns={}", self.env.vars.len(), start.elapsed().as_nanos());
++        }
+         let saved_next_tyvar = self.env.next_tyvar;
+         let saved_next_tag = self.env.next_tag;
+         let saved_error_uid = self.error_definition_uid.replace(error_uid);

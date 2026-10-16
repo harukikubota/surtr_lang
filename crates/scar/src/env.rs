@@ -136,6 +136,9 @@ pub struct TypeEnv {
     /// type declaration bindings usable as type-root facet path heads.
     pub type_constructor_ids: HashSet<u32>,
     var_scope_frames: Vec<VarScopeFrame>,
+    /// Transient deferror boundaries; they never survive a checking call.
+    #[serde(skip)]
+    isolated_var_scopes: Vec<usize>,
 }
 
 impl Default for TypeEnv {
@@ -161,19 +164,48 @@ impl TypeEnv {
             enum_variants_by_enum: HashMap::new(),
             type_constructor_ids: HashSet::new(),
             var_scope_frames: Vec::new(),
+            isolated_var_scopes: Vec::new(),
         }
     }
 
     /// Bind a variable (by unique_id) to a type.
     pub fn bind_var(&mut self, unique_id: u32, ty: Ty) {
-        if let Some(frame) = self.var_scope_frames.last_mut() {
-            if frame.touched.insert(unique_id) {
-                frame
-                    .undo
-                    .push((unique_id, self.vars.get(&unique_id).cloned()));
+        self.record_isolated_var_change(unique_id);
+        if let Some(index) = self.var_scope_frames.len().checked_sub(1) {
+            if self.isolated_var_scopes.last() != Some(&index) {
+                self.record_var_change(index, unique_id);
             }
         }
         self.vars.insert(unique_id, ty);
+    }
+
+    fn record_var_change(&mut self, index: usize, unique_id: u32) {
+        let frame = &mut self.var_scope_frames[index];
+        if frame.touched.insert(unique_id) {
+            frame
+                .undo
+                .push((unique_id, self.vars.get(&unique_id).cloned()));
+        }
+    }
+
+    fn record_isolated_var_change(&mut self, unique_id: u32) {
+        for position in 0..self.isolated_var_scopes.len() {
+            self.record_var_change(self.isolated_var_scopes[position], unique_id);
+        }
+    }
+
+    /// Normalization crosses ordinary scopes, but not a deferror boundary.
+    pub(crate) fn normalize_var(&mut self, unique_id: u32, ty: Ty) {
+        self.record_isolated_var_change(unique_id);
+        self.vars.insert(unique_id, ty);
+    }
+
+    /// Isolate a synchronous deferror body, including normalization in nested
+    /// ordinary scopes. This transient boundary is closed before persistence.
+    pub(crate) fn push_isolated_var_scope(&mut self) {
+        self.push_var_scope();
+        self.isolated_var_scopes
+            .push(self.var_scope_frames.len() - 1);
     }
 
     /// Open a scoped mutation frame for `vars`.
@@ -193,6 +225,9 @@ impl TypeEnv {
         let Some(frame) = self.var_scope_frames.pop() else {
             return;
         };
+        if self.isolated_var_scopes.last() == Some(&self.var_scope_frames.len()) {
+            self.isolated_var_scopes.pop();
+        }
         self.concrete_error_bindings = frame.concrete_errors_before;
         for (unique_id, old) in frame.undo.into_iter().rev() {
             if let Some(old_ty) = old {
@@ -442,6 +477,76 @@ mod tests {
     use super::{EnumVariantInfo, TypeDefState, TypeEnv, TypeKind};
     use crate::types::Ty;
     use spire::ast::Span;
+
+    #[test]
+    fn ordinary_scope_retains_normalization() {
+        let mut env = TypeEnv::new();
+        env.bind_var(1, Ty::Var(10));
+        env.push_var_scope();
+        env.normalize_var(1, Ty::Int);
+        env.pop_var_scope();
+        assert_eq!(env.lookup_var(1), Some(&Ty::Int));
+    }
+
+    #[test]
+    fn isolated_scopes_restore_each_boundary_and_record_only_changed_bindings() {
+        let mut env = TypeEnv::new();
+        for uid in 0..4096 {
+            env.bind_var(uid, Ty::Var(uid));
+        }
+        env.push_isolated_var_scope();
+        env.normalize_var(1, Ty::Int);
+        env.push_var_scope();
+        env.bind_var(1, Ty::Str);
+        env.normalize_var(1, Ty::Bool);
+        env.bind_var(5000, Ty::Int);
+        env.pop_var_scope();
+        assert_eq!(env.lookup_var(1), Some(&Ty::Int));
+        assert!(env.lookup_var(5000).is_none());
+        assert_eq!(env.var_scope_frames[0].undo.len(), 2);
+
+        env.push_isolated_var_scope();
+        env.bind_var(1, Ty::Str);
+        env.normalize_var(1, Ty::Bool);
+        assert_eq!(env.var_scope_frames[1].undo.len(), 1);
+        env.pop_var_scope();
+        assert_eq!(env.lookup_var(1), Some(&Ty::Int));
+        env.pop_var_scope();
+        assert_eq!(env.lookup_var(1), Some(&Ty::Var(1)));
+        assert_eq!(env.vars.len(), 4096);
+        assert!(env.isolated_var_scopes.is_empty());
+    }
+
+    #[test]
+    fn cloned_isolated_scopes_keep_sibling_undo_independent() {
+        let mut parent = TypeEnv::new();
+        parent.bind_var(1, Ty::Var(10));
+        parent.bind_var(2, Ty::Var(11));
+        let persisted_before = bincode::serialize(&parent).unwrap();
+        parent.push_isolated_var_scope();
+        parent.normalize_var(1, Ty::Int);
+        let mut child = parent.clone();
+        let mut sibling = parent.clone();
+        child.normalize_var(1, Ty::Str);
+        child.normalize_var(2, Ty::Bool);
+        child.bind_var(3, Ty::Bool);
+        child.pop_var_scope();
+        assert_eq!(child.lookup_var(1), Some(&Ty::Var(10)));
+        assert_eq!(child.lookup_var(2), Some(&Ty::Var(11)));
+        assert!(child.lookup_var(3).is_none());
+        assert_eq!(parent.lookup_var(1), Some(&Ty::Int));
+        assert_eq!(parent.lookup_var(2), Some(&Ty::Var(11)));
+        assert_eq!(sibling.lookup_var(1), Some(&Ty::Int));
+        sibling.normalize_var(2, Ty::Str);
+        sibling.pop_var_scope();
+        assert_eq!(sibling.lookup_var(1), Some(&Ty::Var(10)));
+        assert_eq!(sibling.lookup_var(2), Some(&Ty::Var(11)));
+        parent.pop_var_scope();
+        assert!(parent.isolated_var_scopes.is_empty());
+        assert_eq!(bincode::serialize(&parent).unwrap(), persisted_before);
+        let restored: TypeEnv = bincode::deserialize(&persisted_before).unwrap();
+        assert!(restored.isolated_var_scopes.is_empty());
+    }
 
     #[test]
     fn cloned_type_metadata_shares_until_signature_or_policy_updates() {

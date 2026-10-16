@@ -1,0 +1,23 @@
+FAIL [   0.017s] (1/1) scar checker::definitions::nominal::deferror_scope_tests::deferror_body_preserves_untouched_binding_storage
+  stdout ───
+
+    running 1 test
+    test checker::definitions::nominal::deferror_scope_tests::deferror_body_preserves_untouched_binding_storage ... FAILED
+
+    failures:
+
+    failures:
+        checker::definitions::nominal::deferror_scope_tests::deferror_body_preserves_untouched_binding_storage
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 109 filtered out; finished in 0.01s
+
+  stderr ───
+
+    thread 'checker::definitions::nominal::deferror_scope_tests::deferror_body_preserves_untouched_binding_storage' (4291781) panicked at crates/scar/src/checker/definitions/nominal.rs:693:13:
+    assertion `left == right` failed: a deferror body must preserve the storage of untouched outer types
+      left: 0xc7507ee20
+     right: 0xc75074540
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+cargo nextest: 0 passed, 1 failed, 418 skipped (39 binaries, 0.024s)
+[full output: "$HOME/Library/Application Support/rtk/tee/1792114914_cargo_nextest.log"]

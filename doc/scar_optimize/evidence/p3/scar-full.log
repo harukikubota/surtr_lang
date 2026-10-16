@@ -1,0 +1,456 @@
+info: experimental features enabled: setup-scripts
+   Compiling scar-test-cache-key v0.1.0 (/Users/haruca/work/rust/surtr/crates/scar/tests/cache-key)
+   Compiling scar v0.1.0 (/Users/haruca/work/rust/surtr/crates/scar)
+    Finished `test` profile [unoptimized] target(s) in 30.19s
+────────────
+ Nextest run ID 43960c53-adfa-4fe7-9065-6dee8c29b5f4 with nextest profile: default
+    Starting 422 tests across 39 binaries
+        PASS [   0.104s] (  1/422) scar checker::bootstrap::builtin_signature_tests::builtin_meta_signatures_bootstrap_into_type_env
+        PASS [   0.138s] (  2/422) scar checker::definitions::nominal::deferror_scope_tests::deferror_body_reuses_readonly_metadata
+        PASS [   0.145s] (  3/422) scar checker::definitions::nominal::deferror_scope_tests::deferror_body_restores_bindings_changed_inside_nested_scopes
+        PASS [   0.145s] (  4/422) scar checker::definitions::nominal::deferror_scope_tests::deferror_body_preserves_success_and_failure_boundaries
+        PASS [   0.145s] (  5/422) scar checker::definitions::nominal::deferror_scope_tests::deferror_body_restores_normalized_outer_bindings
+        PASS [   0.146s] (  6/422) scar checker::definitions::nominal::deferror_scope_tests::deferror_body_preserves_untouched_binding_storage
+        PASS [   0.148s] (  7/422) scar checker::definitions::contextual_capability_tests::declared_method_generic_absent_from_signature_still_tracks_unused_capability
+        PASS [   0.032s] (  8/422) scar checker::expr::do_block::tests::canonical_do_trait_uses_resolved_identity_when_short_names_collide
+        PASS [   0.027s] (  9/422) scar checker::expr::tests::error_observation_facet_has_no_owner_update_exception
+        PASS [   0.029s] ( 10/422) scar checker::expr::tests::executable_constructor_audit_rejects_malformed_self_application
+        PASS [   0.032s] ( 11/422) scar checker::expr::safe_operator_provenance_tests::candidate_rollback_restores_only_committed_operator_provenance
+        PASS [   0.032s] ( 12/422) scar checker::expr::tests::executable_constructor_audit_enters_generic_declaration_bodies
+        PASS [   0.013s] ( 13/422) scar checker::expr::tests::full_trait_obligations_enters_do_safebind_control
+        PASS [   0.014s] ( 14/422) scar checker::expr::tests::mutating_facet_allows_owner_to_replace_readonly_field_itself
+        PASS [   0.011s] ( 15/422) scar checker::expr::tests::mutating_facet_rejects_deep_traversal_through_readonly_field_even_for_owner
+        PASS [   0.018s] ( 16/422) scar checker::expr::tests::registered_builtin_without_canonical_signature_fails_closed
+        PASS [   0.016s] ( 17/422) scar checker::expr::tests::registered_user_callable_without_canonical_signature_fails_closed
+        PASS [   0.013s] ( 18/422) scar checker::patterns::hash_map_pattern_tests::hash_map_pattern_rejects_same_spelling_in_other_namespace
+        PASS [   0.025s] ( 19/422) scar checker::expr::tests::ordinary_successful_applications_do_not_create_candidate_probe_checkpoints
+        PASS [   0.018s] ( 20/422) scar checker::expr::tests::resolved_do_requires_canonical_intrinsic_contract_inputs
+        PASS [   4.141s] ( 21/422) scar checker::definitions::nominal::deferror_scope_tests::do_block_retains_outer_binding_inference_for_later_annotations
+        PASS [   4.233s] ( 22/422) scar checker::expr::safe_operator_provenance_tests::candidate_rollback_isolates_generated_capture_aliases_and_warnings_in_either_order
+        PASS [   0.011s] ( 23/422) scar checker::process::process_boundary_policy_tests::process_boundary_only_type_query_uses_builtin_usage_policy
+        PASS [   0.010s] ( 24/422) scar checker::process::process_boundary_policy_tests::typecheck_context_can_be_derived_from_source_policy
+        PASS [   0.010s] ( 25/422) scar checker::provenance::tests::or_binding_joins_constructor_provenance_from_all_alternatives
+        PASS [   0.012s] ( 26/422) scar checker::relations::tests::failed_type_assertion_rolls_back_partial_substitution
+        PASS [   0.562s] ( 27/422) scar checker::predeclare::traits::incremental_predeclare_tests::suffix_predeclare_work_does_not_visit_unrelated_retained_impls
+        PASS [   0.018s] ( 28/422) scar checker::relations::tests::relation_probe_restores_state_reachable_only_through_substitution
+        PASS [   0.013s] ( 29/422) scar checker::relations::tests::rigid_type_assertion_does_not_create_candidate_probe_checkpoint
+        PASS [   0.018s] ( 30/422) scar checker::relations::tests::speculative_type_relation_restores_success_and_failure_state_without_candidate_snapshot
+        PASS [   4.694s] ( 31/422) scar checker::definitions::nominal::deferror_scope_tests::failed_deferror_body_does_not_contaminate_the_next_declaration
+        PASS [   4.960s] ( 32/422) scar checker::predeclare::traits::incremental_predeclare_tests::suffix_overlap_keeps_diagnostic_and_failed_session_isolation
+        PASS [   0.905s] ( 33/422) scar checker::relations::tests::nested_relation_probes_restore_each_boundary_on_success_and_failure
+        PASS [   0.016s] ( 34/422) scar checker::session::specialization_state_tests::do_safebind_fun_index_rewrite_covers_metadata_and_pin_dispatch
+        PASS [   0.025s] ( 35/422) scar checker::session::specialization_state_tests::reconcile_function_indices_does_not_rekey_unrelated_function_with_colliding_index
+        PASS [   0.037s] ( 36/422) scar checker::session::specialization_state_tests::reconcile_function_indices_drops_unmaterialized_specialization_cache_entry
+        PASS [   0.018s] ( 37/422) scar checker::session::specialization_state_tests::reconcile_function_indices_keeps_generic_origin_when_specialization_shares_name
+        PASS [   0.018s] ( 38/422) scar checker::session::specialization_state_tests::reconcile_function_indices_moves_colliding_specializable_defs_without_overwrite
+        PASS [   0.022s] ( 39/422) scar checker::session::specialization_state_tests::reconcile_function_indices_preserves_materialized_function_floor
+        PASS [   0.031s] ( 40/422) scar checker::session::specialization_state_tests::reconcile_function_indices_preserves_registration_order_and_alias_identity
+        PASS [   0.019s] ( 41/422) scar checker::session::specialization_state_tests::reconcile_function_indices_rewrites_specialization_cache_values
+        PASS [   0.022s] ( 42/422) scar checker::session::specialization_state_tests::reconcile_visible_function_indices_rewrites_specialization_cache_values
+        PASS [   0.030s] ( 43/422) scar checker::session::specialization_state_tests::retained_definition_sharing_preserves_wire_and_checkpoint_restore
+        PASS [   0.011s] ( 44/422) scar checker::session::specialization_state_tests::retained_definitions_isolate_reconciled_sessions_and_checkpoints
+        PASS [   0.019s] ( 45/422) scar checker::signatures::tests::boolean_suffix_validates_all_canonical_declaration_kinds
+        PASS [   0.010s] ( 46/422) scar checker::signatures::tests::builtin_surface_type_normalization_ignores_function_type_whitespace
+        PASS [   0.020s] ( 47/422) scar checker::signatures::tests::canonical_role_validation_rejects_non_contiguous_ordinals
+        PASS [   0.011s] ( 48/422) scar checker::signatures::tests::canonical_role_validation_rejects_truncated_resolved_lists
+        PASS [   0.010s] ( 49/422) scar checker::signatures::tests::duplicate_direct_constructor_return_type_arguments_are_rejected
+        PASS [   0.022s] ( 50/422) scar checker::signatures::tests::return_type_argument_validation_uses_canonical_constructor_trait_identity
+        PASS [   0.021s] ( 51/422) scar checker::specialize::tests::callable_instantiations_with_equal_display_names_remain_distinct
+        PASS [   0.020s] ( 52/422) scar checker::specialize::tests::callable_requirement_chain_visits_edges_linearly_in_both_orders
+        PASS [   0.029s] ( 53/422) scar checker::specialize::tests::callable_requirement_cycle_converges_and_sorts_seed_slots
+        PASS [   0.019s] ( 54/422) scar checker::specialize::tests::callable_requirement_missing_slot_uses_original_call_span
+        PASS [   0.015s] ( 55/422) scar checker::specialize::tests::do_safebind_specializes_pattern_against_projected_payload
+        PASS [   0.016s] ( 56/422) scar checker::specialize::tests::failed_specialization_then_checkpoint_restore_matches_sibling_at_another_type
+        PASS [   0.018s] ( 57/422) scar checker::specialize::tests::injected_callable_specialization_materializes_target_with_bound_arguments
+        PASS [   0.027s] ( 58/422) scar checker::specialize::tests::named_extractor_specialization_rejects_missing_saved_substitution
+        PASS [   0.021s] ( 59/422) scar checker::specialize::tests::ordinary_specialization_rejects_missing_call_substitution
+        PASS [   0.052s] ( 60/422) scar checker::specialize::tests::specialization_keys_distinguish_structural_type_arguments
+        PASS [   0.023s] ( 61/422) scar checker::specialize::tests::specialization_mapping_rejects_argument_count_mismatch_before_zip
+        PASS [   0.025s] ( 62/422) scar checker::specialize::tests::specializations_reuse_identity_across_incremental_runs
+        PASS [   0.034s] ( 63/422) scar checker::specialize::tests::summary_keeps_direct_pattern_and_ordinary_forwarding_distinct
+        PASS [   0.012s] ( 64/422) scar checker::specialize::tests::trait_specialization_requires_complete_concrete_solver_substitution
+        PASS [   7.044s] ( 65/422) scar checker::predeclare::shared_registry_tests::shared_callable_signatures_keep_instantiations_and_failed_sessions_independent
+        PASS [   7.112s] ( 66/422) scar checker::predeclare::constructor_mapping_tests::declaration_mapping_cycle_rejects_reentry_and_clears_transient_state
+        PASS [   2.149s] ( 67/422) scar checker::trait_selection::tests::applicability_tests::checked_method_obligations_detach_only_the_child_implementation
+        PASS [   0.874s] ( 68/422) scar checker::trait_selection::tests::applicability_tests::constructor_application_retains_deferred_and_rejected_reasons
+        PASS [   8.069s] ( 69/422) scar checker::predeclare::shared_registry_tests::inherited_slots_detach_only_changed_traits_from_saved_branches
+        PASS [   1.033s] ( 70/422) scar checker::trait_selection::tests::applicability_tests::concrete_impl_cannot_bind_a_nested_rigid_subject
+        PASS [   8.165s] ( 71/422) scar checker::predeclare::constructor_mapping_tests::declaration_parent_proof_resolves_mapping_through_an_ordinary_trait
+        PASS [   0.881s] ( 72/422) scar checker::trait_selection::tests::applicability_tests::derived_method_keeps_a_synthetic_contract_identity
+        PASS [   1.048s] ( 73/422) scar checker::trait_selection::tests::applicability_tests::constructor_projection_distinguishes_deferred_from_rejected
+        PASS [   0.841s] ( 74/422) scar checker::trait_selection::tests::applicability_tests::failed_method_probe_does_not_change_complete_instantiation_identity
+        PASS [   1.141s] ( 75/422) scar checker::trait_selection::tests::applicability_tests::constructor_projection_reports_each_metadata_contract_failure
+        PASS [   1.079s] ( 76/422) scar checker::trait_selection::tests::applicability_tests::declared_composite_capability_does_not_alpha_rename_distinct_rigid_slots
+        PASS [   5.735s] ( 77/422) scar checker::session::session_contract_tests::failed_suffix_preserves_transactional_state_and_explicit_rollback_allows_retry
+        PASS [   1.293s] ( 78/422) scar checker::trait_selection::tests::applicability_tests::one_visible_impl_does_not_determine_unknown_subject
+        PASS [   1.552s] ( 79/422) scar checker::trait_selection::tests::applicability_tests::one_visible_impl_does_not_determine_unknown_trait_argument
+        PASS [   1.455s] ( 80/422) scar checker::trait_selection::tests::applicability_tests::rejected_head_rolls_back_both_trait_argument_bindings
+        PASS [   0.014s] ( 81/422) scar checker::trait_selection::tests::canonical_unifier_tests::canonical_applicability_rejects_callable_hole_input
+        PASS [   1.677s] ( 82/422) scar checker::trait_selection::tests::applicability_tests::method_target_uses_the_original_declaration_index
+        PASS [   0.018s] ( 83/422) scar checker::trait_selection::tests::canonical_unifier_tests::canonical_unifier_overlap_preserves_variable_namespaces
+        PASS [   0.051s] ( 84/422) scar checker::trait_selection::tests::canonical_unifier_tests::canonical_unifier_nested_allocation_growth
+        PASS [   0.017s] ( 85/422) scar checker::trait_selection::tests::canonical_unifier_tests::canonical_unifier_preserves_boundaries
+        PASS [   0.017s] ( 86/422) scar checker::trait_selection::tests::canonical_unifier_tests::canonical_unifier_shared_callable_inputs_preserve_hole_identity
+        PASS [   0.015s] ( 87/422) scar checker::trait_selection::tests::extractor_type_contract_tests::canonical_error_kind_types_round_trip
+        PASS [   0.014s] ( 88/422) scar checker::trait_selection::tests::extractor_type_contract_tests::canonical_extractor_types_round_trip
+        PASS [   0.021s] ( 89/422) scar checker::type_syntax::tests::clause_block_surface_type_query_uses_builtin_type_usage_policy
+        PASS [   1.592s] ( 90/422) scar checker::trait_selection::tests::applicability_tests::pending_alias_preserves_nested_receiver_and_trait_arguments
+        PASS [   0.019s] ( 91/422) scar checker::type_syntax::tests::direct_signature_constructor_trait_without_canonical_identity_fails_closed
+        PASS [   0.013s] ( 92/422) scar checker::type_syntax::tests::do_safebind_tail_span_uses_the_final_expression_origin
+        PASS [   0.014s] ( 93/422) scar checker::type_syntax::tests::duplicate_constructor_trait_short_names_are_not_selected_by_registration_order
+        PASS [   0.010s] ( 94/422) scar checker::type_syntax::tests::exact_ordinary_trait_bound_does_not_fall_back_to_same_surface_constructor_trait
+        PASS [   0.017s] ( 95/422) scar checker::type_syntax::tests::error_kind_is_a_runtime_value_type
+        PASS [   0.010s] ( 96/422) scar checker::type_syntax::tests::lazy_signature_surface_type_query_uses_builtin_type_usage_policy
+        PASS [   0.015s] ( 97/422) scar checker::type_syntax::tests::pid_annotation_rejects_an_already_bound_ordinary_type_variable
+        PASS [   0.016s] ( 98/422) scar env::tests::cloned_enum_metadata_shares_indexes_and_isolates_appended_variants
+        PASS [   0.014s] ( 99/422) scar env::tests::cloned_isolated_scopes_keep_sibling_undo_independent
+        PASS [   0.012s] (100/422) scar env::tests::cloned_type_metadata_shares_until_signature_or_policy_updates
+        PASS [   0.017s] (101/422) scar env::tests::isolated_scopes_restore_each_boundary_and_record_only_changed_bindings
+        PASS [   0.014s] (102/422) scar env::tests::ordinary_scope_retains_normalization
+        PASS [   0.015s] (103/422) scar env::tests::predeclare_and_resolve_replace_legacy_single_step_registration
+        PASS [   0.012s] (104/422) scar env::tests::predeclare_type_def_assigns_deterministic_tags
+        PASS [   0.011s] (105/422) scar env::tests::readonly_metadata_lookup_accepts_global_and_module_prefixed_names
+        PASS [   0.015s] (106/422) scar env::tests::private_field_lookup_accepts_global_and_module_prefixed_names
+        PASS [   0.011s] (107/422) scar env::tests::resolve_type_def_signature_finalizes_predeclared_entry
+        PASS [   6.099s] (108/422) scar checker::session::session_contract_tests::transactional_and_in_place_staged_outputs_and_structured_failures_match
+        PASS [   1.484s] (109/422) scar checker::trait_selection::tests::applicability_tests::rejected_where_does_not_bind_either_requested_argument_for_the_next_candidate
+        PASS [   1.524s] (110/422) scar checker::trait_selection::tests::applicability_tests::required_constructor_cycle_restores_relation_state_and_cannot_be_serialized
+        PASS [   1.055s] (111/422) scar::boolean_function_suffix boolean_suffix_preserves_trait_impl_signature_compatibility
+        PASS [   1.395s] (112/422) scar checker::trait_selection::tests::applicability_tests::where_probe_waits_only_on_call_site_variables
+        PASS [   1.248s] (113/422) scar checker::type_syntax::tests::type_relation_and_callable_context_preserve_bare_return_origin
+        PASS [   1.258s] (114/422) scar::boolean_function_suffix boolean_suffix_preserves_unsuffixed_signatures
+        PASS [   1.660s] (115/422) scar::boolean_function_suffix boolean_suffix_accepts_boolean_and_argument_generic_signatures
+        PASS [   0.012s] (116/422) scar::callback_assertions callback_case_inventory_has_unique_names_and_functions
+        PASS [   1.313s] (117/422) scar::callable_declaration_identity ordinary_curry_return_values_remain_non_callable
+        PASS [   0.017s] (118/422) scar::closed_diagnostic_schema schema_case_inventory_has_unique_names_and_functions
+        PASS [   1.258s] (119/422) scar::callable_declaration_identity standard_curry_identity_survives_reference_aliases
+        PASS [   0.012s] (120/422) scar::common_constructor_invocation constructor_case_inventory_has_unique_names_and_functions
+        PASS [   1.289s] (121/422) scar::callback_assertions callback_assertions_suite
+        PASS [   1.799s] (122/422) scar::callable_declaration_identity ordinary_curry_uses_its_declared_signature
+        PASS [   1.918s] (123/422) scar::boolean_function_suffix boolean_suffix_rejects_non_boolean_and_unresolved_signatures
+        PASS [   1.567s] (124/422) scar::closed_diagnostic_schema closed_diagnostic_schema_suite
+        PASS [   2.236s] (125/422) scar::callable_declaration_identity standard_curry_checks_its_contract
+        PASS [   1.146s] (126/422) scar::contextual_type_final_remediation builtin_declaration_is_not_an_ordinary_function_position
+        PASS [   1.610s] (127/422) scar::constructor_capability_session constructor_view_survives_serialized_checkpoint
+        PASS [   1.409s] (128/422) scar::constructor_capability_session constructor_view_survives_typecheck_batches
+        PASS [   1.453s] (129/422) scar::contextual_type_final_remediation alias_expansion_cannot_hide_a_forbidden_constructor_application
+        PASS [   1.751s] (130/422) scar::contextual_type_final_remediation contextual_return_reconstructs_only_the_declared_enum_slot
+        PASS [   2.074s] (131/422) scar::contextual_type_final_remediation enum_constructor_application_uses_only_the_declared_mapped_slot
+        PASS [   1.672s] (132/422) scar::contextual_type_final_remediation generic_eq_pin_instantiates_the_selected_method_body
+        PASS [   1.674s] (133/422) scar::contextual_type_final_remediation inherent_method_does_not_count_as_an_ordinary_function_position
+        PASS [   1.889s] (134/422) scar::contextual_type_final_remediation fresh_contextual_witness_preserves_its_trait_among_same_arity_traits
+        PASS [   1.805s] (135/422) scar::contextual_type_final_remediation inherent_owner_from_an_earlier_batch_is_not_an_ordinary_function_position
+        PASS [   1.301s] (136/422) scar::contextual_type_final_remediation same_head_receiver_does_not_consume_a_distinct_self_capability
+        PASS [   1.217s] (137/422) scar::contextual_type_final_remediation scar_defensively_rejects_trait_slot_mapping_in_a_method_where_clause
+        PASS [   0.985s] (138/422) scar::contextual_type_final_remediation scar_rejects_slot_map_on_a_non_constructor_trait_impl
+        PASS [   0.919s] (139/422) scar::contextual_type_final_remediation self_impl_capability_is_not_an_arity_zero_candidate_obligation
+        PASS [   1.140s] (140/422) scar::contextual_type_final_remediation scar_rejects_slot_map_owned_by_a_different_constructor_trait
+        PASS [   1.308s] (141/422) scar::contextual_type_final_remediation specialized_generic_pin_pattern_has_a_static_dispatch
+        PASS [   1.587s] (142/422) scar::contextual_type_final_remediation struct_constructor_application_uses_only_the_declared_mapped_slot
+     TIMEOUT [  15.016s] (143/422) scar checker::session::session_contract_tests::full_standard_compile_and_checkpoint_resume_preserve_user_contracts
+  stdout ───
+
+    running 1 test
+
+    (test timed out)
+
+        PASS [   2.848s] (144/422) scar::contextual_type_final_remediation unused_self_impl_capability_is_reported_at_the_bound
+        PASS [   2.960s] (145/422) scar::default_trait_methods canonical_builtin_signature_rejects_return_type_argument_drift
+        PASS [   3.263s] (146/422) scar::default_trait_methods canonical_builtin_signature_rejects_parameter_name_drift
+        PASS [   2.778s] (147/422) scar::default_trait_methods case_bucket_0
+        PASS [   3.645s] (148/422) scar::default_trait_methods canonical_builtin_signature_rejects_a_noncanonical_constraint
+        PASS [   2.643s] (149/422) scar::default_trait_methods case_bucket_1
+        PASS [   0.011s] (150/422) scar::default_trait_methods case_inventory_has_unique_names_and_functions
+        PASS [   2.009s] (151/422) scar::default_trait_methods case_bucket_2
+        PASS [   1.623s] (152/422) scar::default_trait_methods case_bucket_3
+        PASS [   1.438s] (153/422) scar::default_trait_methods case_bucket_6
+        PASS [   1.778s] (154/422) scar::default_trait_methods case_bucket_4
+        PASS [   1.490s] (155/422) scar::default_trait_methods case_bucket_7
+        PASS [   1.781s] (156/422) scar::default_trait_methods case_bucket_5
+        PASS [   1.373s] (157/422) scar::enum_constructor_unresolved_type_arguments enum_finalization_does_not_relax_callable_return_type_argument_rules
+        PASS [   1.485s] (158/422) scar::enum_constructor_unresolved_type_arguments expected_types_resolve_all_bare_enum_constructor_type_arguments
+        PASS [   1.142s] (159/422) scar::error_payload error_facet_api_capture_keeps_concrete_root_restriction
+        PASS [   0.838s] (160/422) scar::error_payload error_payload_accepts_enum_recursion_with_growing_type_arguments
+        PASS [   1.341s] (161/422) scar::error_payload error_facet_capture_distinguishes_common_and_concrete_roots
+        PASS [   1.562s] (162/422) scar::enum_constructor_unresolved_type_arguments unresolved_bare_enum_constructor_type_arguments_are_rejected
+        PASS [   3.002s] (163/422) scar::default_trait_methods internal_runtime_name_does_not_bypass_builtin_surface_signature_validation
+        PASS [   1.972s] (164/422) scar::enum_constructor_unresolved_type_arguments nested_enum_finalization_uses_context_and_preserves_constructor_span
+        PASS [   1.220s] (165/422) scar::error_payload error_payload_rejects_compile_time_only_values_and_inputs
+        PASS [   0.931s] (166/422) scar::error_payload error_payload_suffix_preserves_checked_prefix_enum_templates
+        PASS [   1.046s] (167/422) scar::error_payload error_payload_schema_is_separate_from_constructor_inputs
+        PASS [   0.958s] (168/422) scar::error_values bare_error_kind_never_implicitly_constructs_error
+        PASS [   2.159s] (169/422) scar::error_payload error_payload_local_reading_and_scope_boundaries
+        PASS [   1.260s] (170/422) scar::error_payload nonempty_payload_rejects_string_body_and_nonterminal_construction
+        PASS [   1.197s] (171/422) scar::error_values error_kinds_are_ordinary_values_and_calls_stay_errors
+        PASS [   2.543s] (172/422) scar::error_payload error_payload_rejects_casts_mutation_and_unallowed_consumers
+        PASS [   1.509s] (173/422) scar::error_values error_kind_operations_and_representation_stay_private
+        PASS [   1.534s] (174/422) scar::error_values error_kind_diagnostics_guide_constructor_calls_without_calling_kind_variables
+        PASS [   1.043s] (175/422) scar::error_values error_representation_and_capabilities_stay_private
+        PASS [   1.548s] (176/422) scar::error_values error_observation_paths_are_readonly
+        PASS [   1.503s] (177/422) scar::error_values errors_are_ordinary_values
+        PASS [   0.996s] (178/422) scar::generic_extractor_specialization case_bucket_0
+        PASS [   1.116s] (179/422) scar::generic_extractor_specialization case_bucket_1
+        PASS [   0.016s] (180/422) scar::generic_extractor_specialization case_inventory_has_unique_names_and_functions
+        PASS [   0.961s] (181/422) scar::generic_extractor_specialization case_bucket_3
+        PASS [   1.097s] (182/422) scar::generic_extractor_specialization case_bucket_4
+        PASS [   1.277s] (183/422) scar::generic_extractor_specialization case_bucket_2
+        PASS [   1.037s] (184/422) scar::generic_extractor_specialization case_bucket_5
+        PASS [   0.875s] (185/422) scar::generic_extractor_specialization case_bucket_6
+     TIMEOUT [  15.019s] (186/422) scar::common_constructor_invocation common_constructor_invocation_suite
+  stdout ───
+
+    running 1 test
+  stderr ───
+    common constructor invocation case: record_keyword_shorthand_checks_field_contract
+    common constructor invocation case: constructor_invocations_propagate_expected_return
+    common constructor invocation case: callable_result_context_is_shared_by_helpers_and_operators
+    common constructor invocation case: arrow_uses_fixed_facet_path_contract
+    common constructor invocation case: trait_result_conflict_preserves_expected_and_actual_direction
+    common constructor invocation case: registered_carriers_do_not_supply_constructor_inference_evidence
+    common constructor invocation case: generic_receiverless_family_helpers_use_expected_return
+    common constructor invocation case: generic_constructor_trait_wrappers_specialize_all_method_roles
+    common constructor invocation case: monadt_lift_uses_trait_target_and_value_arguments_together
+
+    (test timed out)
+
+        PASS [   1.046s] (187/422) scar::generic_extractor_specialization case_bucket_7
+        PASS [   0.918s] (188/422) scar::generic_trait_forwarding case_bucket_1
+        PASS [   0.014s] (189/422) scar::generic_trait_forwarding case_inventory_has_unique_names_and_functions
+        PASS [   1.060s] (190/422) scar::generic_trait_forwarding case_bucket_0
+        PASS [   1.124s] (191/422) scar::generic_trait_forwarding case_bucket_2
+        PASS [   1.092s] (192/422) scar::generic_trait_forwarding case_bucket_3
+        PASS [   1.187s] (193/422) scar::generic_trait_forwarding case_bucket_4
+        PASS [   1.236s] (194/422) scar::generic_trait_forwarding case_bucket_5
+        PASS [   1.204s] (195/422) scar::generic_trait_forwarding case_bucket_7
+        PASS [   1.424s] (196/422) scar::generic_trait_forwarding case_bucket_6
+        PASS [   1.133s] (197/422) scar::grouped_contextual_callables contextual_branch_join_preserves_concrete_input_and_grouping_boundary
+        PASS [   1.335s] (198/422) scar::grouped_contextual_callables grouped_context_does_not_accept_real_callable_or_return_mismatches
+        PASS [   1.917s] (199/422) scar::grouped_contextual_callables contextual_callable_branches_reject_hole_input_in_both_orders
+        PASS [   0.839s] (200/422) scar::lazy_capture_diagnostics annotations_and_shared_placeholder_conflicts_have_different_guidance
+        PASS [   1.479s] (201/422) scar::grouped_contextual_callables grouped_generic_callable_result_and_capture_receive_expected_types
+        PASS [   1.085s] (202/422) scar::grouped_contextual_callables hole_input_relation_does_not_relax_identity_or_container_shapes
+        PASS [   1.235s] (203/422) scar::grouped_contextual_callables grouped_hole_input_callable_result_rejects_context_operators
+        PASS [   1.774s] (204/422) scar::grouped_contextual_callables grouped_hole_input_callable_rejects_concrete_arguments_annotations_and_returns
+        PASS [   1.026s] (205/422) scar::lazy_capture_diagnostics bound_lazy_capture_calls_explain_function_and_actual_parameter
+        PASS [   0.886s] (206/422) scar::lazy_capture_diagnostics error_lazy_capture_uses_ordinary_callable_argument_rules
+        PASS [   0.897s] (207/422) scar::lazy_capture_diagnostics extractor_preargument_variables_do_not_make_success_a_binding_branch
+        PASS [   0.877s] (208/422) scar::lazy_capture_diagnostics ordinary_placeholders_in_consumers_and_constructors_keep_conflict_guidance
+        PASS [   0.874s] (209/422) scar::lazy_capture_diagnostics signatures_and_identity_recapture_keep_exact_capture_provenance
+        PASS [   0.642s] (210/422) scar::lazy_capture_revision bare_call_retains_returned_thunk_and_grouped_call_consumes_once
+        PASS [   2.896s] (211/422) scar::grouped_contextual_callables grouped_concrete_input_closures_and_captures_keep_context
+        PASS [   1.128s] (212/422) scar::lazy_capture_diagnostics ordinary_functions_inner_errors_and_direct_expression_do_not_get_lazy_help
+        PASS [   0.667s] (213/422) scar::lazy_capture_revision bare_special_form_call_retains_its_returned_thunk
+        PASS [   0.699s] (214/422) scar::lazy_capture_revision bare_pattern_consumer_call_keeps_its_source_call_shell
+        PASS [   0.773s] (215/422) scar::lazy_capture_revision bare_call_shell_survives_one_additional_depth_adjustment
+        PASS [   0.575s] (216/422) scar::lazy_capture_revision binding_success_rejects_thunk_inferred_from_failure_branch
+        PASS [   0.578s] (217/422) scar::lazy_capture_revision context_cannot_change_the_known_branch_normalization
+        PASS [   0.566s] (218/422) scar::lazy_capture_revision declared_generic_capture_keeps_constraint_through_specialization
+        PASS [   0.821s] (219/422) scar::lazy_capture_revision binding_success_rejects_external_thunks_even_when_binding_unused
+        PASS [   0.737s] (220/422) scar::lazy_capture_revision direct_expression_requirement_survives_generic_forwarding_and_capture
+        PASS [   0.775s] (221/422) scar::lazy_capture_revision later_call_argument_inference_keeps_direct_expression_constraint
+        PASS [   0.853s] (222/422) scar::lazy_capture_revision ensure_capture_infers_unknown_predicate_from_value_contract
+        PASS [   0.617s] (223/422) scar::lazy_capture_revision lazy_standard_call_rejects_facet_transport_but_accepts_delayed_facet_view
+        PASS [   0.815s] (224/422) scar::lazy_capture_revision lazy_depth_adjusts_at_most_one_shell_in_both_directions
+        PASS [   1.023s] (225/422) scar::lazy_capture_revision known_lazy_branch_determines_capture_signature
+        PASS [   0.856s] (226/422) scar::lazy_capture_revision migrated_lazy_calls_pass_normalized_callables_to_ordinary_functions
+        PASS [   0.945s] (227/422) scar::lazy_capture_revision pattern_binding_success_uses_data_while_unbound_success_uses_lazy
+        PASS [   1.303s] (228/422) scar::lazy_capture_revision lazy_standard_call_hoists_preserve_constructor_capabilities
+        PASS [   0.944s] (229/422) scar::lazy_capture_revision single_lazy_branch_uses_standard_required_type
+        PASS [   1.253s] (230/422) scar::lazy_capture_revision pattern_bound_thunk_is_an_ordinary_success_value
+        PASS [   1.381s] (231/422) scar::lazy_capture_revision result_error_lazy_capture_uses_fixed_error_requirement
+        PASS [   1.358s] (232/422) scar::lazy_capture_revision result_or_else_preserves_lazy_capture_boundaries_and_declaration_identity
+        PASS [   1.768s] (233/422) scar::lazy_capture_revision result_or_else_capture_requires_matching_result_thunk
+        PASS [   1.630s] (234/422) scar::lazy_trait_contract lazy_trait_capture_preserves_eager_and_bare_capture_boundaries
+        PASS [   2.101s] (235/422) scar::lazy_capture_revision unknown_lazy_branches_require_context_and_same_placeholder_unifies
+        PASS [   1.717s] (236/422) scar::lazy_trait_contract user_ordinary_function_cannot_declare_lazy_contract
+        PASS [   1.692s] (237/422) scar::lazy_trait_contract user_override_inherits_standard_lazy_signature_and_call_contract
+        PASS [   1.576s] (238/422) scar::lazy_trait_contract user_trait_cannot_declare_lazy_contract_even_with_standard_method_spelling
+        PASS [   1.360s] (239/422) scar::monad_fail do_uses_declared_monad_fail_bound_for_partial_pattern
+        PASS [   1.417s] (240/422) scar::monad_fail failure_capability_is_provided_by_declared_generic_bound
+        PASS [   1.781s] (241/422) scar::monad_fail ordinary_callable_cannot_borrow_alternative_or_outer_target
+        PASS [   2.225s] (242/422) scar::monad_fail safe_bind_does_not_unwrap_either_or_transformers
+        PASS [   2.209s] (243/422) scar::monad_fail safe_bind_uses_either_error_failure_capability
+        PASS [   5.274s] (244/422) scar::lazy_trait_contract standard_ordinary_function_can_declare_lazy_contract
+        PASS [   3.175s] (245/422) scar::monad_fail result_failure_requires_its_monad_fail_impl
+        PASS [   3.528s] (246/422) scar::monad_fail nonstandard_same_name_declaration_cannot_supply_canonical_failure_capability
+        PASS [   5.585s] (247/422) scar::lazy_trait_contract standard_trait_can_declare_lazy_default_method
+        PASS [   1.393s] (248/422) scar::monad_fail_standard blanket_either_failure_impl_overlaps_the_standard_error_impl
+        PASS [   4.418s] (249/422) scar::monad_fail missing_canonical_monad_fail_declaration_is_a_contract_error
+        PASS [   2.250s] (250/422) scar::monad_fail unresolved_failure_dispatch_is_rejected_before_codegen
+        PASS [   1.417s] (251/422) scar::monad_fail_standard concrete_non_error_left_failure_impl_does_not_overlap
+        PASS [   1.271s] (252/422) scar::nominal_constructor_parameters case_bucket_0
+        PASS [   1.750s] (253/422) scar::monad_fail_standard standard_carriers_without_error_retention_do_not_implement_monad_fail
+        PASS [   0.011s] (254/422) scar::nominal_constructor_parameters case_inventory_has_unique_names_and_functions
+        PASS [   1.258s] (255/422) scar::nominal_constructor_parameters case_bucket_1
+        PASS [   1.207s] (256/422) scar::nominal_constructor_parameters case_bucket_2
+        PASS [   1.066s] (257/422) scar::nominal_constructor_parameters case_bucket_4
+        PASS [   1.236s] (258/422) scar::nominal_constructor_parameters case_bucket_3
+        PASS [   0.995s] (259/422) scar::nominal_constructor_parameters case_bucket_5
+        PASS [   1.144s] (260/422) scar::nominal_constructor_parameters case_bucket_6
+        PASS [   0.948s] (261/422) scar::nominal_constructor_parameters case_bucket_7
+        PASS [   0.942s] (262/422) scar::parameterized_type_constructor_traits full_constructor_rta_binding_pattern_has_concrete_specialized_type
+        PASS [   0.986s] (263/422) scar::parameterized_type_constructor_traits full_constructor_rta_rejects_a_captured_base_mismatch
+        PASS [   1.062s] (264/422) scar::parameterized_type_constructor_traits full_constructor_rta_preserves_its_mapped_payload_constraint
+        PASS [   0.952s] (265/422) scar::parameterized_type_constructor_traits parameterized_constructor_trait_direct_signature_surface_is_not_added
+        PASS [   0.903s] (266/422) scar::parameterized_type_constructor_traits parameterized_constructor_trait_does_not_choose_an_output_carrier_from_impl_count
+        PASS [   1.372s] (267/422) scar::parameterized_type_constructor_traits declared_return_expectation_reaches_pipe_list_and_tuple_contents
+        PASS [   0.884s] (268/422) scar::parameterized_type_constructor_traits receiverless_lift_matches_trait_argument_target_and_value_together
+        PASS [   0.940s] (269/422) scar::parameterized_type_constructor_traits receiverless_lift_requires_the_value_static_monad_capability
+        PASS [   0.905s] (270/422) scar::parameterized_type_constructor_traits unique_monad_impl_does_not_infer_an_underconstrained_lift_base
+        PASS [   0.873s] (271/422) scar::pid_marker_identity pid_generic_cannot_be_returned_as_a_different_process
+        PASS [   0.947s] (272/422) scar::pid_marker_identity nominal_pid_field_cannot_specialize_its_marker_to_int
+        PASS [   1.049s] (273/422) scar::parameterized_type_constructor_traits user_defined_parameterized_constructor_trait_lifts_from_argument_into_expected_carrier
+        PASS [   1.138s] (274/422) scar::pid_marker_identity local_pid_annotation_cannot_strengthen_an_ordinary_rigid_generic
+        PASS [   1.274s] (275/422) scar::pid_marker_identity nominal_pid_marker_arguments_preserve_declared_process_identity
+        PASS [   1.081s] (276/422) scar::pid_marker_identity pid_generic_repeated_inputs_share_one_marker_binding
+        PASS [   1.017s] (277/422) scar::pid_marker_identity pid_generics_preserve_same_marker_and_standard_handler_capabilities
+        PASS [   1.068s] (278/422) scar::pid_marker_identity pid_marker_generic_cannot_be_specialized_to_an_ordinary_value_type
+        PASS [   0.955s] (279/422) scar::pid_marker_identity pid_marker_identity_is_preserved_across_namespaces
+        PASS [   0.844s] (280/422) scar::pid_marker_identity pid_marker_return_type_argument_preserves_a_declared_process
+        PASS [   1.108s] (281/422) scar::pid_marker_identity pid_marker_generic_is_distinct_from_the_pid_value_type
+        PASS [   1.108s] (282/422) scar::pid_marker_identity pid_marker_rejects_unknown_names_and_ordinary_types
+        PASS [   0.848s] (283/422) scar::process_handler_capture captured_handler_slots_deduplicate_and_coexist_with_ordinary_captures
+        PASS [   1.126s] (284/422) scar::pid_marker_identity standard_handler_pid_still_has_no_eq_capability
+        PASS [   1.079s] (285/422) scar::pid_marker_identity trait_candidate_cannot_specialize_a_pid_marker_to_a_value_type
+        PASS [   1.054s] (286/422) scar::process_handler_capture process_context_is_lexically_captured_by_escaping_and_nested_closures
+        PASS [   1.066s] (287/422) scar::return_type_argument_capture_forwarding closure_return_shape_infers_return_type_argument_capture
+        PASS [   1.021s] (288/422) scar::return_type_argument_capture_forwarding explicit_capture_forwards_outer_return_type_argument
+        PASS [   0.963s] (289/422) scar::return_type_argument_capture_forwarding omitted_capture_forwards_outer_return_type_argument
+        PASS [   0.922s] (290/422) scar::return_type_argument_capture_forwarding underscore_capture_forwards_outer_return_type_argument
+        PASS [   0.949s] (291/422) scar::return_type_argument_capture_forwarding unrelated_outer_type_argument_does_not_resolve_capture
+        PASS [   1.131s] (292/422) scar::return_type_arguments case_bucket_1
+        PASS [   0.011s] (293/422) scar::return_type_arguments case_inventory_has_unique_names_and_functions
+        PASS [   1.226s] (294/422) scar::return_type_arguments case_bucket_0
+        PASS [   1.273s] (295/422) scar::return_type_arguments case_bucket_2
+        PASS [   1.272s] (296/422) scar::return_type_arguments case_bucket_4
+        PASS [   0.720s] (297/422) scar::safe_operator_diagnostics bounded_generic_does_not_claim_an_unselected_implementation_signature
+        PASS [   1.369s] (298/422) scar::return_type_arguments case_bucket_3
+        PASS [   1.232s] (299/422) scar::return_type_arguments case_bucket_7
+        PASS [   0.858s] (300/422) scar::safe_operator_diagnostics incompatible_result_payload_keeps_annotation_diagnostic_and_signature
+        PASS [   1.518s] (301/422) scar::return_type_arguments case_bucket_5
+        PASS [   1.698s] (302/422) scar::return_type_arguments case_bucket_6
+        PASS [   1.339s] (303/422) scar::safe_operator_diagnostics only_the_result_operator_at_the_failing_value_is_labeled
+        PASS [   1.465s] (304/422) scar::safe_operator_diagnostics result_context_preserves_generic_payload_inference_and_finalizes_safe_dispatch
+        PASS [   1.509s] (305/422) scar::safe_operator_diagnostics result_on_left_operand_also_reports_its_operator_signature
+        PASS [   1.543s] (306/422) scar::safe_operator_diagnostics result_operator_diagnostics_preserve_outer_contract_and_token_origin
+        PASS [   1.659s] (307/422) scar::safe_operator_diagnostics unrelated_safe_operators_are_not_labels_of_another_value
+        PASS [   1.770s] (308/422) scar::safe_operator_diagnostics user_operator_diagnostics_preserve_authored_or_omitted_error
+        PASS [   2.141s] (309/422) scar::special_enum_variants canonical_result_shape_rejects_missing_or_extra_success_slots
+        PASS [   2.357s] (310/422) scar::special_enum_variants special_enum_constructor_capture_uses_expected_owner_arguments
+        PASS [   1.763s] (311/422) scar::special_enum_variants special_enum_explicit_owner_conflicts_are_checked_without_annotation
+        PASS [   1.747s] (312/422) scar::special_enum_variants special_enum_pattern_requires_resolved_canonical_identity
+        PASS [   1.398s] (313/422) scar::statement_question explicit_result_closure_signatures_provide_local_safebind_failure_targets
+        PASS [   1.834s] (314/422) scar::special_enum_variants special_enum_result_capture_accepts_existing_errors
+        PASS [   1.323s] (315/422) scar::statement_question question_checks_normalized_callable_signature_alias_output
+        PASS [   1.790s] (316/422) scar::statement_question question_accepts_only_canonical_result_with_unit_terminal_success
+        PASS [   1.099s] (317/422) scar::statement_question question_does_not_accept_nominal_result_lookalikes
+        PASS [   1.283s] (318/422) scar::statement_question question_does_not_implicitly_wrap_a_unit_tail
+        PASS [   2.577s] (319/422) scar::special_enum_variants special_enum_result_owner_arguments_constrain_payload_and_failure
+        PASS [   1.122s] (320/422) scar::statement_question question_in_non_result_closure_inside_do_rejects_outer_failure_targets
+        PASS [   1.166s] (321/422) scar::statement_question question_inside_do_enforces_terminal_success_constraint
+        PASS [   1.350s] (322/422) scar::statement_question question_does_not_infer_unknown_success_as_unit
+        PASS [   1.024s] (323/422) scar::statement_question question_is_an_explicit_discard_for_unused_value_warnings
+        PASS [   0.024s] (324/422) scar::structured_diagnostics diagnostic_case_inventory_has_unique_names_and_functions
+        PASS [   0.994s] (325/422) scar::statement_question question_preserves_safebind_alternative_target_for_non_result_do
+        PASS [   1.207s] (326/422) scar::statement_question question_inside_do_uses_do_local_failure_target
+        PASS [   0.994s] (327/422) scar::statement_question question_rejects_non_result_values
+        PASS [   0.940s] (328/422) scar::statement_question question_rejects_non_unit_terminal_success
+        PASS [   0.988s] (329/422) scar::statement_question question_uses_nearest_callable_target
+        PASS [   0.929s] (330/422) scar::statement_question question_uses_option_t_alternative_only_inside_do
+        PASS [   0.712s] (331/422) scar::trait_impl_applicability generic_box_method_instantiates_head_variable
+        PASS [   1.173s] (332/422) scar::statement_question unannotated_closures_cannot_borrow_outer_safebind_failure_targets
+        PASS [   0.753s] (333/422) scar::trait_impl_applicability generic_overlap_is_rejected
+        PASS [   0.960s] (334/422) scar::trait_impl_applicability full_head_requires_trait_arguments_and_subject_in_one_mapping
+        PASS [   0.900s] (335/422) scar::trait_impl_applicability impl_where_accepts_a_concrete_subject_with_capability
+        PASS [   0.892s] (336/422) scar::trait_impl_applicability impl_where_rejects_a_concrete_subject_without_capability
+        PASS [   0.906s] (337/422) scar::trait_impl_applicability phantom_arguments_remain_part_of_impl_pattern
+        PASS [   0.825s] (338/422) scar::trait_impl_applicability zero_argument_method_uses_return_only_head_substitution
+        PASS [   0.834s] (339/422) scar::trait_impl_policy derive_eq_reports_the_rejected_enum_payload_type
+        PASS [   0.952s] (340/422) scar::trait_impl_policy compiler_managed_targets_reject_user_trait_impls
+        PASS [   0.792s] (341/422) scar::trait_impl_policy derive_show_does_not_bound_unused_type_parameters
+        PASS [   0.792s] (342/422) scar::trait_impl_policy derive_show_requires_field_show_capability
+        PASS [   1.710s] (343/422) scar::trait_impl_applicability nested_disjoint_heads_are_order_independent
+        PASS [   0.791s] (344/422) scar::trait_impl_policy function_target_rejects_user_trait_impl
+        PASS [   0.837s] (345/422) scar::trait_impl_policy derive_show_stops_at_container_without_show_impl
+        PASS [   0.894s] (346/422) scar::trait_impl_policy generic_derive_show_rejects_a_function_type_argument
+        PASS [   0.858s] (347/422) scar::trait_impl_policy generic_derive_show_requires_the_whole_field_type
+        PASS [   0.919s] (348/422) scar::trait_impl_policy nested_generic_derive_show_preserves_inner_requirement
+        PASS [   0.840s] (349/422) scar::trait_impl_policy no_implicit_show_for_user_struct
+        PASS [   0.965s] (350/422) scar::trait_impl_policy user_impl_cannot_declare_a_composite_where_subject
+        PASS [   1.008s] (351/422) scar::trait_impl_policy standard_eq_cannot_be_redeclared_in_the_same_owner
+        PASS [   0.898s] (352/422) scar::trait_method_instantiation box_field_return_and_body_are_instantiated_together
+        PASS [   1.493s] (353/422) scar::trait_impl_policy payload_free_enum_requires_explicit_eq_capability
+        PASS [   1.230s] (354/422) scar::trait_method_instantiation builtin_show_trait_method_keeps_the_to_string_metadata_id
+        PASS [   1.370s] (355/422) scar::trait_method_instantiation builtin_trait_method_keeps_the_canonical_metadata_id
+        PASS [   4.390s] (356/422) scar::structured_diagnostics structured_diagnostics_suite
+        PASS [   2.001s] (357/422) scar::trait_method_instantiation default_body_substitutes_self_trait_rta_and_closure_capture
+        PASS [   2.100s] (358/422) scar::trait_method_instantiation derived_generic_method_substitutes_field_obligation
+        PASS [   2.525s] (359/422) scar::trait_method_instantiation default_self_comes_from_explicit_or_expected_return
+        PASS [   2.613s] (360/422) scar::trait_method_instantiation finite_trait_specialization_chain_fits_the_default_test_stack
+        PASS [   2.637s] (361/422) scar::trait_method_instantiation generated_user_enum_equality_keeps_user_dispatch
+        PASS [   2.807s] (362/422) scar::trait_method_instantiation generic_caller_specializes_selected_trait_method_signature
+        PASS [   3.217s] (363/422) scar::trait_method_instantiation trait_argument_is_distinct_from_dispatch_subject
+        PASS [   3.577s] (364/422) scar::trait_method_instantiation range_derives_require_endpoint_traits
+        PASS [   3.293s] (365/422) scar::trait_method_instantiation unconstrained_generic_impl_method_uses_selected_substitution
+        PASS [   2.973s] (366/422) scar::trait_method_instantiation user_trait_method_is_not_replaced_by_a_matching_builtin_name
+        PASS [   6.883s] (367/422) scar::trait_method_instantiation builtin_trait_method_rejects_runtime_signature_drift
+        PASS [   2.829s] (368/422) scar::trait_method_type_lists case_bucket_0
+        PASS [   4.938s] (369/422) scar::trait_method_instantiation generic_forwarding_chain_64_fits_the_cli_stack_in_both_declaration_orders
+        PASS [   1.515s] (370/422) scar::trait_method_type_lists case_bucket_1
+        PASS [   0.019s] (371/422) scar::trait_method_type_lists case_inventory_has_unique_names_and_functions
+        PASS [   1.619s] (372/422) scar::trait_method_type_lists case_bucket_2
+        PASS [   1.254s] (373/422) scar::trait_method_type_lists case_bucket_3
+        PASS [   7.062s] (374/422) scar::trait_method_instantiation generated_boolean_eq_uses_canonical_builtin_dispatch
+        PASS [   1.226s] (375/422) scar::trait_method_type_lists case_bucket_4
+        PASS [   1.126s] (376/422) scar::trait_method_type_lists case_bucket_6
+        PASS [   1.510s] (377/422) scar::trait_method_type_lists case_bucket_5
+        PASS [   1.250s] (378/422) scar::trait_method_type_lists case_bucket_7
+        PASS [   1.662s] (379/422) scar::type_constructor_carriers case_bucket_0
+        PASS [   0.021s] (380/422) scar::type_constructor_carriers case_inventory_has_unique_names_and_functions
+        PASS [   1.379s] (381/422) scar::type_constructor_carriers case_bucket_5
+        PASS [   1.685s] (382/422) scar::type_constructor_carriers case_bucket_4
+        PASS [   0.772s] (383/422) scar::type_ctor_slot_inheritance child_cannot_add_slots_or_merge_inherited_slots
+        PASS [   0.793s] (384/422) scar::type_ctor_slot_inheritance child_cannot_replace_missing_or_partial_parent_with_explicit_mapping
+        PASS [   2.453s] (385/422) scar::type_constructor_carriers case_bucket_2
+        PASS [   0.844s] (386/422) scar::type_ctor_slot_inheritance child_explicit_mapping_is_an_optional_consistency_check
+        PASS [   2.562s] (387/422) scar::type_constructor_carriers case_bucket_3
+        PASS [   2.541s] (388/422) scar::type_constructor_carriers case_bucket_6
+        PASS [   0.860s] (389/422) scar::type_ctor_slot_inheritance child_inherits_mapping_before_method_signatures_in_either_declaration_order
+        PASS [   3.191s] (390/422) scar::type_constructor_carriers case_bucket_1
+        PASS [   0.869s] (391/422) scar::type_ctor_slot_inheritance child_shape_and_partial_confirmation_preserve_inherited_slot_ordinals
+        PASS [   1.176s] (392/422) scar::type_ctor_slot_inheritance child_requires_parent_bounds_from_its_own_assumptions
+        PASS [   0.863s] (393/422) scar::type_ctor_slot_inheritance impl_trait_argument_preserves_self_substitution
+        PASS [   1.104s] (394/422) scar::type_ctor_slot_inheritance diamond_and_independent_roots_require_agreement_only_when_inherited
+        PASS [   3.070s] (395/422) scar::type_constructor_carriers case_bucket_7
+        PASS [   0.835s] (396/422) scar::type_ctor_slot_inheritance inherited_slot_cannot_be_fixed_to_concrete_type
+        PASS [   0.023s] (397/422) scar::typecheck_surface surface_case_inventory_has_unique_names_and_functions
+        PASS [   0.764s] (398/422) scar::type_ctor_slot_inheritance ordinary_parent_does_not_supply_or_conflict_with_constructor_slots
+        PASS [   0.977s] (399/422) scar::type_ctor_slot_inheritance parameterized_parent_family_selects_by_coverage_before_comparing_mappings
+        PASS [   0.813s] (400/422) scar::type_ctor_slot_inheritance root_with_multiple_positions_requires_mapping
+        PASS [   1.030s] (401/422) scar::type_ctor_slot_inheritance parent_proof_resolves_constructor_metadata_needed_by_a_specialized_base
+        PASS [   0.868s] (402/422) scar::type_ctor_slot_inheritance specialized_child_and_default_method_preserve_captured_argument
+        PASS [   0.915s] (403/422) scar::type_dependency_stack shared_diamond_dependencies_and_a_tail_cycle_are_distinguished
+        PASS [   4.410s] (404/422) scar::typecheck_surface typecheck_surface_bucket_0_a
+        PASS [   4.854s] (405/422) scar::typecheck_surface typecheck_surface_bucket_3_b
+        PASS [   5.396s] (406/422) scar::typecheck_surface typecheck_surface_bucket_0_b
+        PASS [   5.444s] (407/422) scar::typecheck_surface typecheck_surface_bucket_3_a
+        PASS [   7.012s] (408/422) scar::type_dependency_stack long_forward_type_dependency_chain_fits_cli_stack
+        PASS [   2.054s] (409/422) scar::typecheck_surface typecheck_surface_bucket_6_b
+        PASS [   0.041s] (410/422) scar::warnings non_tail_non_unit_block_value_warns
+        PASS [   1.404s] (411/422) scar::warnings result_unit_non_tail_value_warns
+        PASS [   0.019s] (412/422) scar::warnings trait_head_type_parameter_unused_by_methods_warns_even_with_bound
+        PASS [   0.027s] (413/422) scar::warnings type_parameters_used_in_real_type_positions_do_not_warn
+        PASS [   0.017s] (414/422) scar::warnings unit_and_explicit_semicolon_values_do_not_warn
+        PASS [   0.021s] (415/422) scar::warnings unused_struct_and_enum_type_parameters_warn
+        PASS [   8.786s] (416/422) scar::typecheck_surface typecheck_surface_bucket_2
+        PASS [   4.030s] (417/422) scar::typecheck_surface typecheck_surface_bucket_6_a
+        PASS [   4.200s] (418/422) scar::typecheck_surface typecheck_surface_bucket_7_a
+        PASS [   6.667s] (419/422) scar::typecheck_surface typecheck_surface_bucket_5
+        PASS [   4.748s] (420/422) scar::typecheck_surface typecheck_surface_bucket_7_b
+        PASS [  11.473s] (421/422) scar::typecheck_surface typecheck_surface_bucket_1
+        PASS [  10.995s] (422/422) scar::typecheck_surface typecheck_surface_bucket_4
+────────────
+     Summary [  77.874s] 422 tests run: 420 passed, 2 timed out, 0 skipped
+     TIMEOUT [  15.016s] (143/422) scar checker::session::session_contract_tests::full_standard_compile_and_checkpoint_resume_preserve_user_contracts
+     TIMEOUT [  15.019s] (186/422) scar::common_constructor_invocation common_constructor_invocation_suite
+error: test run failed

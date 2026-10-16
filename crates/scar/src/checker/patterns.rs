@@ -1868,7 +1868,7 @@ impl Checker {
                 }
                 let resolved = self.resolve_ty(ty);
                 if *ty != resolved {
-                    self.env.vars.insert(key, resolved);
+                    self.env.normalize_var(key, resolved);
                 }
             }
         }

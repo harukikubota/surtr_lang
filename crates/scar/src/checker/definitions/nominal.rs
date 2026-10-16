@@ -357,10 +357,8 @@ impl Checker {
         // Spire permits no declarations in expression blocks. Declaration
         // metadata is therefore read-only here; only expression-local state
         // and inference progress need the isolation of the former child.
-        // Normalization of an outer binding intentionally survives ordinary
-        // expression scopes. Keep a private variable-table snapshot here so
-        // only the deferror boundary restores those normalized bindings.
-        let saved_vars = self.env.vars.clone();
+        // Normalization survives ordinary expression scopes. Only this
+        // isolated boundary restores those writes together with local binds.
         let saved_next_tyvar = self.env.next_tyvar;
         let saved_next_tag = self.env.next_tag;
         let saved_error_uid = self.error_definition_uid.replace(error_uid);
@@ -385,7 +383,7 @@ impl Checker {
             std::mem::take(&mut self.direct_pattern_requirement_tyvars);
         let saved_boot_plan = std::mem::take(&mut self.boot_plan);
 
-        self.env.push_var_scope();
+        self.env.push_isolated_var_scope();
         // The former child copied its environment before input annotations
         // were resolved, but inherited inference state after that resolution.
         self.env.next_tyvar = body_next_tyvar;
@@ -411,7 +409,6 @@ impl Checker {
             self.process_marker_tyvars = saved_process_markers;
         }
         self.env.pop_var_scope();
-        self.env.vars = saved_vars;
         self.error_definition_uid = saved_error_uid;
         self.function_return_ty = saved_return_ty;
         self.pending_trait_obligations = saved_obligations;
@@ -665,6 +662,78 @@ mod deferror_scope_tests {
             });
             assert_eq!(result.is_err(), fail);
             assert_eq!(checker.env.lookup_var(100), Some(&Ty::Var(10)));
+        }
+    }
+
+    #[test]
+    fn deferror_body_preserves_untouched_binding_storage() {
+        for fail in [false, true] {
+            let mut checker = Checker::new(TypecheckContext::default());
+            for uid in 0..4096 {
+                checker.env.bind_var(uid, Ty::List(Box::new(Ty::Int)));
+            }
+            let storage = |env: &TypeEnv| match env.lookup_var(4095).unwrap() {
+                Ty::List(element) => element.as_ref() as *const Ty,
+                _ => unreachable!(),
+            };
+            let before = storage(&checker.env);
+            let result = checker.with_deferror_body_scope(5000, &[], 0, |body| {
+                body.env.bind_var(5001, Ty::Str);
+                if fail {
+                    Err(TypeError::new(
+                        "constructor failed",
+                        Span { start: 1, end: 2 },
+                    ))
+                } else {
+                    Ok(())
+                }
+            });
+            assert_eq!(result.is_err(), fail);
+            assert_eq!(checker.env.vars.len(), 4096);
+            assert_eq!(
+                storage(&checker.env),
+                before,
+                "a deferror body must preserve the storage of untouched outer types",
+            );
+        }
+    }
+
+    #[test]
+    fn deferror_body_restores_bindings_changed_inside_nested_scopes() {
+        for fail in [false, true] {
+            for bind_first in [false, true] {
+                let mut checker = Checker::new(TypecheckContext::default());
+                checker.env.bind_var(100, Ty::Var(10));
+                checker.substitutions.insert(10, Ty::Str);
+                checker.substitutions.insert(11, Ty::Bool);
+                let result = checker.with_deferror_body_scope(200, &[], 0, |body| {
+                    body.env.push_var_scope();
+                    if bind_first {
+                        body.env.bind_var(100, Ty::Var(11));
+                        body.normalize_env_bindings();
+                        assert_eq!(body.env.lookup_var(100), Some(&Ty::Bool));
+                    } else {
+                        body.normalize_env_bindings();
+                        assert_eq!(body.env.lookup_var(100), Some(&Ty::Str));
+                        body.env.bind_var(100, Ty::Var(11));
+                    }
+                    body.env.bind_var(300, Ty::Var(10));
+                    body.normalize_env_bindings();
+                    body.env.pop_var_scope();
+                    assert!(body.env.lookup_var(300).is_none());
+                    if fail {
+                        Err(TypeError::new(
+                            "constructor failed",
+                            Span { start: 1, end: 2 },
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                });
+                assert_eq!(result.is_err(), fail);
+                assert_eq!(checker.env.lookup_var(100), Some(&Ty::Var(10)));
+                assert!(checker.env.lookup_var(300).is_none());
+            }
         }
     }
 }

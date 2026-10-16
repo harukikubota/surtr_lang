@@ -1,0 +1,103 @@
+{
+  "level": 2,
+  "source_commit": "ce2fbd3c428fa6ba450344d3302ccad57d20ee43",
+  "source_diff": "after-source.diff",
+  "source_frozen_for_tests_and_measurement": true,
+  "checks": [
+    {
+      "command": "rtk cargo nextest run -p scar deferror_body_preserves_untouched_binding_storage",
+      "exit_code": 100,
+      "result": "Intended Red: untouched binding allocation changed; 0 passed, 1 failed, 418 skipped",
+      "log": "storage-red.log"
+    },
+    {
+      "command": "rtk cargo nextest run -p scar --lib deferror_scope_tests",
+      "exit_code": 0,
+      "result": "7 passed, 106 skipped",
+      "log": "scope-green.log"
+    },
+    {
+      "command": "rtk cargo nextest run -p scar --lib env::tests",
+      "exit_code": 0,
+      "result": "10 passed, 103 skipped",
+      "log": "env-green.log"
+    },
+    {
+      "command": "rtk cargo nextest run -p scar --lib failed_suffix_preserves_transactional_state_and_explicit_rollback_allows_retry",
+      "exit_code": 0,
+      "result": "1 passed, 109 skipped (before the final 3 env tests were added)",
+      "log": "session-contract.log"
+    },
+    {
+      "command": "rtk cargo nextest run -p scar",
+      "exit_code": 100,
+      "result": "420 passed, 2 timed out after 15 seconds, 0 skipped; overlapped with CI/release builds. Not Green. Same source passed subsequent full CI.",
+      "log": "scar-full.log",
+      "timed_out": [
+        "checker::session::session_contract_tests::full_standard_compile_and_checkpoint_resume_preserve_user_contracts",
+        "common_constructor_invocation_suite"
+      ]
+    },
+    {
+      "command": "rtk cargo nextest run --profile ci --workspace",
+      "exit_code": 0,
+      "result": "2640 passed across 70 binaries; all CI profile tests; subsequent to local timeouts",
+      "log": "workspace-ci.log"
+    },
+    {
+      "command": "CARGO_TARGET_DIR=/tmp/surtr-scar-p3-20261016-103923/after-target rtk proxy cargo run --release --manifest-path /tmp/surtr-scar-p3-20261016-103923/after/Cargo.toml -p rune --bin surtr -- test --quiet --all",
+      "exit_code": 0,
+      "result": "quiet output has no count",
+      "log": "stdlib-tests.log"
+    },
+    {
+      "command": "target/debug/surtr build generic_chain{,_reverse}_{016,032,064}.srt OUTPUT --phase-times-json (six separate commands)",
+      "exit_code": 0,
+      "result": "6 succeeded; ordinary inherited 8176 KiB soft stack; RUST_MIN_STACK unset",
+      "log": "debug-chains.json"
+    },
+    {
+      "command": "rustfmt --check --edition 2021 (four changed Rust files); git diff --check",
+      "exit_code": 0
+    },
+    {
+      "command": "validate relative Markdown links and JSON; verify final compiler source hashes against measured archive",
+      "exit_code": 0,
+      "result": "82 relative links exist; 96 profile cache/phase reports valid; final Rust sources match measured after archive"
+    }
+  ],
+  "not_performed": [
+    "process-warm performance harness",
+    "incremental performance harness",
+    "memory benchmark"
+  ],
+  "versions_changed": false,
+  "commit_created": false,
+  "measurement": {
+    "cases": 24,
+    "iterations_per_condition": 10,
+    "variants": [
+      "before",
+      "after"
+    ],
+    "cache_conditions": [
+      "cold",
+      "disk_hit"
+    ],
+    "completed_runs": 960,
+    "exit_code": 0,
+    "profiler_enabled": false,
+    "profile_separate_runs": 96,
+    "profile_separate_exit_code": 0,
+    "profile_child_spawn_summary_rows": 66,
+    "profile_rows_without_summary": 30,
+    "profile_summary_threshold_ms": 5
+  },
+  "independent_review": {
+    "agent": "/root/p3_review",
+    "status": "Final production diff reviewed; no unresolved findings.",
+    "performance": "960 rows, 96 groups x 10 repetitions, all 1344 phase statistics independently recomputed; cache conditions, alternating order and 10% adoption threshold verified.",
+    "source": "Final four Rust files match saved measured after source.",
+    "documentation": "Profile summary visibility corrected: 66 rows report child_spawn=0; 30 rows omit summaries below the 5ms Scar threshold."
+  }
+}

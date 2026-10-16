@@ -6,7 +6,7 @@
 
 追加依頼で、以下の候補に対応する複数の測定入力を整備した。[入力一覧](../../tests/profile/scar_compile/README.md) と [検証記録](05_compile_inputs.md) を参照。
 
-**2026-10-16の実施:** P1に続きP2a / P2bを実装した。P1の全24入力・各条件10回の比較とdebug stack修正は [06_deferror_scope.md](06_deferror_scope.md)、P2のsummary共有・逆辺worklist・trait前宣言の局所化と同条件960回の比較は [07_specialization_predeclare.md](07_specialization_predeclare.md) を参照。以下のP1 / P2のコード説明は調査時点の挙動である。P3 / P4は未実施。
+**2026-10-16の実施:** P1に続きP2a / P2bを実装した。P1の全24入力・各条件10回の比較とdebug stack修正は [06_deferror_scope.md](06_deferror_scope.md)、P2のsummary共有・逆辺worklist・trait前宣言の局所化と同条件960回の比較は [07_specialization_predeclare.md](07_specialization_predeclare.md) を参照。P3の変数表複製削減は [08_state_copy.md](08_state_copy.md) に記録する。以下のP1 / P2のコード説明は調査時点の挙動である。P4は未実施。
 
 ## 1. 最初に測るもの
 
@@ -133,17 +133,17 @@ method type list/where 制約、重複・曖昧性・循環の拒否を保つ。
 
 ### P3: 子 Checker と session の状態複製
 
-[Checker](../../crates/scar/src/checker/mod.rs) の `spawn_child_checker` は
+[Checker state](../../crates/scar/src/checker/state.rs) の `spawn_child_checker` は
 `persistent_state_with_env` に加えて substitutions、pending obligations、active capabilities などを clone する。
-`absorb_child_progress` は子の substitutions / bounds などを親へ clone して戻す。
+調査時点の `absorb_child_progress` は子の substitutions / bounds などを親へ clone して戻していたが、P1で削除済みである。
 一部 metadata の値は `Arc` で共有されるが、外側の `HashMap` や推論状態のコピーは残る。
 
 調査時の child 作成は `check_deferror_def` と `trait_dependency_for_requirement` の probe に残っていた。
-P1実施後は後者のprobeを維持し、前者を専用scopeへ置き換えた。変数表の保存cloneは残している。
+P1実施後は後者のprobeを維持し、前者を専用scopeへ置き換えた。P3では、この専用scopeに残った変数表の保存cloneを差分undoへ置き換えた。
 通常関数・match arm・closure は既に `push_var_scope` / `pop_var_scope` を使うため、
 これらの child 廃止を新規案にはしない。既存 scope 内の保存・復元にもコピーがある場合は別に測る。
-`child_checker_spawn` / `child_checker_absorb` が支配的な入力を先に選び、
-残る二経路のうち、親へ戻す状態が明確な一経路だけを対象に所有権の移動または変更差分の返却を検討する。
+P3の選定では、P2後の成功入力のprofile summaryに出力された `child_spawn` はすべて0だった。そこで `deferror` の変数表cloneを局所計時し、
+全コピーの費用を確認した一経路だけを変更差分の記録へ置き換えた。残る子Checkerは失敗診断用probeとして維持する。
 一括して全 Checker を可変共有にする案は、分岐の推論・warning・capability 消費が漏れるため採らない。
 
 session の transactional API にある clone は失敗時に state を保つための契約である。
@@ -291,5 +291,5 @@ SURTR_SCAR_PROFILE=1 SURTR_STDLIB_CACHE_DIR="$measure_dir/generic_extractor_spec
 4. 最初の実装は一回の compile 呼び出し内に閉じた改善を優先する。
 5. 採用条件を満たしてから、session をまたぐ summary 保持や状態表現の変更を別仕様にする。
 
-P1とP2a / P2bは実装・検証・性能比較済み。それぞれ規模別入力も含む全24入口を各条件10回測定した。P2の正順64段の10%目安は未達であり、逆順の改善・処理量・代表入力の比較を合わせた採用判断を実施記録に示した。P3 / P4とprocess warm / incremental専用harnessは未実施である。
+P1、P2a / P2b、P3は実装・検証・性能比較済み。それぞれ規模別入力も含む全24入口を各条件10回測定した。P2の正順64段の10%目安は未達であり、逆順の改善・処理量・代表入力の比較を合わせた採用判断を実施記録に示した。P3はError 256宣言のdisk-hit typecheckを78.61%、小入力coldのcompile totalを19.72%短縮した。条件と全件検証は [08_state_copy.md](08_state_copy.md) に示す。P4とprocess warm / incremental専用harnessは未実施である。
 コードから確認できた反復処理を、まだ確認していない性能効果に読み替えない。

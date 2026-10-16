@@ -1,0 +1,26 @@
+{
+  "variant": "before-profile",
+  "source_base_commit": "ce2fbd3c428fa6ba450344d3302ccad57d20ee43",
+  "base_source_root": "/tmp/surtr-scar-p3-20261016-103923/before",
+  "source_root": "/tmp/surtr-scar-p3-20261016-103923/before-profile",
+  "instrumentation_patch": "--- /tmp/surtr-scar-p3-20261016-103923/before/crates/scar/src/checker/definitions/nominal.rs\t2026-10-16 10:37:00\n+++ /tmp/surtr-scar-p3-20261016-103923/before-profile/crates/scar/src/checker/definitions/nominal.rs\t2026-10-16 10:39:58\n@@ -360,7 +360,11 @@\n         // Normalization of an outer binding intentionally survives ordinary\n         // expression scopes. Keep a private variable-table snapshot here so\n         // only the deferror boundary restores those normalized bindings.\n+        let p3_start = self.profiler.start();\n         let saved_vars = self.env.vars.clone();\n+        if let Some(start) = p3_start {\n+            eprintln!(\"scar-p3 vars_snapshot entries={} elapsed_ns={}\", self.env.vars.len(), start.elapsed().as_nanos());\n+        }\n         let saved_next_tyvar = self.env.next_tyvar;\n         let saved_next_tag = self.env.next_tag;\n         let saved_error_uid = self.error_definition_uid.replace(error_uid);\n",
+  "instrumentation_patch_sha256": "d2447f1109651df5620b09c9cbd1dc67a4a11c0ddf5e904fdfc699eca6d3a580",
+  "binary_sha256": "b4a06af80dc52658287f5e35ab659dcf557c80bfceed8c39301639e987c220f4",
+  "binary": "/tmp/surtr-scar-p3-20261016-103923/before-profile-surtr",
+  "target_dir": "/tmp/surtr-scar-p3-20261016-103923/before-profile-target",
+  "build_command": [
+    "cargo",
+    "build",
+    "--release",
+    "--manifest-path",
+    "/tmp/surtr-scar-p3-20261016-103923/before-profile/Cargo.toml",
+    "-p",
+    "rune",
+    "--bin",
+    "surtr"
+  ],
+  "build_exit_code": 0,
+  "build_log_sha256": "25bee717b90253139315c8f84dfd63c471c1ff6d2389627883159dd34b30fb6d",
+  "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)\nbinary: rustc\ncommit-hash: e408947bfd200af42db322daf0fadfe7e26d3bd1\ncommit-date: 2026-03-25\nhost: aarch64-apple-darwin\nrelease: 1.94.1\nLLVM version: 21.1.8\n",
+  "note": "Only clone itself timed, eprintln after timer; profiler enabled, total time not adoption measurement."
+}
