@@ -1,0 +1,145 @@
+include "./support/my_either.srt"
+import Test
+
+deferror ExtractionFailure(detail: String) {
+  |detail: String|
+  Self(message: detail, detail)
+}
+
+def option_payload(target: Option<Int>) -> Result<Int> {
+  value =? target
+  Ok(value)
+}
+
+def either_payload(target: Either<Error, Int>) -> Result<Int> {
+  value =? target
+  Ok(value)
+}
+
+def my_either_payload(target: MyEither<Error, Int>) -> Result<Int> {
+  value =? target
+  Ok(value)
+}
+
+def generic_payload(target: $F<$T>) -> Result<$T>
+where
+  $F: MonadExtractor
+{
+  value =? target
+  Ok(value)
+}
+
+def nested_option(target: Option<Result<Int>>) -> Result<Result<Int>> {
+  inner: Result<Int> =? target
+  Ok(inner)
+}
+
+def check_units(option: Option<Unit>, either: Either<Error, Unit>) -> Result<Int> {
+  option?
+  either?
+  Ok(7)
+}
+
+def keep_nested_error() -> Result<Int> {
+  nested: Result<Result<Unit>> = Ok(Err(ExtractionFailure("inner")))
+  nested?
+  Ok(7)
+}
+
+def check_nested_results(target: Result<Result<Result<Unit>>>) -> Result<Int> {
+  target?
+  Ok(7)
+}
+
+def keep_option_whole(target: Option<Int>) -> Result<Int> {
+  Option::Some(value) =? Ok(target)
+  Ok(value)
+}
+
+def explicit_my_failure(target: Option<Int>) -> MyEither<Error, Int> {
+  value =? target
+  MyEither::Right(value)
+}
+
+test("MonadExtractor") {
+  it("extracts standard successes with ordinary qualified calls") {
+    do {
+      assert_ok_eq(3, MonadExtractor::extract(Ok(3)))
+      assert_ok_eq(4, MonadExtractor::extract(Option::Some(4)))
+      assert_ok_eq(5, MonadExtractor::extract(Either<Error, Int>::Right(5)))
+      assert_err_kind(NoneError, MonadExtractor::extract(Option<Int>::None))
+    }
+  }
+
+  it("extracts standard and user payloads through SafeBind without an import") {
+    do {
+      assert_ok_eq(7, option_payload(Option::Some(7)))
+      assert_err_kind(NoneError, option_payload(Option<Int>::None))
+      assert_ok_eq(8, either_payload(Either::Right(8)))
+      assert_err_kind(ExtractionFailure, either_payload(Either::Left(ExtractionFailure("left"))))
+      assert_ok_eq(9, my_either_payload(MyEither::Right(9)))
+      assert_err_kind(ExtractionFailure, my_either_payload(MyEither::Left(ExtractionFailure("left"))))
+    }
+  }
+
+  it("uses the declared generic capability and inherited payload slot") {
+    do {
+      assert_ok_eq(7, generic_payload(Option::Some(7)))
+      assert_ok_eq(8, generic_payload(MyEither<Error, Int>::Right(8)))
+      mapped: MyEither<String, String> = MyEither<String, Int>::Right(12) |*> &to_string
+      answer = match mapped { MyEither::Right(value) => value, MyEither::Left(value) => value }
+      assert_eq("12", answer)
+    }
+  }
+
+  it("extracts exactly one layer and permits an explicit whole-value wrapper") {
+    do {
+      result = nested_option(Option::Some(Err(ExtractionFailure("inner"))))
+      message = match Result::flatten(result) { Err(error) => error.message, Ok(_) => "unexpected" }
+      assert_eq("inner", message)
+      assert_ok_eq(3, keep_option_whole(Option::Some(3)))
+      assert_ok_eq(Option::Some(3), MonadExtractor::extract(Ok(Option::Some(3))))
+    }
+  }
+
+  it("keeps extraction independent of the failure target") {
+    do {
+      assert_ok_eq(3, to::<Result>(explicit_my_failure(Option::Some(3))))
+      assert_err_kind(NoneError, to::<Result>(explicit_my_failure(Option<Int>::None)))
+      from_do: Result<Int> = do::<Result> { value =? Option::Some(4); Ok(value) }
+      absent: Option<Int> = do::<Option> { value =? Option<Int>::None; Option::Some(value) }
+      bound: List<Int> = do::<List> { Ok(value) <- [Ok(1), Err(NoneError())]; [value] }
+      assert_ok_eq(4, from_do)
+      assert_eq(Option<Int>::None, absent)
+      assert_eq([1], bound)
+    }
+  }
+
+  it("supports direct Unit payloads and propagates nested Result failures") {
+    do {
+      assert_ok_eq(7, check_units(Option::Some(()), Either::Right(())))
+      assert_err_kind(NoneError, check_units(Option<Unit>::None, Either::Right(())))
+      assert_err_kind(ExtractionFailure, keep_nested_error())
+      assert_ok_eq(7, check_nested_results(Ok(Ok(Ok(())))))
+      assert_err_kind(ExtractionFailure, check_nested_results(Err(ExtractionFailure("outer"))))
+      assert_err_kind(ExtractionFailure, check_nested_results(Ok(Err(ExtractionFailure("middle")))))
+      assert_err_kind(ExtractionFailure, check_nested_results(Ok(Ok(Err(ExtractionFailure("inner"))))))
+    }
+  }
+
+  it("keeps Error details and cause when extracting and converting") {
+    do {
+      source: Result<Int> = Result::cause(Err(NoneError()), ExtractionFailure("retained"))
+      either: Either<Error, Int> = to(source)
+      extracted = MonadExtractor::extract(either)
+      assert_cause_chain([ExtractionFailure, NoneError], extracted)
+      message = match extracted { Err(error) => error.message, Ok(_) => "unexpected" }
+      assert_eq("retained", message)
+      assert_eq(inspect(source), inspect(to::<Result>(source)))
+      assert_eq(inspect(extracted), inspect(to::<Result>(either)))
+      assert_eq(MonadExtractor::extract(Option::Some(3)), to::<Result>(Option::Some(3)))
+      assert_err_kind(NoneError, to::<Result>(Option<Int>::None))
+      assert_ok_eq(4, to::<Result>(MyEither<Error, Int>::Right(4)))
+    }
+  }
+}

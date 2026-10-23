@@ -1,0 +1,64 @@
+defenum Front<$R, $L> {
+  Left($L),
+  Right($R),
+}
+
+impl Functor for Front<$R, $L>
+where
+  $R: Functor.$A
+{
+  def fmap(self: Front<$A, $L>, mapper: ($A -> $B)) -> Front<$B, $L> {
+    match self {
+      Front::Left(left) => Front::Left(left),
+      Front::Right(value) => Front::Right(mapper(value)),
+    }
+  }
+}
+
+impl Applicative for Front<$R, $L> {
+  def pure::<Front<$R, $L>>(value: $A) -> Front<$A, $L> { Front::Right(value) }
+  def ap(mapper: Front<($A -> $B), $L>, value: Front<$A, $L>) -> Front<$B, $L> {
+    match mapper {
+      Front::Left(left) => Front::Left(left),
+      Front::Right(fun) => Functor::fmap(value, fun),
+    }
+  }
+}
+
+impl Monad for Front<$R, $L> {
+  def return::<Front<$R, $L>>(value: $A) -> Front<$A, $L> { Front::Right(value) }
+  def bind(self: Front<$A, $L>, mapper: ($A -> Front<$B, $L>)) -> Front<$B, $L> {
+    match self {
+      Front::Left(left) => Front::Left(left),
+      Front::Right(value) => mapper(value),
+    }
+  }
+}
+
+impl MonadExtractor for Front<$R, String> {
+  def extract(self: Front<$A, String>) -> Result<$A> {
+    match self {
+      Front::Left(_) => Err(NoneError()),
+      Front::Right(value) => Ok(value),
+    }
+  }
+}
+
+def relay(target: $F<$T>) -> Result<$T>
+where
+  $F: MonadExtractor
+{
+  value =? target
+  Ok(value)
+}
+
+def run() -> Result<Int> {
+  value: Int =? Front<Int, String>::Right(7)
+  unit: Front<Unit, String> = Front::Right(())
+  unit?
+  Ok(value)
+}
+
+print(inspect(run()))
+print(inspect(relay(Front<Int, String>::Right(8))))
+print(inspect(MonadExtractor::extract(Front<Int, String>::Left("absent"))))

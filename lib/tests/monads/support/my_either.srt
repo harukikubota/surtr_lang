@@ -1,0 +1,63 @@
+defenum MyEither<$L, $R> {
+  Left($L),
+  Right($R),
+}
+
+impl Functor for MyEither<$L, $R>
+where
+  $R: Functor.$A
+{
+  def fmap(self: MyEither<$L, $A>, mapper: ($A -> $B)) -> MyEither<$L, $B> {
+    match self {
+      MyEither::Left(left) => MyEither::Left(left),
+      MyEither::Right(value) => MyEither::Right(mapper(value)),
+    }
+  }
+}
+
+impl Applicative for MyEither<$L, $R> {
+  def pure::<MyEither<$L, $R>>(value: $A) -> MyEither<$L, $A> {
+    MyEither::Right(value)
+  }
+
+  def ap(mapper: MyEither<$L, ($A -> $B)>, value: MyEither<$L, $A>) -> MyEither<$L, $B> {
+    match mapper {
+      MyEither::Left(left) => MyEither::Left(left),
+      MyEither::Right(fun) => Functor::fmap(value, fun),
+    }
+  }
+}
+
+impl Monad for MyEither<$L, $R> {
+  def return::<MyEither<$L, $R>>(value: $A) -> MyEither<$L, $A> {
+    MyEither::Right(value)
+  }
+
+  def bind(self: MyEither<$L, $A>, mapper: ($A -> MyEither<$L, $B>)) -> MyEither<$L, $B> {
+    match self {
+      MyEither::Left(left) => MyEither::Left(left),
+      MyEither::Right(value) => mapper(value),
+    }
+  }
+}
+
+impl MonadExtractor for MyEither<Error, $R> {
+  def extract(self: MyEither<Error, $A>) -> Result<$A> {
+    match self {
+      MyEither::Left(error) => Err(error),
+      MyEither::Right(value) => Ok(value),
+    }
+  }
+}
+
+impl MonadFail for MyEither<Error, $R> {
+  def fail::<MyEither<Error, $R>>(error: Error) -> MyEither<Error, $R> {
+    MyEither::Left(error)
+  }
+}
+
+impl Convert<Result<$A>> for MyEither<Error, $A> {
+  def to::<Result<$A>>(self: Self) -> Result<$A> {
+    MonadExtractor::extract(self)
+  }
+}

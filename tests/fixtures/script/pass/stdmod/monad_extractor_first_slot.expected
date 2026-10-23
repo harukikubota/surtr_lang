@@ -1,0 +1,3 @@
+Ok(7)
+Ok(8)
+Err(NoneError("None Value."))
