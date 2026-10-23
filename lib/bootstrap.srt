@@ -141,8 +141,8 @@ defmod Bootstrap {
   The REPL accepts the syntax, reports the resulting error message, and keeps
   the session alive.
 
-  `=?` evaluates the right-hand side once. A canonical `Result` RHS is
-  decomposed by one outer layer only, and its `Ok` payload is passed to the
+  `=?` evaluates the right-hand side once. An RHS implementing MonadExtractor is
+  extracted through MonadExtractor once, and the returned Result's `Ok` payload is passed to the
   left-hand MatchBlock pattern. If it produces `Err(error)`, that value is
   propagated to the current failure target. Extractor `MatchResult::Err(error)`
   preserves the original error. Each literal, pin, or variant mismatch produces its specific Error; structural
@@ -151,14 +151,13 @@ defmod Bootstrap {
   Alternative target discards it and returns `empty`.
 
   `=?` is not a trait-dispatched operator.
-  A non-Result RHS is passed through unchanged only for a partial MatchBlock
-  pattern that can fail by inspecting the whole value. It is never implicitly
-  unwrapped as a Monad. A total pattern with a non-Result RHS is a compile
-  error, whether or not that RHS implements `Monad`.
+  An RHS with MonadExtractor is extracted independently of the left-hand
+  Pattern. A type without this implementation is passed through unchanged
+  only for a partial Pattern that inspects the whole value. Total whole-value
+  bindings use `=`; decomposing an unsupported Monad requires MonadExtractor.
 
-  `Option::Some(num) =? Option::Some(1)` explicitly inspects the whole Option
-  and binds `num`. `num =? Option::Some(1)` is invalid because the total
-  pattern does not make the required partial inspection explicit.
+  `num =? Option::Some(1)` binds the Some payload. To inspect an Option as a
+  whole explicitly, write `Option::Some(num) =? Ok(Option::Some(1))`.
 
   The left-hand side may use structural pattern matching such as `uncons`,
   list/string decomposition, and literal matching.
@@ -172,16 +171,16 @@ defmod Bootstrap {
   value: Int =? try_to::<Int>("1")
   [head, ..tail] =? [1, 2, 3]
   [first, ..rest] =? "source"
-  Option::Some(saved) =? Option::Some(1)
+  saved =? Option::Some(1)
 
   ## Notes
   - `=?` returns `()`
   - outside `do`, `=?` requires a return type implementing MonadFail
   - inside `do`, the current carrier may instead provide an Alternative target
-  - only a canonical `Result` RHS is decomposed, by one outer layer
+  - MonadExtractor is called once; nested payloads are not extracted again
   - RHS `Err(...)` is propagated to the current failure target
   - Extractor `MatchResult::Err` preserves its Error; each mismatch uses its specific Error; structural pattern errors keep their kind
-  - a non-Result RHS requires a partial pattern that inspects the whole value
+  - a type without MonadExtractor requires a partial pattern that inspects the whole value
   """
   @intrinsic def =?(pattern: $Pattern, value: $A) -> Unit
 
@@ -289,8 +288,14 @@ defmod Bootstrap {
   Sequence values in one Monad carrier.
   The carrier may be supplied with `do::<Carrier>`, inferred from the block,
   or obtained from the expected block type.
-  Inside `do`, SafeBind unwraps one outer Result layer only. Partial patterns may
-  inspect other RHS values unchanged; total patterns reject non-Result RHS values.
+  Inside `do`, SafeBind uses the same MonadExtractor input contract as ordinary
+  functions. It processes one Result layer returned by extract. Unsupported
+  inputs may be inspected whole by partial Patterns; total whole-value
+  bindings use `=`. The RHS does not determine the do carrier.
+  Statement-final `?` checks a canonical Result chain until reaching Err or
+  Unit. An Err at any layer uses the same do-local failure target; continuation
+  runs only when every layer is Ok and the terminal value is Unit. Non-Result
+  inputs still require a direct Unit payload.
   Failure contexts resolve as MonadFail, then Alternative, then Monad.
   MonadFail carriers preserve SafeBind and
   failure-matcher errors. Carriers without MonadFail use Alternative::empty;

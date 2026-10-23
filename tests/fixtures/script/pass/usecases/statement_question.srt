@@ -15,9 +15,9 @@ def stop(value: Result<()>) -> Result<Int> {
   Ok(0)
 }
 
-def outer_only(value: Result<Result<()>>) -> Result<()> {
+def check_nested(value: Result<Result<()>>) -> Result<()> {
   value?
-  print("outer-success")
+  print("nested-success")
   Ok(())
 }
 
@@ -46,7 +46,8 @@ def do_target() -> Int {
 
 print(inspect(sequence()))
 print(inspect(stop(Err(NoneError()))))
-print(inspect(outer_only(Ok(Err(NoneError())))))
-print(inspect(outer_only(Err(NoneError()))))
+print(inspect(check_nested(Ok(Ok(())))))
+print(inspect(check_nested(Ok(Err(NoneError())))))
+print(inspect(check_nested(Err(NoneError()))))
 print(inspect(nested_target()))
 print(to_string(do_target()))

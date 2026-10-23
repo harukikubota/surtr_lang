@@ -136,7 +136,7 @@ ParseError、ResolveError、TypeError、CodegenError と VM 内部不整合は�
 
 ErrorKind は変数・引数・戻り値・Tuple・List・field・closure で運搬できる。公開 field、constructor、Eq / Show、利用者 Trait impl、String や Error からの変換、ErrorKind からの動的 Error 構築は提供しない。`inspect` は `ErrorKind(canonical qualified name)` と表示し、container 内も同じ規則に従う。`Error::is_kind(error, kind)` は canonical identity の一致を Boolean で返し、局所具象情報を付けない。Pattern head、型位置、readonly Facet root、`&NoneError` の constructor capture はそれぞれの既存規則を維持する。
 
-`MonadRecover: MonadFail` は保持した Error による回復を表す。`recover(self: Self, handler: (Error -> Self)) -> Self` は失敗時だけ handler 本体を呼び、成功値と handler の再失敗をそのまま返す。`recover_kind` は recover、is_kind、fail の合成であり、不一致時は元 Error を再構築せず伝播する。初回の標準実装は Result のみ。引数の kind / handler を生成する式は通常の eager 評価であり、SafeBind の failure target と Result 専用 RHS アンラップは変更しない。
+`MonadRecover: MonadFail` は保持した Error による回復を表す。`recover(self: Self, handler: (Error -> Self)) -> Self` は失敗時だけ handler 本体を呼び、成功値と handler の再失敗をそのまま返す。`recover_kind` は recover、is_kind、fail の合成であり、不一致時は元 Error を再構築せず伝播する。初回の標準実装は Result のみ。引数の kind / handler を生成する式は通常の eager 評価であり、SafeBind の failure target と MonadExtractor による RHS 分解は独立した契約として扱う。
 
 ## 7. 生成位置と情報の保持
 
@@ -145,6 +145,14 @@ Error の主キャプションは生成位置を指す。明示的な構築で�
 コンストラクタ実行には生成元の source ID / span を渡し、`deferror` 宣言や内部 `Self` の位置で上書きしない。Source map の確定位置を使い、表示文、Error 名、carrier 名から位置を推測しない。module と REPL でも同じ規則を使い、REPL の後続入力から呼び出した定義は元入力の位置を保持する。
 
 引数渡し、`Err` / `MatchResult::Err` への再格納、返却、SafeBind、MonadFail context の partial `<-` は、元の kind・message・Payload・location・cause・diagnostic・stack trace を再生成しない。Extractor の Err や既存 Error を親の汎用 Pattern Error で上書きしない。Extractor 成功後の子 Pattern が失敗した場合は、その子自身の失敗を使う。
+
+SafeBind は canonical MonadExtractor の通常呼出しが返した Result を外側一段だけ処理する。RHS が Result でも標準 impl を迂回しない。成功値に含まれる失敗や子 Pattern に自動分解を再適用しない。
+
+文末 `?` は、元の RHS が canonical Result のとき Result の連鎖を再帰的に判定し、どの層でも Err に達したらその元 Error を現在の失敗先へ渡す。全層が Ok で Unit に到達した場合だけ後続へ進む。非 Result の payload は直接 Unit を要求し、内側の Result へ再帰する入力にはしない。
+
+標準の Result / Either<Error, A> の extract と、文末 `?` の各層からの伝播は、既存 Error の kind・message・Payload・location・cause・diagnostic・stack trace を保持する。Option の None は `NoneError()` を通常どおり生成し、その後の伝播で生成位置を上書きしない。
+
+MonadExtractor は値から Result への分解、MonadFail は Error を受け取る失敗返却先であり、相互に能力を付与しない。ユーザー型は Error 以外の値から具体 Error を生成する extract を明示実装できるが、既存 Error を受け取る fail の保持契約とは区別する。入力分解の不足と失敗返却先の不足は別の診断にする。
 
 新しい Error で wrap する場合は、新しい構築位置を使い、元 Error を cause に保持する。cause は線形 chain とし、各操作の連結・置換は標準 API の規則に従う。stack trace は呼出し経路を示し、先頭 frame で生成位置を代用しない。
 

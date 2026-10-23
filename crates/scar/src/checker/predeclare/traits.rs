@@ -1671,6 +1671,8 @@ impl Checker {
                 id: id.clone(),
                 compiler_owned_failure: self.enforce_builtin_type_contracts
                     && trait_key == "MonadFail",
+                compiler_owned_extraction: self.enforce_builtin_type_contracts
+                    && trait_key == "MonadExtractor",
                 compiler_owned_equality: self.enforce_builtin_type_contracts
                     && id.name == "Eq"
                     && trait_key == "Eq",
@@ -1689,6 +1691,17 @@ impl Checker {
 
         if declared_trait {
             self.resolve_trait_constraint_closure()?;
+            for statement in stmts {
+                if let Resolved::TraitDef(span, id, ..) = statement {
+                    if self
+                        .traits
+                        .get(&self.trait_key(id))
+                        .is_some_and(|info| info.compiler_owned_extraction)
+                    {
+                        self.canonical_monad_extractor_key(span)?;
+                    }
+                }
+            }
 
             // Trait helpers participate in the same canonical callable
             // registry as user functions and non-intrinsic builtins. Resolve

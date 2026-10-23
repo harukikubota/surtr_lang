@@ -2662,6 +2662,7 @@ mod tests {
             },
             compiler_owned_equality: false,
             compiler_owned_failure: false,
+            compiler_owned_extraction: false,
             standard_lazy_contract: false,
             type_params: Vec::new(),
             where_clause: None,

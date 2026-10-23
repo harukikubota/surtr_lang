@@ -61,6 +61,22 @@ Pattern は照合・分解・束縛を記述する構文であり、PatternConsu
 
 Error Pattern は `match`、`if_let`、`if_let_then`、束縛なしの `is_match` に限る。その他の利用位置では拒否する。失敗先の保持・破棄は [consumer の成功・失敗 policy](#consumer-の成功・失敗-policy)、do と SafeBind の詳細は [do intrinsic](./Do_intrinsic_spec.md)、`match` の被覆判定は [網羅性解析の範囲](#match-の網羅性解析の範囲) に従う。
 
+## SafeBind の RHS 分解と Pattern 照合
+
+SafeBind は RHS の型・宣言済み能力が canonical MonadExtractor を満たすとき、RHS の一度の評価に続いて通常の `MonadExtractor::extract` を一度呼ぶ。返った Result の Err は Pattern を評価せず失敗先へ渡し、Ok は成功値全体を LHS に渡す。通常関数・Extractor 本文・do 内で同じ入力規則を使い、失敗返却先だけを context に従って決める。
+
+分解は一段であり、成功値が Result / Option / Either / ユーザー型でも再分解しない。子 Pattern にも extract を適用しない。分解後の Pattern 型検査に失敗しても元 RHS 全体へ戻らず、LHS の total / partial によって分解の有無を変えない。
+
+例えば `Option::Some(value) =? Option::Some(1)` は分解後の Int と Option Pattern の不一致で拒否し、`Option::Some(value) =? Option::Some(Option::Some(1))` は内側の Option を照合する。値全体を照合するには `match`、`apply_pattern`、または `Option::Some(value) =? Ok(option)` のように明示した既存の式を使う。
+
+MonadExtractor 未実装が確定した型は元の値全体を入力とし、全体に適合する partial Pattern を受理する。全体を受け取る total Pattern は拒否して `=` を案内する。未注釈 total 束縛に対する Monad の mapped payload、および全体とは不整合で直下 payload に対応する LHS 入力要求は、分解入口不足の診断に使う。診断のために元 RHS と payload で Pattern 全体を二度検査しない。
+
+外側の入力関係が成立した後の子、構造・引数数・事前引数、pin の Eq、禁止位置の診断を分解入口不足へ置き換えない。対応型を一段分解した後の型不一致も通常の Pattern 診断とする。入力診断の優先関係・source facts は [diagnostics](diagnostics.md)、評価・文末 `?`・failure target は [do intrinsic](Do_intrinsic_spec.md) に従う。
+
+文末 `?` は Pattern 照合を伴わず、元の RHS が canonical Result の場合に限り Result の連鎖を Err または Unit まで再帰的に判定する。各層の Err は同じ現在の失敗先へ渡す。この規則を通常の SafeBind の成功値や子 Pattern へ適用しない。
+
+`<-` は `Monad::bind` が渡す payload 全体をそのまま照合し、MonadExtractor を呼ばない。
+
 ## Record の構造的 Pattern
 
 `defrecord User(name: String, age: Int)` の `User(name, age)` は compiler-owned な構造的 Pattern として分解する。各 Record 項目列に keyword 指定がなければ positional、keyword 指定が一つ以上あれば named と確定する。入れ子の子にある keyword は外側の分類に影響しない。named から positional へ戻すフォールバックは設けない。
@@ -89,7 +105,7 @@ Record の外枠は total である。子もすべて total の場合だけ通�
 | `apply_pattern` | projection の Ok | 元 Error を保持した Err |
 | do partial `<-` | bind の payload を照合して続行 | do-local failure target |
 
-SafeBind の RHS は canonical Result の外側一段だけを射影する。RHS が Err ならキーを検査せず、元 Error を失敗先へ渡す。non-Result の HashMap は全体を照合し、partial Pattern のみ受理する。空 Pattern の SafeBind は `Result<HashMap<V>>` には使えるが、non-Result の HashMap には使えない。キーや map 内の Result 値を自動 unwrap しない。`hash!["a" => x]` は値全体を束縛し、`hash!["a" => Ok(x)]` は Ok payload を照合する。後者に Err があれば constructor 不一致になる。
+SafeBind は [RHS 分解と Pattern 照合](#safebind-の-rhs-分解と-pattern-照合) に従う。extract が Err を返した場合はキーを検査せず元 Error を失敗先へ渡す。MonadExtractor 未実装の HashMap は全体を照合し、partial Pattern のみ受理する。空 Pattern は HashMap を成功値として取り出す対応型には使えるが、未実装の HashMap 全体への total 束縛には使えない。キーや map 内の値を自動分解しない。`hash!["a" => x]` は値全体を束縛し、`hash!["a" => Ok(x)]` は Ok payload を照合する。後者に Err があれば constructor 不一致になる。
 
 失敗先は通常 callable の返り型の MonadFail、do 内の `MonadFail > Alternative > Monad`、do 外の Extractor / ExtractorClosure 本文の compiler-owned MatchResult target に従う。Alternative による失敗では Error を破棄して empty へ進む。
 
@@ -265,7 +281,7 @@ apply_pattern("123", decimal(_1: Int))
 ```
 
 - 生成時には callable 値を受け取って capture し、`f` の本体は実行しない。生成した ExtractorClosure の occurrence に到達した時点で、照合対象値を渡して `f` を一回実行する。
-- Result の外側一段だけを SafeBind で射影し、Ok payload をそのまま MatchResult::Ok へ渡す。Err は kind / message / Payload / location / cause を保持して MatchResult::Err へ伝播する。payload 自体が Result でも再帰的に unwrap しない。
+- SafeBind で通常の MonadExtractor::extract を呼び、返った Result の外側一段を処理する。Ok payload をそのまま MatchResult::Ok へ渡し、Err は kind / message / Payload / location / cause を保持して MatchResult::Err へ伝播する。payload 自体が対応型でも再分解しない。
 - `$A` / `$B` は入力 callable と通常推論から定まる。成功 payload を Unit や固定した共通型へ変更せず、単値 / tuple / Unit の子 Pattern 規則をそのまま適用する。
 - 生成結果は事前引数なしの ExtractorClosure であり、通常の変数または helper 引数へ束縛して Pattern head に使う。生成式を Pattern head に直接埋め込むことや、生成結果の通常 call は許可しない。
 - 複数入力の通常関数を使う場合、必要な値を capture した単一入力の通常 Closure を利用者が明示的に渡す。from_result に可変 arity や暗黙の partial application を追加しない。
@@ -428,11 +444,11 @@ do 外の Extractor / ExtractorClosure 本文では、その本文の MatchResul
 
 | failure の起点 | 本文からの早期 return |
 |---|---|
-| RHS の canonical Err(error) | MatchResult::Err(error) |
+| RHS の extract が返す canonical Err(error) | MatchResult::Err(error) |
 | LHS 内の Extractor / ExtractorClosure の Err(error) | MatchResult::Err(error) |
 | literal / constructor / list shape 等の通常不一致 | 既存 Pattern Error を持つ MatchResult::Err |
 
-RHS が canonical Result の場合は外側一段だけ射影し、Ok payload を通常 Pattern checker へ渡す。non-Result RHS は値全体を渡し、通常型検査を通った partial Pattern だけを許可する。total non-Result の既存拒否分類、通常 Pattern エラーの優先順位は維持する。
+RHS の分解と照合は [SafeBind の共通規則](#safebind-の-rhs-分解と-pattern-照合) に従う。MonadExtractor の成功値全体、または未実装の元 RHS 全体を通常 Pattern checker へ渡す。分解入口不足、非分解の total 束縛、通常 Pattern エラーを区別する。
 
 `=?` 自体の結果型は Unit であり、成功時は全照合成功後に束縛して続行する。failure では後続の式を評価しない。RHS / Pattern の Error 値をそのまま保持し、message や cause を再構成しない。
 
@@ -603,7 +619,7 @@ Forge の内部契約エラーとして拒否する。`apply_pattern` の Result
 8. input / RHS、到達した事前引数、本体の一回評価、到達しない occurrence の未評価、nested failure 後の短絡、全成功後だけの bind / projection 公開を確認する。
 9. match / if_let / if_let_then / is_match が Err を破棄し、apply_pattern が実際に失敗した Extractor の Error を保持する。OK 後の子 Pattern 不一致は既存 Pattern Error になる。
 10. 通常 Result target と MatchResult 本文 target の SafeBind が RHS Result.Err、LHS Extractor.Err、nested Err、通常 Pattern Error の kind / message / Payload / location / cause を保持して早期 return する。失敗後の本文は未評価で、成功終端には明示 constructor を必要とする。
-11. Result RHS は外側一段だけ射影する。non-Result partial pass-through、total non-Result 拒否と型エラー優先を維持する。apply_pattern は Result input を自動射影しない。
+11. MonadExtractor の解決済み通常呼出し後に Result の外側一段だけを処理する。未実装型の全体 partial 照合、全体 total 拒否、分解入口不足と通常 Pattern エラーの区別を確認する。成功値と子を再分解せず、apply_pattern も入力を自動分解しない。
 12. nested 通常 Closure / ExtractorClosure / do の failure target が最も近い正しい境界を指す。do の MonadFail による保存、Alternative empty、Monad 単独拒否、REPL Error 表示と継続を維持する。
 13. 通常 bind が外へ漏れず、事前引数 / pin は同じ Pattern 内の新規 bind を参照しない。OR は match / if_let / if_let_then で各 alternative の binding 名・canonical 型・個数の Set が一致する場合に許可する。空 list の OR も同じ規則で扱う。if_let 系は全候補失敗時だけ fallback に進み、網羅性要求を持たない。is_match は OR を許可するが全 alternative の binding を拒否する。`=` / `=?`、do binding、apply_pattern は bind 数にかかわらず OR を拒否する。予約語 shadowing 拒否、Regex::matches の qualified 通常 call / capture と旧名の拒否、pipe と projection の分離、通常 Expr 内の _N 残存と宣言 / bind / shadow の拒否が成立する。
 14. list / string uncons の成功と空入力 Error、builtin / user-defined / local の consumer 一貫性、不正 tag / metadata の内部 failure を検証する。

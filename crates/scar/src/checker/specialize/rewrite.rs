@@ -29,6 +29,7 @@ impl Checker {
         )?;
         let pattern_input_ty = match &projection {
             SafeBindRhsProjection::CanonicalResultOnce { payload_ty, .. } => payload_ty,
+            SafeBindRhsProjection::CanonicalResultUnitChain { .. } => &Ty::Unit,
             SafeBindRhsProjection::PatternInput { pattern_input_ty } => pattern_input_ty,
         };
         let pattern = self.concretize_specialized_typed_pattern(
@@ -1004,6 +1005,7 @@ impl Checker {
                 )?;
                 let pattern_input_ty = match &projection {
                     SafeBindRhsProjection::CanonicalResultOnce { payload_ty, .. } => payload_ty,
+                    SafeBindRhsProjection::CanonicalResultUnitChain { .. } => &Ty::Unit,
                     SafeBindRhsProjection::PatternInput { pattern_input_ty } => pattern_input_ty,
                 };
                 let pattern = self.concretize_specialized_typed_pattern(

@@ -4462,6 +4462,57 @@ mod tests {
     }
 
     #[test]
+    fn statement_question_result_chain_checks_each_layer_and_rejects_invalid_ir() {
+        fn result(payload: Ty) -> Ty {
+            Ty::Result(Box::new(payload), Box::new(Ty::Error))
+        }
+        for (rhs_ty, depth, valid) in [
+            (result(Ty::Unit), 0, false),
+            (result(Ty::Unit), 2, false),
+            (result(result(Ty::Unit)), 1, false),
+            (result(Ty::Int), 1, false),
+            (result(result(result(Ty::Unit))), 3, true),
+        ] {
+            let mut gene = Codegen::new();
+            gene.state.slot_map.insert(40, 0);
+            gene.state.next_slot = 1;
+            let mut node = TypedNode {
+                ty: Ty::Unit,
+                span: span(1, 12),
+                node: TypedInner::SafeBind(
+                    TypedPattern::Wildcard(Ty::Unit),
+                    Box::new(local_var("value", 40, rhs_ty)),
+                    SafeBindRhsProjection::CanonicalResultUnitChain { depth },
+                    SafeBindFailureTarget::TopLevel,
+                ),
+            };
+            locate_test_consumer(&mut node);
+            let emitted = gene.emit_node(&node);
+            if !valid {
+                let error = emitted.expect_err("invalid question chain metadata must be rejected");
+                assert!(
+                    error.message.contains("statement `?` Result chain"),
+                    "{error:?}"
+                );
+                continue;
+            }
+            emitted.expect("the static Result chain must lower");
+            let (opcodes, _) = gene.finalize().expect("labels must resolve");
+            let eprint = Codegen::builtin_id("eprint").unwrap();
+            assert_eq!(
+                opcodes
+                    .iter()
+                    .filter(|opcode| matches!(opcode,
+                        Opcode::CallBuiltin { builtin_id, arity: 1, .. } if *builtin_id == eprint
+                    ))
+                    .count(),
+                depth,
+                "every Result layer must retain a reachable failure path"
+            );
+        }
+    }
+
+    #[test]
     fn emit_exact_list_safebind_long_failure_uses_list_len_opcode() {
         let mut gene = Codegen::new();
         seed_error_definitions(&mut gene);
@@ -10505,29 +10556,44 @@ impl Codegen {
         let input_slot = self.state.next_slot;
         self.state.next_slot += 1;
         self.emit(Opcode::StoreLocal(input_slot));
-        let payload_slot = match projection {
-            SafeBindRhsProjection::PatternInput { .. } => input_slot,
-            SafeBindRhsProjection::CanonicalResultOnce { .. } => {
-                if !matches!(rhs.ty, Ty::Result(_, _)) {
-                    return Err(CodegenError { message: "Internal invariant broken: Result SafeBind projection received non-Result RHS".into(), span: rhs.span.clone() });
+        let result_depth = match projection {
+            SafeBindRhsProjection::PatternInput { .. } => 0,
+            SafeBindRhsProjection::CanonicalResultOnce { .. } => 1,
+            SafeBindRhsProjection::CanonicalResultUnitChain { depth } => {
+                let mut terminal = &rhs.ty;
+                for _ in 0..*depth {
+                    let Ty::Result(payload, _) = terminal else {
+                        return Err(CodegenError { message: "Internal invariant broken: statement `?` Result chain depth does not match RHS".into(), span: rhs.span.clone() });
+                    };
+                    terminal = payload;
                 }
-                self.emit(Opcode::LoadLocal(input_slot));
-                self.emit(Opcode::GetTag);
-                let err_tag = self.add_constant(Constant::Tag(1));
-                self.emit(Opcode::LoadConst(err_tag));
-                self.emit(Opcode::EqTag);
-                let ok_path = self.fresh_label();
-                self.emit_jump_if_false(ok_path);
-                self.emit_propagate_result_from_local(input_slot, rhs.span.clone())?;
-                self.patch_label(ok_path);
-                self.emit(Opcode::LoadLocal(input_slot));
-                self.emit(Opcode::GetField { field_index: 0 });
-                let slot = self.state.next_slot;
-                self.state.next_slot += 1;
-                self.emit(Opcode::StoreLocal(slot));
-                slot
+                if *depth == 0 || terminal != &Ty::Unit {
+                    return Err(CodegenError { message: "Internal invariant broken: statement `?` Result chain must terminate at Unit with positive depth".into(), span: rhs.span.clone() });
+                }
+                *depth
             }
         };
+        let mut payload_slot = input_slot;
+        for _ in 0..result_depth {
+            if !matches!(rhs.ty, Ty::Result(_, _)) {
+                return Err(CodegenError { message: "Internal invariant broken: Result SafeBind projection received non-Result RHS".into(), span: rhs.span.clone() });
+            }
+            self.emit(Opcode::LoadLocal(payload_slot));
+            self.emit(Opcode::GetTag);
+            let err_tag = self.add_constant(Constant::Tag(1));
+            self.emit(Opcode::LoadConst(err_tag));
+            self.emit(Opcode::EqTag);
+            let ok_path = self.fresh_label();
+            self.emit_jump_if_false(ok_path);
+            self.emit_propagate_result_from_local(payload_slot, rhs.span.clone())?;
+            self.patch_label(ok_path);
+            self.emit(Opcode::LoadLocal(payload_slot));
+            self.emit(Opcode::GetField { field_index: 0 });
+            let slot = self.state.next_slot;
+            self.state.next_slot += 1;
+            self.emit(Opcode::StoreLocal(slot));
+            payload_slot = slot;
+        }
         let pattern_fail = self.fresh_label();
         let decomp =
             self.emit_pattern_test_from_local(pat, payload_slot, pattern_fail, pattern_span)?;

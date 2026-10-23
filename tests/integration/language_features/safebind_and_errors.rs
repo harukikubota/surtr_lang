@@ -606,14 +606,14 @@ print(inspect(Identity::run(ResultT::run(result))))"#,
 fn safebind_rejects_total_plain_rhs() {
     assert_compile_error(
         "num =? 10",
-        "Int is not a SafeBind target; it is not a Monad, and only a Result RHS can be decomposed by `=?`.",
+        "A total Pattern cannot use `=?` to bind the whole Int value.",
     );
 }
 
 fn safebind_partial_option_constructor_checks_the_whole_rhs() {
     assert_output(
         r#"value: Option<Int> = Option::Some(1)
-Option::Some(num) =? value
+Option::Some(num) =? Ok(value)
 print(to_string(num))"#,
         &["1"],
     );
@@ -622,7 +622,7 @@ print(to_string(num))"#,
 fn safebind_partial_option_none_constructor_checks_the_whole_rhs() {
     assert_output(
         r#"value: Option<Int> = Option::None
-Option::None =? value
+Option::None =? Ok(value)
 print("matched")"#,
         &["matched"],
     );
@@ -644,7 +644,7 @@ print(to_string(num) ++ ":" ++ label)"#,
 fn safebind_partial_option_mismatch_uses_normal_pattern_failure() {
     let (stdout, stderr) = run_surtr_with_stderr(
         r#"value: Option<Int> = Option::None
-Option::Some(num) =? value
+Option::Some(num) =? Ok(value)
 print("after")"#,
     )
     .expect("Pipeline failed");
@@ -948,8 +948,168 @@ print(inspect(do::<List> {
     assert_eq!(output, ["Option::None", "[]"]);
 }
 
+fn safebind_extract_evaluation_order_and_failure_short_circuit() {
+    for (extract_result, pattern_result, expected) in [
+        (
+            "Ok(Identity::run(self))",
+            "MatchResult::Ok(value)",
+            vec!["rhs", "extract", "pattern", "after", "Ok(7)"],
+        ),
+        (
+            "Err(NoneError())",
+            "MatchResult::Ok(value)",
+            vec!["rhs", "extract", "Err(NoneError(\"None Value.\"))"],
+        ),
+        (
+            "Ok(Identity::run(self))",
+            "MatchResult::Err(NoneError())",
+            vec![
+                "rhs",
+                "extract",
+                "pattern",
+                "Err(NoneError(\"None Value.\"))",
+            ],
+        ),
+    ] {
+        for body in [
+            "check(value) =? source(); print(\"after\"); Ok(value)",
+            "do::<Result> { check(value) =? source(); print(\"after\"); Ok(value) }",
+        ] {
+            assert_output(
+                &format!(
+                    r#"
+impl MonadExtractor for Identity<$T> {{
+  def extract(self: Identity<$A>) -> Result<$A> {{
+    print("extract")
+    {extract_result}
+  }}
+}}
+def source() -> Identity<Int> {{ print("rhs"); Identity(7) }}
+def run() -> Result<Int> {{
+  check: ExtractorClosure<(Int -> MatchResult<Int>)> = *{{|value|
+    print("pattern")
+    {pattern_result}
+  }}
+  {body}
+}}
+print(inspect(run()))
+"#
+                ),
+                &expected,
+            );
+        }
+    }
+}
+
+fn statement_question_propagates_each_result_layer_and_evaluates_rhs_once() {
+    let input_ty = "Result<Result<Result<Unit>>>";
+    for (body, return_ty, success, failure) in [
+        (
+            "source(target)?; print(\"after\"); Ok(7)",
+            "Result<Int>",
+            "Ok(7)",
+            "error",
+        ),
+        (
+            "inner: (-> Result<Int>) = {|| source(target)?; print(\"after\"); Ok(7) }; inner()",
+            "Result<Int>",
+            "Ok(7)",
+            "error",
+        ),
+        (
+            "do::<Result> { source(target)?; print(\"after\"); Ok(7) }",
+            "Result<Int>",
+            "Ok(7)",
+            "error",
+        ),
+        (
+            "do::<Option> { source(target)?; print(\"after\"); Option::Some(7) }",
+            "Option<Int>",
+            "Option::Some(7)",
+            "Option::None",
+        ),
+        (
+            "do::<List> { source(target)?; print(\"after\"); [7] }",
+            "List<Int>",
+            "[7]",
+            "[]",
+        ),
+    ] {
+        let source = format!(
+            r#"
+deferror StepError {{ |label: String| label }}
+def source(target: {input_ty}) -> {input_ty} {{ print("rhs"); target }}
+def run(target: {input_ty}) -> {return_ty} {{ {body} }}
+print(inspect(run(Ok(Ok(Ok(()))))))
+print(inspect(run(Err(StepError("outer")))))
+print(inspect(run(Ok(Err(StepError("middle"))))))
+print(inspect(run(Ok(Ok(Err(StepError("inner")))))))
+"#
+        );
+        let mut expected = vec!["rhs".to_string(), "after".to_string(), success.to_string()];
+        for label in ["outer", "middle", "inner"] {
+            expected.push("rhs".into());
+            expected.push(if failure == "error" {
+                format!("Err(StepError(\"{label}\"))")
+            } else {
+                failure.to_string()
+            });
+        }
+        assert_output(
+            &source,
+            &expected.iter().map(String::as_str).collect::<Vec<_>>(),
+        );
+    }
+}
+
+fn statement_question_in_extractor_preserves_nested_errors() {
+    assert_output(
+        r#"
+deferror StepError { |label: String| label }
+checked: ExtractorClosure<(Result<Result<Unit>> -> MatchResult<Int>)> = *{|target|
+  target?
+  print("after")
+  MatchResult::Ok(7)
+}
+print(inspect(apply_pattern(Ok(Ok(())), checked(_1))))
+print(inspect(apply_pattern(Ok(Err(StepError("inner"))), checked(_1))))
+"#,
+        &["after", "Ok(7)", "Err(StepError(\"inner\"))"],
+    );
+}
+
+fn ordinary_safebind_still_discards_only_one_result_layer() {
+    assert_output(
+        r#"
+def keep(target: Result<Result<Unit>>) -> Result<Int> {
+  _ =? target
+  print("after")
+  Ok(7)
+}
+print(inspect(keep(Ok(Err(NoneError())))))
+"#,
+        &["after", "Ok(7)"],
+    );
+}
+
 pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
     let cases: &[(&str, fn())] = &[
+        (
+            "statement_question_propagates_each_result_layer_and_evaluates_rhs_once",
+            statement_question_propagates_each_result_layer_and_evaluates_rhs_once as fn(),
+        ),
+        (
+            "statement_question_in_extractor_preserves_nested_errors",
+            statement_question_in_extractor_preserves_nested_errors as fn(),
+        ),
+        (
+            "ordinary_safebind_still_discards_only_one_result_layer",
+            ordinary_safebind_still_discards_only_one_result_layer as fn(),
+        ),
+        (
+            "safebind_extract_evaluation_order_and_failure_short_circuit",
+            safebind_extract_evaluation_order_and_failure_short_circuit as fn(),
+        ),
         ("safebind_top_level_ok", safebind_top_level_ok as fn()),
         ("safebind_list_pattern_ok", safebind_list_pattern_ok as fn()),
         (

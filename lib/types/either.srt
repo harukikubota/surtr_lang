@@ -1,7 +1,9 @@
 @doc """
 One of two independently typed values.
 Either is a general choice value. Either<Error, A> also implements MonadFail;
-SafeBind still unwraps only Result, so inspect Either explicitly.
+SafeBind uses MonadExtractor for Either<Error, A>: Right supplies its payload
+and Left retains its original Error. Other Left types require an explicit
+MonadExtractor implementation to participate in this input decomposition.
 It derives `Eq` when both payload types support `Eq`.
 
 ## REPL
@@ -334,6 +336,24 @@ impl Convert<Option<$R>> for Either<$L, $R> {
   }
 }
 
+@doc """
+Extract Right unchanged as Ok and retain the original Left Error as Err.
+This standard implementation fixes Left to Error. User implementations may
+choose how a different Left type produces an Error.
+
+## REPL
+xldr(1)> MonadExtractor::extract(Either<Error, Int>::Right(3))
+Ok(3)
+"""
+impl MonadExtractor for Either<Error, $T> {
+  def extract(self: Either<Error, $A>) -> Result<$A> {
+    match self {
+      Either::Right(value) => Ok(value),
+      Either::Left(error) => Err(error),
+    }
+  }
+}
+
 # Retain the original Error; bind must not produce a successful payload.
 impl MonadFail for Either<Error, $T> {
   def fail::<Either<Error, $T>>(error: Error) -> Either<Error, $T> {
@@ -343,9 +363,6 @@ impl MonadFail for Either<Error, $T> {
 
 impl Convert<Result<$A>> for Either<Error, $A> {
   def to::<Result<$A>>(self: Self) -> Result<$A> {
-    match self {
-      Either::Right(value) => Ok(value),
-      Either::Left(error) => Err(error),
-    }
+    MonadExtractor::extract(self)
   }
 }

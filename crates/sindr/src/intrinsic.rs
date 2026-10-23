@@ -40,6 +40,7 @@ impl IntrinsicOwner {
 pub enum CanonicalTraitIdentity {
     Monad,
     MonadFail,
+    MonadExtractor,
     Alternative,
 }
 
@@ -48,6 +49,7 @@ impl CanonicalTraitIdentity {
         match self {
             Self::Monad => "Monad",
             Self::MonadFail => "MonadFail",
+            Self::MonadExtractor => "MonadExtractor",
             Self::Alternative => "Alternative",
         }
     }
@@ -58,6 +60,7 @@ impl CanonicalTraitIdentity {
 pub enum CanonicalTraitMethodIdentity {
     MonadBind,
     MonadFailFail,
+    MonadExtractorExtract,
     AlternativeEmpty,
 }
 
@@ -66,6 +69,7 @@ impl CanonicalTraitMethodIdentity {
         match self {
             Self::MonadBind => CanonicalTraitIdentity::Monad,
             Self::MonadFailFail => CanonicalTraitIdentity::MonadFail,
+            Self::MonadExtractorExtract => CanonicalTraitIdentity::MonadExtractor,
             Self::AlternativeEmpty => CanonicalTraitIdentity::Alternative,
         }
     }
@@ -74,6 +78,7 @@ impl CanonicalTraitMethodIdentity {
         match self {
             Self::MonadBind => "bind",
             Self::MonadFailFail => "fail",
+            Self::MonadExtractorExtract => "extract",
             Self::AlternativeEmpty => "empty",
         }
     }
@@ -118,20 +123,19 @@ pub enum IntrinsicCarrierSource {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SafeBindRejection {
-    NonMonad,
-    NonResultMonad,
+    TotalNonExtractingRhs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SafeBindInputMatcher {
-    CanonicalType(TypeName),
+    Capability(CanonicalTraitIdentity),
     OtherwisePartialPattern,
     OtherwiseTotalPattern,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SafeBindInputAction {
-    UnwrapOneLayer,
+    ExtractThenUnwrapOneLayer(CanonicalTraitMethodIdentity),
     PassThroughToPattern,
     RejectAfterPatternTypeCheck(&'static [SafeBindRejection]),
 }
@@ -196,15 +200,14 @@ const DO_VALUE_PARAMETERS: &[IntrinsicType] = &[IntrinsicType::BuiltinApplicatio
     argument: IntrinsicTypeParameter::Result,
 }];
 
-const DO_SAFE_BIND_REJECTIONS: &[SafeBindRejection] = &[
-    SafeBindRejection::NonMonad,
-    SafeBindRejection::NonResultMonad,
-];
+const DO_SAFE_BIND_REJECTIONS: &[SafeBindRejection] = &[SafeBindRejection::TotalNonExtractingRhs];
 
 const DO_SAFE_BIND_INPUT: &[SafeBindInputRule] = &[
     SafeBindInputRule {
-        matcher: SafeBindInputMatcher::CanonicalType(TypeName::Result),
-        action: SafeBindInputAction::UnwrapOneLayer,
+        matcher: SafeBindInputMatcher::Capability(CanonicalTraitIdentity::MonadExtractor),
+        action: SafeBindInputAction::ExtractThenUnwrapOneLayer(
+            CanonicalTraitMethodIdentity::MonadExtractorExtract,
+        ),
     },
     SafeBindInputRule {
         matcher: SafeBindInputMatcher::OtherwisePartialPattern,

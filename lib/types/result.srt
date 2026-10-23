@@ -434,6 +434,17 @@ impl Monad for Result<$T> {
   }
 }
 
+@doc """
+Extract a Result without changing its successful value or original Error.
+
+## REPL
+xldr(1)> MonadExtractor::extract(Ok(3))
+Ok(3)
+"""
+impl MonadExtractor for Result<$T> {
+  def extract(self: Result<$A>) -> Result<$A> { self }
+}
+
 impl MonadRecover for Result<$T> {
   def recover(self: Result<$T>, handler: (Error -> Result<$T>)) -> Result<$T> {
     Result::recover(self, handler)
@@ -445,6 +456,17 @@ impl MonadFail for Result<$T> {
   def fail::<Result<$T>>(error: Error) -> Result<$T> {
     Err(error)
   }
+}
+
+@doc """
+Convert a Result to itself without changing its payload or original Error.
+
+## REPL
+xldr(1)> to::<Result>(Ok(3))
+Ok(3)
+"""
+impl Convert<Result<$A>> for Result<$A> {
+  def to::<Result<$A>>(self: Self) -> Result<$A> { self }
 }
 
 @doc """

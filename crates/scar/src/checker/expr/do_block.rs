@@ -13,6 +13,12 @@ impl Checker {
             sindr::intrinsic::CanonicalTraitIdentity::Monad => &contract.monad_trait,
             sindr::intrinsic::CanonicalTraitIdentity::Alternative => &contract.alternative_trait,
             sindr::intrinsic::CanonicalTraitIdentity::MonadFail => &contract.monad_fail_trait,
+            sindr::intrinsic::CanonicalTraitIdentity::MonadExtractor => {
+                return Err(TypeError::new(
+                    "MonadExtractor is an input capability, not a do carrier contract",
+                    span.clone(),
+                ));
+            }
         }
         .as_ref()
         .ok_or_else(|| {
@@ -875,7 +881,7 @@ impl Checker {
             self.check_safebind_input(statement_span, pattern, rhs, unit_success_only)?;
         checked.typed_pattern = self.resolve_typed_pattern(checked.typed_pattern);
         checked.pattern_ty = self.resolve_ty(&checked.pattern_ty);
-        checked.typed_rhs = *self.resolve_typed_node(checked.typed_rhs);
+        checked.typed_rhs = self.finalize_safebind_node(checked.typed_rhs)?;
         checked.projection = match checked.projection {
             SafeBindRhsProjection::CanonicalResultOnce {
                 payload_ty,
@@ -884,6 +890,9 @@ impl Checker {
                 payload_ty: self.resolve_ty(&payload_ty),
                 error_ty: self.resolve_ty(&error_ty),
             },
+            SafeBindRhsProjection::CanonicalResultUnitChain { depth } => {
+                SafeBindRhsProjection::CanonicalResultUnitChain { depth }
+            }
             SafeBindRhsProjection::PatternInput { pattern_input_ty } => {
                 SafeBindRhsProjection::PatternInput {
                     pattern_input_ty: self.resolve_ty(&pattern_input_ty),
@@ -1045,6 +1054,7 @@ mod tests {
             id,
             compiler_owned_equality: false,
             compiler_owned_failure: false,
+            compiler_owned_extraction: false,
             standard_lazy_contract: false,
             type_params: Vec::new(),
             where_clause: None,
@@ -1083,6 +1093,26 @@ mod tests {
             "Monad"
         );
     }
+
+    #[test]
+    fn canonical_extraction_requires_trusted_declaration_authority() {
+        let mut checker = Checker::new(TypecheckContext::default());
+        let span = Span { start: 0, end: 1 };
+        let error = checker.canonical_monad_extractor_key(&span).unwrap_err();
+        assert_eq!(
+            error.reason(),
+            Some(TypeDiagnosticReason::TypecheckInvariantViolation)
+        );
+        let impostor = trait_id("MonadExtractor", "MonadExtractor", 2);
+        checker
+            .traits
+            .insert("MonadExtractor".into(), constructor_trait(impostor));
+        let error = checker.canonical_monad_extractor_key(&span).unwrap_err();
+        assert_eq!(
+            error.reason(),
+            Some(TypeDiagnosticReason::TypecheckInvariantViolation)
+        );
+    }
 }
 
 struct CheckedSafeBindInput {
@@ -1100,25 +1130,174 @@ enum DoStatementKind {
 }
 
 impl Checker {
-    fn require_statement_question_unit_success(
+    /// Store statement-local inference in every IR component before the block
+    /// checker resets its substitutions for the next statement.
+    fn finalize_safebind_node(&mut self, node: TypedNode) -> Result<TypedNode, TypeError> {
+        let node = *self
+            .concretize_pending_trait_calls(node)
+            .map_err(|error| *error)?;
+        Ok(self.substitute_typed_node_with_mapping(node, &self.substitutions))
+    }
+
+    pub(in crate::checker) fn canonical_monad_extractor_key(
         &self,
-        rhs_ty: &Ty,
         span: &Span,
-    ) -> Result<(), TypeError> {
-        let rhs_ty = self.resolve_ty(rhs_ty);
-        let Ty::Result(success, _) = &rhs_ty else {
-            return Err(TypeError::new(
-                format!(
-                    "Statement `?` requires a canonical Result with terminal success type Unit; got {}.",
-                    self.ty_name(&rhs_ty),
-                ),
+    ) -> Result<String, TypeError> {
+        let info = self
+            .traits
+            .values()
+            .find(|info| info.compiler_owned_extraction)
+            .ok_or_else(|| {
+                self.typecheck_invariant_error(
+                    "canonical MonadExtractor declaration is missing",
+                    span,
+                )
+            })?;
+        let method = info.methods.get("extract").ok_or_else(|| {
+            self.typecheck_invariant_error("canonical MonadExtractor::extract contract", span)
+        })?;
+        let parameter = method
+            .value_parameters
+            .first()
+            .map(|parameter| parameter.ty.syntax());
+        let slot = match parameter {
+            Some(AstTy::Generic(_, head, arguments)) if head == "Self" && arguments.len() == 1 => {
+                match &arguments[0] {
+                    AstTy::Named(_, slot) if slot.starts_with('$') => Some(slot),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        let result_matches = match (slot, method.ret_ty.syntax()) {
+            (Some(slot), AstTy::Generic(_, head, arguments))
+                if Self::surface_name(head) == "Result" =>
+            {
+                matches!(arguments.as_slice(), [AstTy::Named(_, result)] if result == slot)
+            }
+            _ => false,
+        };
+        let key = self.trait_key(&info.id);
+        self.canonical_extraction_parent_key(&key, span)?;
+        if !result_matches
+            || method.value_parameters.len() != 1
+            || !method.return_type_arguments.is_empty()
+            || !info.type_params.is_empty()
+            || info.constructor_slots.len() != 1
+            || method.where_clause.is_some()
+        {
+            return Err(
+                self.typecheck_invariant_error("canonical MonadExtractor::extract contract", span)
+            );
+        }
+        Ok(key)
+    }
+
+    fn canonical_extraction_parent_key(
+        &self,
+        extraction_key: &str,
+        span: &Span,
+    ) -> Result<String, TypeError> {
+        let parent_key = self
+            .traits
+            .get(extraction_key)
+            .filter(|info| info.compiler_owned_extraction)
+            .and_then(|info| {
+                info.parents.iter().find_map(|parent| {
+                    let key = self.trait_key(&parent.trait_id);
+                    self.traits
+                        .get(&key)
+                        .filter(|info| {
+                            key == "Monad"
+                                && info.standard_lazy_contract
+                                && info.id.unique_id == parent.trait_id.unique_id
+                        })
+                        .map(|_| key)
+                })
+            });
+        parent_key.ok_or_else(|| {
+            self.typecheck_invariant_error("canonical MonadExtractor parent Monad identity", span)
+        })
+    }
+
+    fn extract_safebind_rhs(&mut self, key: &str, rhs: TypedNode) -> Result<TypedNode, TypeError> {
+        let span = rhs.span.clone();
+        let input = ResolvedId {
+            name: "__extract_input".into(),
+            qualified_name: None,
+            symbol_info: None,
+            unique_id: Self::next_synthetic_range_uid(),
+            compiler_generated: true,
+            span: span.clone(),
+        };
+        self.env.push_var_scope();
+        self.env.bind_var(input.unique_id, rhs.ty.clone());
+        let checked = self.check_trait_invocation(
+            &span,
+            key,
+            sindr::intrinsic::CanonicalTraitMethodIdentity::MonadExtractorExtract.method_name(),
+            &[ResolvedRecordLitArg::Positional(Resolved::Var(
                 span.clone(),
+                input.clone(),
+            ))],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        self.env.pop_var_scope();
+        let mut call = checked?;
+        let TypedInner::TraitCall { args, .. } = &mut call.node else {
+            return Err(self.typecheck_invariant_error(
+                "MonadExtractor::extract resolved ordinary Trait call",
+                &span,
             ));
         };
-        let mut terminal = self.resolve_ty(success);
-        while let Ty::Result(success, _) = terminal {
-            terminal = self.resolve_ty(&success);
+        if args.len() != 1
+            || !matches!(&args[0].node, TypedInner::Var(id) if id.unique_id == input.unique_id)
+        {
+            return Err(self.typecheck_invariant_error(
+                "resolved MonadExtractor::extract argument contract",
+                &span,
+            ));
         }
+        args[0] = rhs;
+        if !matches!(self.resolve_ty(&call.ty), Ty::Result(_, _)) {
+            return Err(self.typecheck_invariant_error(
+                "MonadExtractor::extract canonical Result return",
+                &span,
+            ));
+        }
+        Ok(call)
+    }
+
+    fn statement_question_result_chain(
+        &mut self,
+        rhs_ty: &Ty,
+        span: &Span,
+    ) -> Result<(usize, Vec<Ty>), TypeError> {
+        let rhs_ty = self.resolve_ty(rhs_ty);
+        let mut error_tys = Vec::new();
+        let terminal = if matches!(&rhs_ty, Ty::Result(..)) {
+            let mut terminal = rhs_ty.clone();
+            while let Ty::Result(success, error) = terminal {
+                error_tys.push(self.resolve_ty(&error));
+                terminal = self.resolve_ty(&success);
+            }
+            terminal
+        } else {
+            error_tys.push(Ty::Error);
+            let extraction_key = self.canonical_monad_extractor_key(span)?;
+            let monad = self.canonical_extraction_parent_key(&extraction_key, span)?;
+            match self.constructor_slot_type_for(&monad, &rhs_ty).into_checked()? {
+                ConstructorApplicationOutcome::Applied(payload) => self.resolve_ty(&payload),
+                _ => return Err(TypeError::new(format!("Statement `?` requires a MonadExtractor RHS with terminal success type Unit; got {}.", self.ty_name(&rhs_ty)), span.clone())),
+            }
+        };
         if terminal != Ty::Unit {
             return Err(TypeError::new(
                 format!(
@@ -1129,7 +1308,7 @@ impl Checker {
                 span.clone(),
             ));
         }
-        Ok(())
+        Ok((error_tys.len(), error_tys))
     }
 
     fn check_safebind_input(
@@ -1139,10 +1318,10 @@ impl Checker {
         rhs: &Resolved,
         unit_success_only: bool,
     ) -> Result<CheckedSafeBindInput, TypeError> {
-        let typed_rhs = self.check_node(rhs)?;
-        if unit_success_only {
-            self.require_statement_question_unit_success(&typed_rhs.ty, span)?;
-        }
+        let mut typed_rhs = self.check_node(rhs)?;
+        let question_chain = unit_success_only
+            .then(|| self.statement_question_result_chain(&typed_rhs.ty, span))
+            .transpose()?;
         if matches!(typed_rhs.ty, Ty::Facet(..)) {
             return Err(self.policy_error(
                 TypeDiagnosticReason::FacetSafeBindForbidden,
@@ -1157,87 +1336,145 @@ impl Checker {
             ));
         }
         let rhs_ty = self.resolve_ty(&typed_rhs.ty);
-        let (ok_ty, mut propagated_err_tys, rhs_projection) = match rhs_ty {
-            Ty::Result(ok, err) => {
-                let payload_ty = ok.as_ref().clone();
-                let error_ty = err.as_ref().clone();
-                (
-                    payload_ty.clone(),
-                    vec![error_ty.clone()],
-                    SafeBindRhsProjection::CanonicalResultOnce {
-                        payload_ty,
-                        error_ty,
-                    },
-                )
+        let extraction_key = self.canonical_monad_extractor_key(span)?;
+        let extraction_proof = self.prove_trait_capability(&extraction_key, &rhs_ty)?;
+        let extracts = match extraction_proof {
+            ApplicabilityProof::Satisfied(_) => true,
+            ApplicabilityProof::Deferred(_) | ApplicabilityProof::Unsatisfied => {
+                match self
+                    .constructor_capability_projection(&extraction_key, &rhs_ty)
+                    .into_checked()?
+                {
+                    // Capability proofs may defer just because a payload is
+                    // unknown. Only the declared constructor heads decide
+                    // whether an extraction implementation can still apply.
+                    // Matching heads retain normal constraint/dispatch errors.
+                    ConstructorProjectionOutcome::Applicable { .. } => true,
+                    ConstructorProjectionOutcome::Deferred { .. } => {
+                        !self.do_failure_carrier_is_rigid_variable(&rhs_ty)
+                    }
+                    ConstructorProjectionOutcome::Rejected { failures }
+                        if failures.iter().all(|failure| {
+                            matches!(
+                                failure,
+                                ConstructorProjectionFailure::NoApplicableImplementation
+                            )
+                        }) =>
+                    {
+                        false
+                    }
+                    ConstructorProjectionOutcome::Rejected { failures }
+                        if Self::constructor_projection_failures_are_metadata(&failures) =>
+                    {
+                        return Err(self.typecheck_invariant_error(
+                            "MonadExtractor constructor projection metadata",
+                            span,
+                        ));
+                    }
+                    ConstructorProjectionOutcome::Rejected { .. } => true,
+                }
             }
-            other => (
-                other.clone(),
-                Vec::new(),
-                SafeBindRhsProjection::PatternInput {
-                    pattern_input_ty: other,
-                },
-            ),
         };
+        if extracts {
+            typed_rhs = self.extract_safebind_rhs(&extraction_key, typed_rhs)?;
+        } else {
+            let monad = self.canonical_extraction_parent_key(&extraction_key, span)?;
+            if let ConstructorApplicationOutcome::Applied(payload_ty) = self
+                .constructor_slot_type_for(&monad, &rhs_ty)
+                .into_checked()?
+            {
+                if let Some(lhs_input) =
+                    self.safebind_missing_extraction_input(pat, &rhs_ty, &payload_ty)?
+                {
+                    if self.do_failure_carrier_is_rigid_variable(&rhs_ty) {
+                        return Err(self.trait_obligation_failure(
+                            TypeDiagnosticReason::MissingGenericBound,
+                            &extraction_key,
+                            &[],
+                            None,
+                            &rhs_ty,
+                            &typed_rhs.span,
+                            DiagnosticOrigin::Intrinsic,
+                        ));
+                    }
+                    return Err(TypeError::from_structured(StructuredDiagnostic {
+                        reason: TypeDiagnosticReason::SafeBindMissingMonadExtractor.into(),
+                        origin: DiagnosticOrigin::Intrinsic,
+                        data: DiagnosticData::SafeBindExtraction(
+                            diagnostics::SafeBindExtractionData {
+                                rhs_type: self.diagnostic_ty_name(&rhs_ty),
+                                payload_type: self.diagnostic_ty_name(&payload_ty),
+                                lhs_input,
+                                extractor_capability: "unsatisfied".into(),
+                            },
+                        ),
+                        primary: self.type_fact(SourceRole::Value, &typed_rhs.span, &rhs_ty),
+                        related: vec![self.type_fact(
+                            SourceRole::Pattern,
+                            &Self::resolved_pattern_span(pat)?,
+                            &payload_ty,
+                        )],
+                        remediation: None,
+                    }));
+                }
+            }
+        }
+        let (ok_ty, mut propagated_err_tys, rhs_projection) =
+            match (extracts, self.resolve_ty(&typed_rhs.ty)) {
+                (true, Ty::Result(ok, err)) => {
+                    if let Some((depth, error_tys)) = question_chain {
+                        (
+                            Ty::Unit,
+                            error_tys,
+                            SafeBindRhsProjection::CanonicalResultUnitChain { depth },
+                        )
+                    } else {
+                        let payload_ty = ok.as_ref().clone();
+                        let error_ty = err.as_ref().clone();
+                        (
+                            payload_ty.clone(),
+                            vec![error_ty.clone()],
+                            SafeBindRhsProjection::CanonicalResultOnce {
+                                payload_ty,
+                                error_ty,
+                            },
+                        )
+                    }
+                }
+                (false, other) => (
+                    other.clone(),
+                    Vec::new(),
+                    SafeBindRhsProjection::PatternInput {
+                        pattern_input_ty: other,
+                    },
+                ),
+                (true, _) => unreachable!("extract return contract checked above"),
+            };
 
         let (typed_pat, pat_ty) = self.check_pattern(pat, &ok_ty, span)?;
         let pattern_can_nomatch = !Self::is_total_bind_pattern(pat);
         if pattern_can_nomatch {
             propagated_err_tys.push(Ty::Error);
-        } else if !matches!(self.resolve_ty(&typed_rhs.ty), Ty::Result(_, _)) {
-            let monad = self
-                .trait_key_by_short_name("Monad")
-                .ok_or_else(|| TypeError::new("Missing canonical Monad trait", span.clone()))?;
-            let proof = self.prove_trait_capability(&monad, &ok_ty)?;
-            if type_contains_unresolved_vars(&ok_ty) {
-                match proof {
-                    ApplicabilityProof::Satisfied(_) => {}
-                    ApplicabilityProof::Deferred(_) => {
-                        return Err(self.trait_obligation_failure(
-                            TypeDiagnosticReason::MissingTraitCapability,
-                            &monad,
-                            &[],
-                            None,
-                            &ok_ty,
-                            &typed_rhs.span,
-                            DiagnosticOrigin::Intrinsic,
-                        ));
-                    }
-                    ApplicabilityProof::Unsatisfied => {
-                        return Err(self.trait_obligation_failure(
-                            TypeDiagnosticReason::MissingGenericBound,
-                            &monad,
-                            &[],
-                            None,
-                            &ok_ty,
-                            &typed_rhs.span,
-                            DiagnosticOrigin::Intrinsic,
-                        ));
-                    }
-                }
+        } else if !extracts {
+            if matches!(&rhs_ty, Ty::Var(variable) if self.rigid_tyvars.contains(variable)) {
+                return Err(self.trait_obligation_failure(
+                    TypeDiagnosticReason::MissingGenericBound,
+                    &extraction_key,
+                    &[],
+                    None,
+                    &rhs_ty,
+                    &typed_rhs.span,
+                    DiagnosticOrigin::Intrinsic,
+                ));
             }
-            let (reason, monad_capability) = match proof {
-                ApplicabilityProof::Satisfied(_) => (
-                    TypeDiagnosticReason::SafeBindTotalPatternNonResultMonadRhs,
-                    "satisfied",
-                ),
-                ApplicabilityProof::Unsatisfied => (
-                    TypeDiagnosticReason::SafeBindTotalPatternNonMonadRhs,
-                    "unsatisfied",
-                ),
-                ApplicabilityProof::Deferred(_) => {
-                    unreachable!("a deferred Monad proof must retain unresolved type variables")
-                }
-            };
-            let rhs_name = self.ty_name(&ok_ty);
+            let rhs_name = self.diagnostic_ty_name(&ok_ty);
             return Err(TypeError::from_structured(StructuredDiagnostic {
-                reason: reason.into(),
+                reason: TypeDiagnosticReason::SafeBindTotalPatternNonExtractingRhs.into(),
                 origin: DiagnosticOrigin::Intrinsic,
                 data: DiagnosticData::SafeBindRelation(diagnostics::SafeBindRelationData {
-                    lhs_type: self.ty_name(&pat_ty),
+                    lhs_type: self.diagnostic_ty_name(&pat_ty),
                     rhs_type: rhs_name,
                     lhs_is_total: true,
-                    rhs_is_canonical_result: false,
-                    monad_capability: monad_capability.into(),
                 }),
                 primary: self.type_fact(SourceRole::Value, &typed_rhs.span, &ok_ty),
                 related: vec![self.type_fact(SourceRole::Pattern, span, &pat_ty)],
@@ -1291,7 +1528,7 @@ impl Checker {
             self.result_constructor_provenance(&checked.typed_rhs),
         );
 
-        Ok(TypedNode {
+        self.finalize_safebind_node(TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
             node: TypedInner::SafeBind(

@@ -37,6 +37,7 @@ mod predeclare;
 mod provenance;
 mod relations;
 mod resolve_typed;
+mod safebind_input;
 mod signatures;
 mod specialize;
 mod trait_selection;
@@ -117,6 +118,7 @@ struct TraitInfo {
     /// Set only while checking the trusted standard definition stage.
     compiler_owned_equality: bool,
     compiler_owned_failure: bool,
+    compiler_owned_extraction: bool,
     /// Declaration authority persists across user impls and cached standard stages.
     standard_lazy_contract: bool,
     type_params: Vec<ResolvedTypeParam>,

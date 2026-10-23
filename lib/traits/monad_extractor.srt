@@ -1,0 +1,58 @@
+@doc """
+Extract one successful Monad payload as a Result.
+SafeBind (`=?`) calls this operation once after checking the input type.
+An Err is passed to the current failure target; an Ok supplies its entire
+payload to the Pattern. Nested payloads and child Patterns are not extracted
+again by SafeBind.
+
+Statement-final `?` uses the same input capability and failure target. For a
+canonical Result input, it checks the Result chain until reaching Err or Unit.
+An Err at any layer retains its original Error and stops the continuation;
+only Ok layers ending in Unit continue. Non-Result inputs must have a direct
+Unit payload. This does not add recursive decomposition to ordinary SafeBind.
+
+The standard implementations are Result (identity), Option (None becomes
+NoneError), and Either<Error, A> (Left retains its original Error). Existing
+Errors keep their kind, message, Payload, location, cause, diagnostic and
+stack trace. NoneError is created by Option's extract implementation.
+
+MonadExtractor requires Monad, but is independent of MonadFail and Convert.
+MonadFail receives an Error at the failure target; it does not extract inputs.
+Implementing Monad alone does not provide this operation automatically.
+
+SafeBind and statement-final `?` need no import. Qualified calls use
+`MonadExtractor::extract(value)`; bare `extract(value)` requires
+`import MonadExtractor`. This trait is not autoimported.
+
+## REPL
+xldr(1)> MonadExtractor::extract(Option::Some(3))
+Ok(3)
+xldr(2)> import MonadExtractor
+xldr(3)> extract(Ok(Option::Some(3)))
+Ok(Option::Some(3))
+
+## Statement-final question
+xldr(1)> checked: (Result<Result<Unit>> -> Result<Int>) = {|target| target?; Ok(7)}
+xldr(2)> checked(Ok(Ok(())))
+Ok(7)
+xldr(3)> Result::is_err(checked(Ok(Err(NoneError()))))
+True
+"""
+deftrait MonadExtractor
+where
+  Self: Monad
+{
+  @doc """
+  Return the successful payload unchanged inside Ok, or an Error inside Err.
+  The returned Result is the only layer processed by SafeBind. An existing
+  Error must be retained without rebuilding it. The operation may explicitly
+  generate an Error for an input failure that does not already contain one.
+
+  ## REPL
+  xldr(1)> MonadExtractor::extract(Option::Some(2))
+  Ok(2)
+  xldr(2)> Result::is_err(MonadExtractor::extract(Option<Int>::None))
+  True
+  """
+  def extract(self: Self<$A>) -> Result<$A>
+}

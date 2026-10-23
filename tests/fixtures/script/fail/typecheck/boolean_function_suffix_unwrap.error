@@ -1,2 +1,2 @@
 phase: typecheck
-contains: Result
+contains: MonadExtractor RHS with terminal success type Unit

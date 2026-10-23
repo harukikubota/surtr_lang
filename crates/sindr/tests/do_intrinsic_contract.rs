@@ -111,11 +111,13 @@ fn do_contract_closes_safe_bind_input_classification() {
     assert_eq!(contract.safe_bind_input.len(), 3);
     assert_eq!(
         contract.safe_bind_input[0].matcher,
-        SafeBindInputMatcher::CanonicalType(TypeName::Result)
+        SafeBindInputMatcher::Capability(CanonicalTraitIdentity::MonadExtractor)
     );
     assert_eq!(
         contract.safe_bind_input[0].action,
-        SafeBindInputAction::UnwrapOneLayer
+        SafeBindInputAction::ExtractThenUnwrapOneLayer(
+            CanonicalTraitMethodIdentity::MonadExtractorExtract
+        )
     );
     assert_eq!(
         contract.safe_bind_input[1].matcher,
@@ -132,8 +134,7 @@ fn do_contract_closes_safe_bind_input_classification() {
     assert_eq!(
         contract.safe_bind_input[2].action,
         SafeBindInputAction::RejectAfterPatternTypeCheck(&[
-            SafeBindRejection::NonMonad,
-            SafeBindRejection::NonResultMonad,
+            SafeBindRejection::TotalNonExtractingRhs,
         ])
     );
 }

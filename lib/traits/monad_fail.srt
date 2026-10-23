@@ -35,9 +35,9 @@ Ok(1)
 xldr(3)> match require_true_do(False) { Err(error) => Error::kind(error), Ok(_) => "success" }
 "BooleanLiteralPatternMismatch"
 
-SafeBind automatically unwraps only the outer layer of a canonical Result on
-its right-hand side. Implementing MonadFail does not make other carriers
-implicitly unwrap there.
+SafeBind extracts its RHS through MonadExtractor and processes only the
+returned Result's outer layer. Implementing MonadFail does not provide
+MonadExtractor; receiving an Error and extracting an input are independent.
 """
 deftrait MonadFail
 where

@@ -358,6 +358,33 @@ path 返却は拒否する。`const Facet<...>` の literal bracket 制約は維
   carrier推論、core lowering、SafeBind failure target、Forge lowering、診断整備、全carrier受入検証は
   実装・検証済みである。現行の詳細契約は[do intrinsic](./Do_intrinsic_spec.md)に置く。
 
+### MonadExtractor と RHS 分解
+
+`lib/traits/monad_extractor.srt` の標準宣言を次とする。
+
+```surtr
+deftrait MonadExtractor
+where
+  Self: Monad
+{
+  def extract(self: Self<$A>) -> Result<$A>
+}
+```
+
+`Monad` の constructor shape と成功値の slot mapping を継承する。`$A` は値引数から導入するため ReturnTypeArgument を追加しない。capture parameter や末尾の型引数を成功値と推測せず、親の slot mapping に従う。Monad は対象を限定する親能力であり、Monad の実装から extract を自動導出しない。MonadFail は要求しない。
+
+`@autoimport` は付けない。明示呼出しは `MonadExtractor::extract(value)`、bare な `extract(value)` は `import MonadExtractor` 後に使う。SafeBind と文末 `?` は利用箇所の import に依存せず標準宣言の canonical identity と解決済みメソッドへ接続する。同名のユーザートレイトによる代用、標準宣言の欠落、不正なメソッド契約、曖昧な dispatch は拒否し、非分解の値全体照合へ切り替えない。
+
+初期の標準実装は `Result<A>`、`Option<A>`、`Either<Error, A>` とし、それぞれ型を所有する `lib/types/{result,option,either}.srt` に置く。Result はそのまま返し、Option の Some / None は Ok / Err(NoneError())、Either の Right / Left は Ok / 元 Error の Err にする。既存 Error は再生成しない。任意の Left 型や Transformer に暗黙の実装を与えない。ユーザー型は親の Monad と extract の契約を満たす明示実装を持てる。
+
+`Convert<Result<A>>` は独立した契約であり、自動実装しない。標準3型は型別の明示 impl を持ち、共有する場合は片方向に委譲する。Result 自身の変換は恒等変換とする。
+
+`$F<$T>` に対する分解は宣言した `$F: MonadExtractor` で証明する。この bound から親の Monad 能力も利用でき、成功値は `$T` になる。`$F: Monad` だけでは分解の証明にならず、分解を要求する入力には `MissingGenericBound` で `$F: MonadExtractor` を案内する。呼出し時の具象型から宣言済み能力を強化しない。値全体を受け取る partial Pattern に一律に bound を追加しない。未確定 obligation は Deferred として保持し、未実装が確定した型と区別する。
+
+SafeBind の評価・文末 `?` の型条件は [do intrinsic](Do_intrinsic_spec.md)、分解と照合の境界は [Pattern spec](Pattern_spec.md)、入力診断は [diagnostics](diagnostics.md) に従う。
+
+### MonadFail と失敗返却先
+
 `MonadFail` は `Self: Monad` を親制約に持ち、`fail::<Self>(error: Error) -> Self` を宣言する。
 Self は完成した返り型であり、期待型または ReturnTypeArgument から決定する。標準宣言の identity により
 能力を選び、struct の内部表現や同名 Trait から推測しない。通常 callable の失敗は MonadFail、do は

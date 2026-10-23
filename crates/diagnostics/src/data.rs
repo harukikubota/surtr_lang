@@ -46,8 +46,8 @@ pub enum TypeDiagnosticReason {
     IfBranchTypeMismatch,
     MatchArmTypeMismatch,
     CondBranchTypeMismatch,
-    SafeBindTotalPatternNonMonadRhs,
-    SafeBindTotalPatternNonResultMonadRhs,
+    SafeBindTotalPatternNonExtractingRhs,
+    SafeBindMissingMonadExtractor,
     PatternTypeMismatch,
     PatternShapeMismatch,
     PatternArityMismatch,
@@ -118,8 +118,8 @@ impl TypeDiagnosticReason {
             Self::IfBranchTypeMismatch => "IfBranchTypeMismatch",
             Self::MatchArmTypeMismatch => "MatchArmTypeMismatch",
             Self::CondBranchTypeMismatch => "CondBranchTypeMismatch",
-            Self::SafeBindTotalPatternNonMonadRhs => "SafeBindTotalPatternNonMonadRhs",
-            Self::SafeBindTotalPatternNonResultMonadRhs => "SafeBindTotalPatternNonResultMonadRhs",
+            Self::SafeBindTotalPatternNonExtractingRhs => "SafeBindTotalPatternNonExtractingRhs",
+            Self::SafeBindMissingMonadExtractor => "SafeBindMissingMonadExtractor",
             Self::PatternTypeMismatch => "PatternTypeMismatch",
             Self::PatternShapeMismatch => "PatternShapeMismatch",
             Self::PatternArityMismatch => "PatternArityMismatch",
@@ -813,8 +813,14 @@ pub struct SafeBindRelationData {
     pub lhs_type: String,
     pub rhs_type: String,
     pub lhs_is_total: bool,
-    pub rhs_is_canonical_result: bool,
-    pub monad_capability: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SafeBindExtractionData {
+    pub rhs_type: String,
+    pub payload_type: String,
+    pub lhs_input: String,
+    pub extractor_capability: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -912,6 +918,7 @@ pub enum DiagnosticData {
     TypeConstructorCarrier(TypeConstructorCarrierData),
     BranchAssertion(BranchAssertionData),
     SafeBindRelation(SafeBindRelationData),
+    SafeBindExtraction(SafeBindExtractionData),
     PatternFailure(PatternFailureData),
     Pattern(PatternDiagnosticData),
     Policy(PolicyData),
@@ -954,6 +961,7 @@ impl DiagnosticData {
             }
             Self::BranchAssertion(value) => ("BranchAssertion", serde_json::to_value(value)),
             Self::SafeBindRelation(value) => ("SafeBindRelation", serde_json::to_value(value)),
+            Self::SafeBindExtraction(value) => ("SafeBindExtraction", serde_json::to_value(value)),
             Self::PatternFailure(value) => ("PatternFailure", serde_json::to_value(value)),
             Self::Pattern(value) => ("Pattern", serde_json::to_value(value)),
             Self::Policy(value) => ("Policy", serde_json::to_value(value)),

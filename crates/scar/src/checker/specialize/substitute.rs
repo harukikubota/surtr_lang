@@ -72,7 +72,7 @@ impl Checker {
         })
     }
 
-    fn substitute_typed_node_with_mapping(
+    pub(in crate::checker) fn substitute_typed_node_with_mapping(
         &self,
         node: TypedNode,
         mapping: &HashMap<u32, Ty>,
@@ -188,6 +188,9 @@ impl Checker {
                         payload_ty: self.substitute_ty_with_mapping(&payload_ty, mapping),
                         error_ty: self.substitute_ty_with_mapping(&error_ty, mapping),
                     },
+                    SafeBindRhsProjection::CanonicalResultUnitChain { depth } => {
+                        SafeBindRhsProjection::CanonicalResultUnitChain { depth }
+                    }
                     SafeBindRhsProjection::PatternInput { pattern_input_ty } => {
                         SafeBindRhsProjection::PatternInput {
                             pattern_input_ty: self
@@ -255,6 +258,9 @@ impl Checker {
                             payload_ty: self.substitute_ty_with_mapping(&payload_ty, mapping),
                             error_ty: self.substitute_ty_with_mapping(&error_ty, mapping),
                         },
+                        SafeBindRhsProjection::CanonicalResultUnitChain { depth } => {
+                            SafeBindRhsProjection::CanonicalResultUnitChain { depth }
+                        }
                         SafeBindRhsProjection::PatternInput { pattern_input_ty } => {
                             SafeBindRhsProjection::PatternInput {
                                 pattern_input_ty: self

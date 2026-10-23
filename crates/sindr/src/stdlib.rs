@@ -245,6 +245,13 @@ pub const STDLIB_MODULE_SPECS: &[StdlibModuleSpec] = &[
         variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
+        file_name: "traits/monad_extractor.srt",
+        module_path: Some("MonadExtractor"),
+        source: include_str!("../../../lib/traits/monad_extractor.srt"),
+        stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
+    },
+    StdlibModuleSpec {
         file_name: "traits/monad_fail.srt",
         module_path: Some("MonadFail"),
         source: include_str!("../../../lib/traits/monad_fail.srt"),

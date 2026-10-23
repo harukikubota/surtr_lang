@@ -18,24 +18,53 @@ fn result_binding_rhs(typed: &[TypedNode]) -> &TypedNode {
 }
 
 #[test]
-fn question_accepts_only_canonical_result_with_unit_terminal_success() {
-    for expression in ["Ok(())", "Ok(Ok(()))", "Ok(Ok(Ok(())))"] {
+fn question_extracts_every_canonical_result_layer_to_unit() {
+    for (expression, expected_depth) in [("Ok(())", 1), ("Ok(Ok(()))", 2), ("Ok(Ok(Ok(())))", 3)] {
         let typed = typecheck_with_builtin_prelude(&format!("{expression}?"));
-        let node = typed.last().expect("question statement");
+        let node = typed
+            .iter()
+            .find(|node| matches!(node.node, TypedInner::SafeBind(..)))
+            .expect("question statement");
         assert_eq!(node.ty, Ty::Unit);
         let TypedInner::SafeBind(pattern, rhs, projection, target) = &node.node else {
-            panic!("question must use existing SafeBind control: {node:?}")
+            panic!("question must use ordinary SafeBind control: {node:?}")
         };
-        assert!(matches!(pattern.unlocated(), TypedPattern::Wildcard(_)));
         assert!(matches!(target, SafeBindFailureTarget::TopLevel));
-        let SafeBindRhsProjection::CanonicalResultOnce { payload_ty, .. } = projection else {
-            panic!("only the outer canonical Result may be projected")
-        };
-        let Ty::Result(outer_success, _) = &rhs.ty else {
-            panic!("question RHS must be canonical Result")
-        };
-        assert_eq!(outer_success.as_ref(), payload_ty);
+        assert!(
+            matches!(&rhs.node, TypedInner::TraitCall { method_name, args, .. } if method_name == "extract" && args.len() == 1)
+        );
+        assert!(matches!(
+            pattern.unlocated(),
+            TypedPattern::Wildcard(Ty::Unit)
+        ));
+        assert_eq!(
+            projection,
+            &SafeBindRhsProjection::CanonicalResultUnitChain {
+                depth: expected_depth
+            }
+        );
     }
+}
+
+#[test]
+fn ordinary_safebind_still_projects_only_one_result_layer() {
+    let typed = typecheck_with_builtin_prelude("_ =? Ok(Ok(()))");
+    let node = typed
+        .iter()
+        .find(|node| matches!(node.node, TypedInner::SafeBind(..)))
+        .unwrap();
+    assert!(matches!(
+        &node.node,
+        TypedInner::SafeBind(
+            _,
+            _,
+            SafeBindRhsProjection::CanonicalResultOnce {
+                payload_ty: Ty::Result(..),
+                ..
+            },
+            _
+        )
+    ));
 }
 
 #[test]
@@ -51,11 +80,11 @@ fn question_rejects_non_unit_terminal_success() {
 }
 
 #[test]
-fn question_rejects_non_result_values() {
-    for expression in ["()", "True", "Option::Some(())", "[()]"] {
+fn question_rejects_non_extracting_values() {
+    for expression in ["()", "True", "[()]"] {
         let error = typecheck(resolve_with_builtin_prelude(&format!("{expression}?")))
-            .expect_err("question requires a canonical Result");
-        assert!(error.message.contains("canonical Result"), "{error:?}");
+            .expect_err("question requires an extracting Monad with Unit success");
+        assert!(error.message.contains("MonadExtractor"), "{error:?}");
     }
 }
 
@@ -125,10 +154,7 @@ fn question_inside_do_uses_do_local_failure_target() {
     ));
     assert!(matches!(
         control.projection,
-        SafeBindRhsProjection::CanonicalResultOnce {
-            payload_ty: Ty::Result(..),
-            ..
-        }
+        SafeBindRhsProjection::CanonicalResultUnitChain { depth: 2 }
     ));
     typecheck_with_builtin_prelude(
         "def outer() -> Int { result = do::<Result> { Ok(())?\n Ok(1) }\n 1 }",
@@ -171,7 +197,7 @@ fn question_does_not_accept_nominal_result_lookalikes() {
         "defenum ResultLike<$T> { Ok($T), Err(String) }\nResultLike::Ok(())?",
     ))
     .expect_err("a user enum with Result-style variants is not canonical Result");
-    assert!(error.message.contains("canonical Result"), "{error:?}");
+    assert!(error.message.contains("MonadExtractor"), "{error:?}");
 }
 
 #[test]
@@ -209,7 +235,19 @@ fn question_in_non_result_closure_inside_do_rejects_outer_failure_targets() {
 
 #[test]
 fn question_preserves_safebind_alternative_target_for_non_result_do() {
-    for operator in ["Ok(())?", "_ =? Ok(())"] {
+    for (operator, expected_projection) in [
+        (
+            "Ok(())?",
+            SafeBindRhsProjection::CanonicalResultUnitChain { depth: 1 },
+        ),
+        (
+            "_ =? Ok(())",
+            SafeBindRhsProjection::CanonicalResultOnce {
+                payload_ty: Ty::Unit,
+                error_ty: Ty::Error,
+            },
+        ),
+    ] {
         let typed = typecheck_with_builtin_prelude(&format!(
             "result = do::<Option> {{ {operator}\n Option::Some(1) }}",
         ));
@@ -221,13 +259,7 @@ fn question_preserves_safebind_alternative_target_for_non_result_do() {
             control.failure_target,
             SafeBindFailureTarget::DoAlternative { .. }
         ));
-        assert!(matches!(
-            control.projection,
-            SafeBindRhsProjection::CanonicalResultOnce {
-                payload_ty: Ty::Unit,
-                ..
-            }
-        ));
+        assert_eq!(control.projection, expected_projection);
     }
 }
 

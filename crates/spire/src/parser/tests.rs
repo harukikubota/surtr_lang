@@ -6695,6 +6695,9 @@ fn test_process_message_wrappers_use_common_execution_boundary() {
                 _ => None,
             }).expect("generated message wrapper");
             let stmts = process_execution_statements(wrapper_body);
+            assert!(matches!(stmts.first(), Some(Ast::SafeBind(_, AstPattern::Annotated(_, name, AstTy::Named(_, state)), _, _))
+                if name == "state" && state == "Int"),
+                "generated state reads must retain the declared handler state type");
             assert!(matches!(stmts, [Ast::SafeBind(..), Ast::SafeBind(..), Ast::App(_, marker, args), _]
                 if matches!(marker.as_ref(), Ast::InternalVar(_, name) if name == "__process_postprocess")
                     && matches!(args.as_slice(), [RecordLitArg::Positional(Ast::Var(_, name))] if name == "pid")),

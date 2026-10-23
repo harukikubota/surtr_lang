@@ -1,5 +1,5 @@
 def f() -> Result<Int> {
   value: Option<Int> = Option::Some(1)
-  num =? value
+  Option::Some(num) =? value
   Ok(num)
 }

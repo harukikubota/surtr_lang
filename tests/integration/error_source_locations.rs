@@ -188,6 +188,13 @@ fn assert_error_source_location_with_bytecode(
             "IntParseInvalidDigit(base, ch, index)",
             false,
         )
+    } else if origin == "stdlib_option_none" {
+        (
+            fs::read_to_string(repo_root().join("lib/types/option.srt")).unwrap(),
+            "types/option.srt".to_string(),
+            "NoneError()",
+            false,
+        )
     } else if definitions
         .as_ref()
         .is_some_and(|definitions| definitions.contains(origin))
@@ -213,7 +220,14 @@ fn assert_error_source_location_with_bytecode(
             "origin must be unique"
         );
     }
-    let byte_start = origin_source.find(origin).expect("origin must exist");
+    let byte_start = if origin_file == "types/option.srt" {
+        origin_source
+            .find("Option::None => Err(NoneError())")
+            .expect("Option extract failure branch")
+            + "Option::None => Err(".len()
+    } else {
+        origin_source.find(origin).expect("origin must exist")
+    };
     let prefix = &origin_source[..byte_start];
     let start = prefix.chars().count();
     let end = start + origin.chars().count();
@@ -230,7 +244,7 @@ fn assert_error_source_location_with_bytecode(
     let actual_file = location["file"]
         .as_str()
         .expect("generation file must exist");
-    if origin_file == "types/int.srt" {
+    if origin_file == "types/int.srt" || origin_file == "types/option.srt" {
         assert_eq!(actual_file, origin_file, "{dump}");
     } else {
         assert_eq!(
@@ -311,13 +325,13 @@ fn error_source_location_safebind_selects_the_failing_pattern_node() {
         ("", "[[x]] =? [[]]", "[x]", "ListPatternTooShort"),
         (
             "empty: Option<Int> = Option::None\n  ",
-            "Option::Some(x) =? empty",
+            "Option::Some(x) =? Ok(empty)",
             "Option::Some(x)",
             "EnumVariantPatternMismatch",
         ),
         (
             "",
-            "Option::Some(11) =? Option::Some(2)",
+            "Option::Some(11) =? Ok(Option::Some(2))",
             "11",
             "IntLiteralPatternMismatch",
         ),
@@ -362,6 +376,10 @@ fn error_source_location_safebind_selects_the_failing_pattern_node() {
 #[test]
 fn error_source_location_keeps_generation_site_across_result_and_extractor_propagation() {
     let cases = [
+        ("def main() -> Result<Int> { MonadExtractor::extract(Option<Int>::None) }\nmain()\n", "stdlib_option_none", "NoneError"),
+        ("def main() -> Result<Int> { value =? Option<Int>::None; Ok(value) }\nmain()\n", "stdlib_option_none", "NoneError"),
+        ("def main() -> Result<Int> { do::<Result> { value =? Option<Int>::None; Ok(value) } }\nmain()\n", "stdlib_option_none", "NoneError"),
+        ("deferror Rejected { |message: String| message }\ndef main() -> Result<Int> { value =? Either<Error, Int>::Left(Rejected(\"generated\")); Ok(value) }\nmain()\n", "Rejected(\"generated\")", "Rejected"),
         ("def main() -> Result<Int> {\n  1 =? Err(NoneError())\n  Ok(0)\n}\nmain()\n", "NoneError()", "NoneError"),
         ("def main() -> Result<Int> {\n  value =? Int::parse(\"a\")\n  Ok(value)\n}\nmain()\n", "stdlib_parse_error", "IntParseInvalidDigit"),
         ("deferror Rejected { |message: String| message }\ndef source() -> Result<Int> {\n  Err(Rejected(\"generated\"))\n}\ndef main() -> Result<Int> {\n  value =? source()\n  Ok(value)\n}\nmain()\n", "Rejected(\"generated\")" , "Rejected"),
@@ -391,12 +409,15 @@ fn error_source_location_partial_bind_selects_the_failing_child_in_result_contex
 
 #[test]
 fn error_source_location_statement_question_preserves_error_and_cause() {
-    let definitions = "deferror Inner { \"inner\" }\ndeferror Outer { |message: String| message }\ndefmod E {\n  def source() -> Result<()> {\n    Result::cause(Err(Inner()), Outer(\"wrapped\"))\n  }\n}\n";
+    let definitions = "deferror Inner { \"inner\" }\ndeferror Outer { |message: String| message }\ndefmod E {\n  def source() -> Result<()> {\n    Result::cause(Err(Inner()), Outer(\"wrapped\"))\n  }\n  def nested() -> Result<Result<Unit>> { Ok(source()) }\n}\n";
     for body in [
         "E::source()?\n  Ok(0)",
         "match True { True => { E::source()?\n    () }, False => () }\n  Ok(0)",
         "do::<Result> {\n    E::source()?\n    Ok(0)\n  }",
         "inner: (-> Result<Int>) = {|| E::source()?\n    Ok(0) }\n  inner()",
+        "E::nested()?\n  Ok(0)",
+        "do::<Result> {\n    E::nested()?\n    Ok(0)\n  }",
+        "inner: (-> Result<Int>) = {|| E::nested()?\n    Ok(0) }\n  inner()",
     ] {
         let source = format!("{definitions}def main() -> Result<Int> {{\n  {body}\n}}\nmain()\n");
         let dump = assert_error_source_location(&source, "Outer(\"wrapped\")", "Outer");
@@ -406,6 +427,14 @@ fn error_source_location_statement_question_preserves_error_and_cause() {
             "Err(Outer(\"wrapped\"))\n|_ Inner(\"inner\")"
         );
     }
+    let source =
+        format!("{definitions}def main() -> Result<Int> {{ E::nested()?\n Ok(0) }}\nmain()\n");
+    let dump =
+        assert_error_source_location_with_bytecode(&source, "Outer(\"wrapped\")", "Outer", true);
+    assert_eq!(
+        dump["result"]["last_value"],
+        "Err(Outer(\"wrapped\"))\n|_ Inner(\"inner\")"
+    );
 }
 
 #[test]

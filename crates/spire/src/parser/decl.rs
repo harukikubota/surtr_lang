@@ -813,9 +813,9 @@ fn process_postprocess_call(span: &Span) -> Ast {
     hidden_runtime_call(span, "__process_postprocess", vec![var(span, "pid")])
 }
 
-fn process_get_statements(span: &Span, call_args: Vec<Ast>) -> Vec<Ast> {
+fn process_get_statements(span: &Span, state_ty: &AstTy, call_args: Vec<Ast>) -> Vec<Ast> {
     vec![
-        process_state_bind(span, "Agent"),
+        process_state_bind(span, "Agent", state_ty),
         Ast::SafeBind(
             span.clone(),
             AstPattern::Var(span.clone(), "reply".to_string()),
@@ -831,10 +831,10 @@ fn process_get_statements(span: &Span, call_args: Vec<Ast>) -> Vec<Ast> {
     ]
 }
 
-fn process_state_bind(span: &Span, lower_module: &str) -> Ast {
+fn process_state_bind(span: &Span, lower_module: &str, state_ty: &AstTy) -> Ast {
     Ast::SafeBind(
         span.clone(),
-        AstPattern::Var(span.clone(), "state".to_string()),
+        AstPattern::Annotated(span.clone(), "state".to_string(), state_ty.clone()),
         Box::new(internal_qualified_call(
             span,
             &[lower_module, "state"],
@@ -885,6 +885,7 @@ fn build_readonly_get_wrapper(
     agent_name: &str,
     wrapper_name: &str,
     get_def: &Ast,
+    state_ty: &AstTy,
 ) -> Result<Ast, ParseError> {
     let params = def_params(get_def)?;
     let surface_params = params.iter().skip(2).cloned().collect::<Vec<_>>();
@@ -895,7 +896,7 @@ fn build_readonly_get_wrapper(
         "Agent",
         agent_name,
         true,
-        process_get_statements(span, call_args),
+        process_get_statements(span, state_ty, call_args),
     );
     Ok(Ast::Def(
         span.clone(),
@@ -1144,6 +1145,7 @@ fn build_state_get_wrapper(
     agent_name: &str,
     wrapper_name: &str,
     get_def: &Ast,
+    state_ty: &AstTy,
     singleton: bool,
 ) -> Result<Ast, ParseError> {
     let params = def_params(get_def)?;
@@ -1166,7 +1168,7 @@ fn build_state_get_wrapper(
         "Agent",
         agent_name,
         singleton,
-        process_get_statements(span, call_args),
+        process_get_statements(span, state_ty, call_args),
     );
     Ok(Ast::Def(
         span.clone(),
@@ -1185,6 +1187,7 @@ fn build_state_set_wrapper(
     agent_name: &str,
     wrapper_name: &str,
     set_def: &Ast,
+    state_ty: &AstTy,
     singleton: bool,
 ) -> Result<Ast, ParseError> {
     let params = def_params(set_def)?;
@@ -1203,7 +1206,7 @@ fn build_state_set_wrapper(
     let mut call_args = vec![var(span, "pid"), var(span, "state")];
     call_args.extend(param_vars(span, forwarded_params));
     let mut stmts = Vec::new();
-    stmts.push(process_state_bind(span, "Agent"));
+    stmts.push(process_state_bind(span, "Agent", state_ty));
     stmts.push(Ast::SafeBind(
         span.clone(),
         AstPattern::Var(span.clone(), "next_state".to_string()),
@@ -1269,6 +1272,7 @@ fn build_genserver_call_wrapper(
     wrapper_name: &str,
     internal_handler_name: &str,
     call_def: &Ast,
+    state_ty: &AstTy,
     singleton: bool,
 ) -> Result<Ast, ParseError> {
     let params = def_params(call_def)?;
@@ -1287,7 +1291,7 @@ fn build_genserver_call_wrapper(
     let mut call_args = vec![var(span, "pid"), var(span, "state")];
     call_args.extend(param_vars(span, forwarded_params));
     let mut stmts = Vec::new();
-    stmts.push(process_state_bind(span, "GenServer"));
+    stmts.push(process_state_bind(span, "GenServer", state_ty));
     stmts.push(Ast::SafeBind(
         span.clone(),
         AstPattern::Var(span.clone(), "call_result".to_string()),
@@ -1394,6 +1398,7 @@ fn build_genserver_cast_wrapper(
     wrapper_name: &str,
     internal_handler_name: &str,
     cast_def: &Ast,
+    state_ty: &AstTy,
     singleton: bool,
 ) -> Result<Ast, ParseError> {
     let params = def_params(cast_def)?;
@@ -1412,7 +1417,7 @@ fn build_genserver_cast_wrapper(
     let mut call_args = vec![var(span, "pid"), var(span, "state")];
     call_args.extend(param_vars(span, forwarded_params));
     let mut stmts = Vec::new();
-    stmts.push(process_state_bind(span, "GenServer"));
+    stmts.push(process_state_bind(span, "GenServer", state_ty));
     stmts.push(Ast::SafeBind(
         span.clone(),
         AstPattern::Var(span.clone(), "cast_result".to_string()),
@@ -5492,6 +5497,7 @@ impl Parser<'_> {
                 call_name,
                 internal_name,
                 call_def,
+                &process_meta.state,
                 process_meta.instance == AgentInstance::Singleton,
             )?);
         }
@@ -5502,6 +5508,7 @@ impl Parser<'_> {
                 cast_name,
                 internal_name,
                 cast_def,
+                &process_meta.state,
                 process_meta.instance == AgentInstance::Singleton,
             )?);
         }
@@ -5688,7 +5695,11 @@ impl Parser<'_> {
         match meta.kind {
             AgentKind::ReadOnly => {
                 body.push(build_readonly_get_wrapper(
-                    &span, &name, &get_name, &get_def,
+                    &span,
+                    &name,
+                    &get_name,
+                    &get_def,
+                    &meta.state,
                 )?);
             }
             AgentKind::State => {
@@ -5704,11 +5715,21 @@ impl Parser<'_> {
                 }
                 let singleton = meta.instance == AgentInstance::Singleton;
                 body.push(build_state_get_wrapper(
-                    &span, &name, &get_name, &get_def, singleton,
+                    &span,
+                    &name,
+                    &get_name,
+                    &get_def,
+                    &meta.state,
+                    singleton,
                 )?);
                 if let (Some(set_name), Some(set_def)) = (set_name.as_deref(), set_def.as_ref()) {
                     body.push(build_state_set_wrapper(
-                        &span, &name, set_name, set_def, singleton,
+                        &span,
+                        &name,
+                        set_name,
+                        set_def,
+                        &meta.state,
+                        singleton,
                     )?);
                 }
             }

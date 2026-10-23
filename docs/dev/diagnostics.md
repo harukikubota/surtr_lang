@@ -103,7 +103,7 @@ placeholderの競合では、その正規化で確定した要求型をまとめ
 | TypeCtorTrait | `MissingTypeConstructorConstraint`, `TypeConstructorFamilyMismatch`, `TypePayloadMismatch`, `MissingTypeConstructorCapability` |
 | Trait method contract | `TraitMethodTypeListMismatch`, `TraitMethodTypeListArityMismatch`, `TraitMethodConstraintMismatch` |
 | branch | `IfBranchTypeMismatch`, `MatchArmTypeMismatch`, `CondBranchTypeMismatch` |
-| SafeBind input | `SafeBindTotalPatternNonMonadRhs`, `SafeBindTotalPatternNonResultMonadRhs` |
+| SafeBind input | `SafeBindTotalPatternNonExtractingRhs`, `SafeBindMissingMonadExtractor` |
 | pattern / Extractor | `PatternTypeMismatch`, `PatternShapeMismatch`, `PatternArityMismatch`, `NonTotalBindingPattern`, `NestedResultErrorPattern`, `MatchGuardTypeMismatch`, `ConstructorPatternRequiresEnumOrResultRhs`, `ExtractorInputTypeMismatch`, `ExtractorArityMismatch`, `NonExhaustiveMatch` |
 | policy | `SafeBindErrorTypeMismatch`, `SafeBindRequiresMonadFailTarget`, Facet / Process / source / compile policy reason、`NominalDeclarationConstraintViolation`, `TraitImplementationForbidden`, `TraitHelperCaptureNeedsExpectedType`, `ReservedIntrinsicMarkerUsage` |
 | producer contract | `TypecheckInvariantViolation` |
@@ -146,14 +146,40 @@ messageに合わせて変形させない。
 | `ConstraintSubject` / `TraitObligation` | subject/constraint、またはtrait name/arguments・subject type・position |
 | `TypeConstructorCarrier` | `family`, `family_id`, `expected_carrier`, `actual_carrier` |
 | `BranchAssertion` | `expected_type`, `actual_type`, `branch` |
-| `SafeBindRelation` | `lhs_type`, `rhs_type`, `lhs_is_total`, `rhs_is_canonical_result`, `monad_capability` |
+| `SafeBindRelation` | `lhs_type`, `rhs_type`, `lhs_is_total` |
+| `SafeBindExtraction` | `rhs_type`, `payload_type`, `lhs_input`, `extractor_capability` |
 | `Pattern` / `Policy` / `Runtime` / `Parse` / `Resolve` / `Repl` | family固有の閉じた入力。`detail`は表示・追跡用であり、reason再分類には使わない |
 
-SafeBind固有reasonは、通常pattern型検査を通過したtotal pattern + non-Result RHSにだけ生成する。
-canonical Monad proofが成立すれば`SafeBindTotalPatternNonResultMonadRhs`、closed concrete typeで
-不成立なら`SafeBindTotalPatternNonMonadRhs`とする。Deferred、rigid genericのbound不足、solverの
-既存structured failureをこの二reasonへ畳み込まない。どちらのheadlineもcanonical Resultだけが
-外側一段の自動分解対象であることを本文に含め、変換APIのhelpは生成しない。
+### SafeBind の入力診断
+
+SafeBind は canonical MonadExtractor による分解と、その後の通常 Pattern 検査を区別する。RHS 型・宣言済み能力から分解を決め、対応型では extract の返す Result の外側一段だけを処理する。分解後の Pattern 不一致を元 RHS 全体で再検査しない。未実装が確定した型への全体照合と、能力が未確定の obligation を区別する。
+
+- `SafeBindTotalPatternNonExtractingRhs` は、分解しない値全体に対する total 束縛の誤用を表し、`SafeBindRelation` を使って `=` を案内する。
+- `SafeBindMissingMonadExtractor` は、具象 Monad の分解入口不足を表し、`SafeBindExtraction` を使う。本文・caption に元 RHS 型、Monad の mapped payload 型、LHS の直接の入力要求または形、MonadExtractor の能力判定を示す。help は「RHS を分解したいなら MonadExtractor を実装する」という意味にし、実装すれば Pattern 全体が成功するとは断定しない。
+
+`payload_type` は Monad の constructor slot mapping から求め、末尾の型引数や capture parameter から推測しない。未注釈の変数・wildcard・total alias でも mapped payload から診断用の LHS 型を導出する。`lhs_input` は直接の入力型または構造の要求とし、元 RHS 型や payload 型と混同しない。
+
+| 未実装 RHS に対する LHS | 診断・処理 |
+|---|---|
+| Monad RHS への未注釈 total 変数・wildcard・alias | 分解入口不足 |
+| mapped payload の型を要求する注釈付き変数・wildcard | 分解入口不足 |
+| RHS 全体の型を明示した total Pattern | total 誤用、`=` を案内 |
+| 非 Monad 値への適合する total Pattern | total 誤用、`=` を案内 |
+| RHS 全体を受け取れる partial Pattern | 元の値全体を通常照合する |
+| RHS 全体とは不整合で、直下 payload の入力を要求する Extractor・literal・pin・List・String・Tuple・Record・HashMap・Enum variant | 分解入口不足。子全体の成立は保証しない |
+| 全体に適合し子もすべて total な Tuple / Record、空 HashMap | total 誤用 |
+| 全体に適合し partial な子を持つ Tuple / Record、非空 HashMap | 通常 Pattern 検査 |
+| payload とも無関係な型注釈・形の不一致 | 通常の型・Pattern 診断 |
+
+例えば `x: String =? Identity(10)` と `x: String =? 10` は通常の型不一致である。`[x: Int] =? ["a"]` は子の注釈不一致であり、分解入口不足へ置き換えない。`x: Int =? Option::Some(Identity(10))` も、Option を一段分解した後の Int と Identity<Int> の不一致である。内側の Identity の未実装を案内しない。
+
+外側の直接入力関係が成立した後の子 Pattern、Extractor の head 解決・事前引数・引数数・成功 payload、Record の未知・不足・重複 field、Tuple の arity、HashMap key、pin の Eq、OR / projection / Error Pattern の利用位置、Facet の禁止は通常診断を維持する。この保持規則は、元の値全体に直接適合する入力、または実際に分解した後の入力に対して生成される通常診断に適用する。未実装型の mapped payload に Pattern 全体を仮適用し、これらのエラーを先取りする義務はない。分解入口不足の診断は、実装後にこれらの別エラーが残る可能性を含む。
+
+rigid generic の宣言 bound 不足は `MissingGenericBound` とし、分解を要求する場合に `$F: MonadExtractor` を案内する。`$F: Monad` だけで分解を許可せず、具象化時にも能力を強化しない。分解を要求しない全体入力の partial Pattern には一律に bound を追加しない。Deferred、推論未確定、候補の制約不成立・曖昧さ、canonical 宣言・メソッド契約の不正を具象型の未実装 reason へ畳み込まない。
+
+producer は直接の RHS 入力不一致と子の不一致を明示的に区別する。表示文・reason の文字列照合・span の包含関係で分類を復元しない。元 RHS と payload で `check_pattern` を二度実行する経路や、診断専用に partial Pattern 全体を別入力で検査するチェッカを追加しない。通常 Pattern 検査を保ち、直接入力要求と constructor slot の対応から入口だけを判定する。
+
+入力不一致の箇所と元 RHS の source facts を保持する。入力検査後の失敗返却先の能力不足は既存の operator / return / do-carrier の facts を使い、RHS の未実装 reason に置き換えない。human / JSON は同じ reason と typed data から表示し、旧2 reason と旧 data field の互換読取りを残さない。スキーマバージョンは上げない。
 
 Pattern failure の処理先は通常 callable では `MonadFail`、do では `MonadFail > Alternative` の順で解決する。
 MonadFail は元の Error を通常の `fail(error)` 呼出しへ渡す。Alternative は `empty()` に置き換える。

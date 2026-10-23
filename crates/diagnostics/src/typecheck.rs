@@ -82,6 +82,18 @@ pub fn structured_type_error_spec(input: &StructuredDiagnostic) -> DiagnosticSpe
         .chain(input.related.iter())
         .map(source_fact_label)
         .collect();
+    match &input.data {
+        DiagnosticData::SafeBindRelation(_) => {
+            spec.help = Some("Use `=` for a total binding of the whole value.".into());
+        }
+        DiagnosticData::SafeBindExtraction(value) => {
+            if let Some(primary) = spec.labels.first_mut() {
+                primary.message = format!("{} does not implement MonadExtractor", value.rhs_type);
+            }
+            spec.help = Some("Implement MonadExtractor to provide the RHS decomposition entry point; the resulting payload is checked against the Pattern separately.".into());
+        }
+        _ => {}
+    }
     if let DiagnosticData::PatternFailure(value) = &input.data {
         let template = pattern_failure_template(value.context);
         spec.labels[0].message = template.primary_caption.into();
@@ -176,19 +188,19 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
         .type_reason()
         .expect("typecheck renderer requires a type diagnostic reason");
     match reason {
-        TypeDiagnosticReason::SafeBindTotalPatternNonMonadRhs => {
+        TypeDiagnosticReason::SafeBindTotalPatternNonExtractingRhs => {
             if let DiagnosticData::SafeBindRelation(value) = &input.data {
                 return format!(
-                    "{} is not a SafeBind target; it is not a Monad, and only a Result RHS can be decomposed by `=?`.",
+                    "A total Pattern cannot use `=?` to bind the whole {} value.",
                     value.rhs_type
                 );
             }
         }
-        TypeDiagnosticReason::SafeBindTotalPatternNonResultMonadRhs => {
-            if let DiagnosticData::SafeBindRelation(value) = &input.data {
+        TypeDiagnosticReason::SafeBindMissingMonadExtractor => {
+            if let DiagnosticData::SafeBindExtraction(value) = &input.data {
                 return format!(
-                    "{} is not a SafeBind target; `=?` propagates Result-style failures, not values from another Monad. Only a Result RHS can be decomposed by `=?`.",
-                    value.rhs_type
+                    "Implement MonadExtractor to decompose the {} RHS; the Pattern requires {} at its input, and its mapped payload is {}.",
+                    value.rhs_type, value.lhs_input, value.payload_type
                 );
             }
         }

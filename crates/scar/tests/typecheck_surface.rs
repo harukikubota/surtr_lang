@@ -133,7 +133,7 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         safebind_top_ok_pattern_accepts_nested_result_rhs as fn(),
     ),
     surface_case!(safebind_partial_option_constructor_checks_the_whole_rhs),
-    surface_case!(safebind_total_option_rhs_uses_non_result_monad_reason),
+    surface_case!(safebind_total_unimplemented_monad_rhs_requires_extraction),
     surface_case!(safebind_annotation_mismatch_precedes_total_rhs_classification),
     surface_case!(safebind_unbound_generic_rhs_keeps_capability_failure),
     (
@@ -591,7 +591,7 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     surface_case!(do_final_expression_still_requires_monad),
     surface_case!(do_concrete_non_monad_reason_is_independent_of_origin),
     surface_case!(do_safebind_selects_typed_failure_targets),
-    surface_case!(do_safebind_preserves_n06_and_carrier_boundaries),
+    surface_case!(do_safebind_preserves_input_and_carrier_boundaries),
     surface_case!(do_safebind_return_mismatch_points_to_the_final_expression),
     surface_case!(do_partial_extract_rejects_carriers_without_alternative),
     surface_case!(do_generated_bind_closure_keeps_facet_source_scope),
@@ -1741,11 +1741,11 @@ fn safebind_total_pattern_rejects_plain_non_monad_rhs() {
     let err = typecheck(resolved).expect_err("total non-Result scalar should be rejected");
     assert_eq!(
         err.message,
-        "Int is not a SafeBind target; it is not a Monad, and only a Result RHS can be decomposed by `=?`."
+        "A total Pattern cannot use `=?` to bind the whole Int value."
     );
     assert_eq!(
         err.reason(),
-        Some(diagnostics::TypeDiagnosticReason::SafeBindTotalPatternNonMonadRhs)
+        Some(diagnostics::TypeDiagnosticReason::SafeBindTotalPatternNonExtractingRhs)
     );
     assert!(err.hint.is_none());
 }
@@ -1839,69 +1839,60 @@ fn safebind_top_ok_pattern_accepts_nested_result_rhs() {
 Ok(num) =? value"#,
     );
     let typed = typecheck(resolved).expect("typecheck should succeed");
-    assert!(matches!(
-        typed.last().map(|node| &node.node),
-        Some(TypedInner::SafeBind(
+    assert!(typed.iter().any(|node| matches!(
+        &node.node,
+        TypedInner::SafeBind(
             _,
             _,
             SafeBindRhsProjection::CanonicalResultOnce { .. },
             SafeBindFailureTarget::TopLevel,
-        ))
-    ));
+        )
+    )));
 }
 
 fn safebind_partial_option_constructor_checks_the_whole_rhs() {
     let resolved = resolve_with_builtin_prelude(
         r#"value: Option<Int> = Option::Some(1)
-Option::Some(num) =? value"#,
+Option::Some(num) =? Ok(value)"#,
     );
-    let typed = typecheck(resolved).expect("partial Option pattern should inspect the whole RHS");
-    assert!(matches!(
-        typed.last().map(|node| &node.node),
-        Some(TypedInner::SafeBind(
+    let typed = typecheck(resolved)
+        .expect("an explicit outer Result preserves the Option whole-value Pattern");
+    assert!(typed.iter().any(|node| matches!(
+        &node.node,
+        TypedInner::SafeBind(
             _,
             _,
-            SafeBindRhsProjection::PatternInput { .. },
-            SafeBindFailureTarget::TopLevel,
-        ))
-    ));
+            SafeBindRhsProjection::CanonicalResultOnce { .. },
+            SafeBindFailureTarget::TopLevel
+        )
+    )));
 }
 
-fn safebind_total_option_rhs_uses_non_result_monad_reason() {
-    let resolved = resolve_with_builtin_prelude(
-        r#"value: Option<Int> = Option::Some(1)
-saved =? value"#,
-    );
-    let err = typecheck(resolved).expect_err("total Option SafeBind should be rejected");
-    assert_eq!(
-        err.message,
-        "Option<Int> is not a SafeBind target; `=?` propagates Result-style failures, not values from another Monad. Only a Result RHS can be decomposed by `=?`."
-    );
+fn safebind_total_unimplemented_monad_rhs_requires_extraction() {
+    let resolved = resolve_with_builtin_prelude("saved =? Identity::new(1)");
+    let err = typecheck(resolved).expect_err("Identity has no extraction implementation");
     assert_eq!(
         err.reason(),
-        Some(diagnostics::TypeDiagnosticReason::SafeBindTotalPatternNonResultMonadRhs)
+        Some(diagnostics::TypeDiagnosticReason::SafeBindMissingMonadExtractor)
     );
     let diagnostic = err
         .structured
         .expect("SafeBind rejection should be structured");
-    let diagnostics::DiagnosticData::SafeBindRelation(data) = diagnostic.data else {
-        panic!("expected SafeBindRelation data");
+    let diagnostics::DiagnosticData::SafeBindExtraction(data) = diagnostic.data else {
+        panic!("expected SafeBindExtraction data");
     };
-    assert!(data.lhs_is_total);
-    assert!(!data.rhs_is_canonical_result);
-    assert_eq!(data.monad_capability, "satisfied");
-    assert!(err.hint.is_none());
+    assert_eq!(data.payload_type, "Int");
+    assert_eq!(data.lhs_input, "Int");
+    assert_eq!(data.extractor_capability, "unsatisfied");
 }
 
 fn safebind_annotation_mismatch_precedes_total_rhs_classification() {
-    let resolved = resolve_with_builtin_prelude("num: Int =? Option::Some(10)");
-    let err = typecheck(resolved).expect_err("the ordinary pattern relation should fail first");
+    let resolved = resolve_with_builtin_prelude("num: String =? Option::Some(10)");
+    let err = typecheck(resolved).expect_err("the extracted payload must satisfy the annotation");
     assert_eq!(
         err.reason(),
         Some(diagnostics::TypeDiagnosticReason::AnnotationTypeMismatch)
     );
-    assert!(!err.message.contains("SafeBind target"));
-    assert!(!err.message.contains("Result RHS"));
 }
 
 fn safebind_unbound_generic_rhs_keeps_capability_failure() {
@@ -1911,19 +1902,11 @@ fn safebind_unbound_generic_rhs_keeps_capability_failure() {
   Ok(saved)
 }"#,
     );
-    let err =
-        typecheck(resolved).expect_err("an unbound rigid RHS must not be classified by impl count");
+    let err = typecheck(resolved).expect_err("an unknown rigid RHS needs an extraction bound");
     assert_eq!(
         err.reason(),
         Some(diagnostics::TypeDiagnosticReason::MissingGenericBound)
     );
-    assert!(!matches!(
-        err.reason(),
-        Some(
-            diagnostics::TypeDiagnosticReason::SafeBindTotalPatternNonMonadRhs
-                | diagnostics::TypeDiagnosticReason::SafeBindTotalPatternNonResultMonadRhs
-        )
-    ));
 }
 
 fn safebind_list_pattern_accepts_plain_list_rhs() {
@@ -2972,8 +2955,9 @@ replaced = put(~updated.name, "carol")
 bumped =? Facet::over(~replaced.score, {|score| Ok(score + 1)})
 Facet::over_result(~bumped.score, {|score| Ok(score)})"#,
     );
-    let last = typed.last().expect("typed program should not be empty");
-    assert!(matches!(last.node, TypedInner::FacetOver { .. }));
+    assert!(typed
+        .iter()
+        .any(|node| matches!(node.node, TypedInner::FacetOver { .. })));
 }
 
 fn facet_shorthand_reuses_existing_facet_api_errors() {
@@ -6829,7 +6813,7 @@ fn do_safebind_selects_typed_failure_targets() {
     );
 
     let option_source = r#"result: Option<Int> = do::<Option> {
-  Option::Some(value) =? Option::Some(1)
+  Option::Some(value) =? Ok(Option::Some(1))
   Option::Some(value)
 }"#;
     let typed = typecheck_with_builtin_prelude_in_script_module(option_source);
@@ -6846,7 +6830,7 @@ fn do_safebind_selects_typed_failure_targets() {
     } = control.as_ref();
     assert!(matches!(
         projection,
-        SafeBindRhsProjection::PatternInput { .. }
+        SafeBindRhsProjection::CanonicalResultOnce { .. }
     ));
     let SafeBindFailureTarget::DoAlternative { empty } = failure_target else {
         panic!("Option do SafeBind must use Alternative empty: {failure_target:?}")
@@ -6876,7 +6860,7 @@ fn do_safebind_selects_typed_failure_targets() {
     );
     assert_eq!(
         origins.rhs_span.start,
-        option_source.find("Option::Some(1)").unwrap()
+        option_source.find("Ok(Option::Some(1))").unwrap()
     );
     assert_eq!(
         origins.result_span.start,
@@ -6932,42 +6916,39 @@ fn do_safebind_selects_typed_failure_targets() {
     );
 }
 
-fn do_safebind_preserves_n06_and_carrier_boundaries() {
+fn do_safebind_preserves_input_and_carrier_boundaries() {
     for (source, expected) in [
         (
             r#"result: Option<Int> = do::<Option> {
-  value =? Option::Some(1)
+  value =? Identity::new(1)
   Option::Some(value)
 }"#,
-            diagnostics::TypeDiagnosticReason::SafeBindTotalPatternNonResultMonadRhs,
+            diagnostics::TypeDiagnosticReason::SafeBindMissingMonadExtractor,
         ),
         (
             r#"result: Option<Int> = do::<Option> {
   value =? 1
   Option::Some(value)
 }"#,
-            diagnostics::TypeDiagnosticReason::SafeBindTotalPatternNonMonadRhs,
+            diagnostics::TypeDiagnosticReason::SafeBindTotalPatternNonExtractingRhs,
         ),
     ] {
         let error = typecheck_with_rules(source, RuntimeSourcePolicy::script())
-            .expect_err("do must reuse N06 total non-Result rejection");
+            .expect_err("do must reuse the common SafeBind input diagnostics");
         assert_eq!(error.reason(), Some(expected), "{error:?}");
     }
 
     let pattern_error = typecheck_with_rules(
         r#"result: Option<Int> = do::<Option> {
-  value: Int =? Option::Some(1)
-  Option::Some(value)
+  value: String =? Option::Some(1)
+  Option::Some(1)
 }"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("ordinary pattern checking must precede SafeBind policy");
     assert!(!matches!(
         pattern_error.reason(),
-        Some(
-            diagnostics::TypeDiagnosticReason::SafeBindTotalPatternNonMonadRhs
-                | diagnostics::TypeDiagnosticReason::SafeBindTotalPatternNonResultMonadRhs
-        )
+        Some(diagnostics::TypeDiagnosticReason::SafeBindTotalPatternNonExtractingRhs)
     ));
 
     let missing_alternative = typecheck_with_rules(
@@ -7091,7 +7072,7 @@ fn do_partial_extract_rejects_carriers_without_alternative() {
         ),
     ] {
         let source = format!(
-            "result: {result_ty} = do::<{rta}> {{\n  Option::Some(value) =? Option::Some(1)\n  {last}\n}}"
+            "result: {result_ty} = do::<{rta}> {{\n  Option::Some(value) =? Ok(Option::Some(1))\n  {last}\n}}"
         );
         let error = typecheck_with_rules(&source, RuntimeSourcePolicy::script())
             .expect_err("partial SafeBind requires Alternative on the carrier");
@@ -12192,7 +12173,7 @@ hash!["a" => value] = map"#,
         (
             r#"map = hash!["a" => 2]
 hash![] =? map"#,
-            "not a SafeBind target",
+            "A total Pattern cannot use `=?`",
         ),
         (
             r#"map = hash!["a" => 2]

@@ -371,6 +371,8 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
     repl_core_case!(core_do_monad_fail_pattern_error_is_preserved_across_chunks),
     repl_core_case!(core_do_monad_fail_safebind_and_alternative_boundaries),
     repl_core_case!(core_error_kinds_survive_chunks_and_rollback),
+    repl_core_case!(core_monad_extractor_signatures_docs_and_import),
+    repl_core_case!(core_statement_question_nested_error_keeps_session_alive),
 ];
 
 fn core_error_kinds_survive_chunks_and_rollback() {
@@ -489,8 +491,8 @@ fn core_do_monad_fail_pattern_error_is_preserved_across_chunks() {
 fn core_do_monad_fail_safebind_and_alternative_boundaries() {
     let mut engine = engine();
     for source in [
-        "match do::<Result> { Option::Some(value) =? Option<Int>::None; Ok(value) } { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
-        "match Identity::run(ResultT::run(do::<ResultT<Identity, _>> { Option::Some(value) =? Option<Int>::None; ResultT::ok::<Identity>(value) })) { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
+        "match do::<Result> { Option::Some(value) =? Ok(Option<Int>::None); Ok(value) } { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
+        "match Identity::run(ResultT::run(do::<ResultT<Identity, _>> { Option::Some(value) =? Ok(Option<Int>::None); ResultT::ok::<Identity>(value) })) { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
     ] {
         assert_repl_pattern_mismatch(&mut engine, source, "(\"EnumVariantPatternMismatch\", \"Option pattern expected Some, got None\")");
     }
@@ -506,7 +508,7 @@ fn core_do_monad_fail_safebind_and_alternative_boundaries() {
             "Ok(Option::None)",
         ),
         (
-            "OptionT::run(do::<OptionT<Result, _>> { Option::Some(value) =? Option<Int>::None; OptionT::some::<Result>(value) })",
+            "OptionT::run(do::<OptionT<Result, _>> { Option::Some(value) =? Ok(Option<Int>::None); OptionT::some::<Result>(value) })",
             "Ok(Option::None)",
         ),
         (
@@ -5651,19 +5653,83 @@ fn core_standard_state_get_rejects_ambiguity_and_keeps_session_alive() {
     assert!(rendered_text(&continued).contains("after_state_get_error: Int"));
 }
 
+fn core_monad_extractor_signatures_docs_and_import() {
+    let mut engine = engine();
+    let signature = signature_text(&engine.handle_line(":sig MonadExtractor::extract"));
+    assert!(signature.contains("Result"), "{signature}");
+    let documentation = doc_text(&engine.handle_line(":doc MonadExtractor::extract"));
+    assert!(documentation.contains("payload"), "{documentation}");
+
+    let missing = engine.handle_line("extract(Option::Some(3))");
+    assert!(
+        matches!(missing.output, ReplOutput::EvalError { .. }),
+        "{}",
+        rendered_text(&missing)
+    );
+    let qualified = engine.handle_line("MonadExtractor::extract(Option::Some(3))");
+    assert_eq!(rendered_text(&qualified).trim(), "Ok(3)");
+    let binding = engine.handle_line("extracted: Int =? Option::Some(7)");
+    assert!(
+        matches!(binding.output, ReplOutput::EvalSuccess { .. }),
+        "{}",
+        rendered_text(&binding)
+    );
+    assert_eq!(rendered_text(&engine.handle_line("extracted")).trim(), "7");
+
+    let imported = engine.handle_line("import MonadExtractor");
+    assert!(
+        !matches!(imported.output, ReplOutput::EvalError { .. }),
+        "{}",
+        rendered_text(&imported)
+    );
+    assert_eq!(
+        rendered_text(&engine.handle_line("extract(Ok(Option::Some(3)))")).trim(),
+        "Ok(Option::Some(3))"
+    );
+}
+
+fn core_statement_question_nested_error_keeps_session_alive() {
+    let mut engine = engine();
+    let stored = engine.handle_line("nested: Result<Result<Unit>> = Ok(Err(NoneError()))");
+    assert!(
+        matches!(stored.output, ReplOutput::EvalSuccess { .. }),
+        "{}",
+        rendered_text(&stored)
+    );
+
+    let rejected = engine.handle_line("nested?");
+    assert!(!rejected.should_exit);
+    assert!(
+        matches!(rejected.output, ReplOutput::EvalError { .. }),
+        "{}",
+        rendered_text(&rejected)
+    );
+    assert!(rendered_text(&rejected).contains("NoneError"));
+    assert_eq!(rendered_text(&engine.handle_line("2 + 3")), "5");
+
+    let successful = engine.handle_line("successful: Result<Result<Unit>> = Ok(Ok(()))");
+    assert!(
+        matches!(successful.output, ReplOutput::EvalSuccess { .. }),
+        "{}",
+        rendered_text(&successful)
+    );
+    let result = engine.handle_line("successful?");
+    assert!(!result.should_exit);
+    assert!(
+        matches!(result.output, ReplOutput::EvalSuccess { .. }),
+        "{}",
+        rendered_text(&result)
+    );
+}
+
 fn core_safebind_diagnostic_keeps_session_alive() {
     let mut engine = engine();
 
-    let rejected = engine.handle_line("saved =? Option::Some(1)");
+    let rejected = engine.handle_line("saved =? Identity(1)");
     assert!(!rejected.should_exit);
     assert!(matches!(rejected.output, ReplOutput::EvalError { .. }));
     let rejected_text = rendered_text(&rejected);
-    assert!(
-        rejected_text.contains("Result以外")
-            || rejected_text.contains("non-Result")
-            || rejected_text.contains("SafeBind"),
-        "{rejected_text}"
-    );
+    assert!(rejected_text.contains("MonadExtractor"), "{rejected_text}");
 
     let continued = engine.handle_line("after_safebind_error = 42");
     assert!(!continued.should_exit);

@@ -57,16 +57,15 @@ fn ordinary_callable_cannot_borrow_alternative_or_outer_target() {
 }
 
 #[test]
-fn safe_bind_does_not_unwrap_either_or_transformers() {
+fn safe_bind_does_not_implicitly_extract_transformers() {
     for source in [
-        "value =? Either<Error, Int>::Right(1)",
         "value =? ResultT::ok::<Identity>(1)",
         "value =? OptionT::some::<Identity>(1)",
     ] {
         let error = typecheck(resolve_with_builtin_prelude(source))
-            .expect_err("total non-Result SafeBind remains invalid");
+            .expect_err("transformers need an explicit extraction implementation");
         assert!(
-            error.message.contains("Only a Result RHS"),
+            error.message.contains("Implement MonadExtractor"),
             "{source}: {error:?}"
         );
     }

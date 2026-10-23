@@ -355,6 +355,7 @@ impl ScarSession {
                     Self::rewrite_fun_indices_in_ty(payload_ty, rewrites);
                     Self::rewrite_fun_indices_in_ty(error_ty, rewrites);
                 }
+                SafeBindRhsProjection::CanonicalResultUnitChain { .. } => {}
                 SafeBindRhsProjection::PatternInput { pattern_input_ty } => {
                     Self::rewrite_fun_indices_in_ty(pattern_input_ty, rewrites);
                 }
@@ -481,6 +482,7 @@ impl ScarSession {
                         Self::rewrite_fun_indices_in_ty(payload_ty, rewrites);
                         Self::rewrite_fun_indices_in_ty(error_ty, rewrites);
                     }
+                    SafeBindRhsProjection::CanonicalResultUnitChain { .. } => {}
                     SafeBindRhsProjection::PatternInput { pattern_input_ty } => {
                         Self::rewrite_fun_indices_in_ty(pattern_input_ty, rewrites);
                     }

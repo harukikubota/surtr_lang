@@ -1,10 +1,10 @@
 @doc """
 Standard `Option` enum.
 `Option<$T>` represents an optional value in user code.
-It is not part of Surtr's automatic failure-propagation machinery: `=?` does
-not unwrap an `Option`. A partial pattern can still inspect the whole value,
-for example `Option::Some(value) =? option`. Missing values participate in
-Result control flow only after an explicit conversion.
+Its MonadExtractor implementation lets `value =? option` extract one Some
+payload. None becomes Err(NoneError()) at the current failure target.
+For inspection of the entire Option use match, apply_pattern, or an explicit
+Result wrapper such as `Option::Some(value) =? Ok(option)`.
 The type sugar `T?` builds `Option<T>`.
 Using `Option<T>` in a struct field is therefore equivalent to using `T?`.
 Result-oriented updates still need explicit conversion in and out of `Option`.
@@ -176,6 +176,25 @@ impl Monad for Option<$T> {
 }
 
 @doc """
+Extract Some unchanged as Ok; turn None into a new NoneError.
+The Error is constructed here, with the ordinary source location.
+
+## REPL
+xldr(1)> MonadExtractor::extract(Option::Some(3))
+Ok(3)
+xldr(2)> Result::is_err(MonadExtractor::extract(Option<Int>::None))
+True
+"""
+impl MonadExtractor for Option<$T> {
+  def extract(self: Option<$A>) -> Result<$A> {
+    match self {
+      Option::Some(value) => Ok(value),
+      Option::None => Err(NoneError()),
+    }
+  }
+}
+
+@doc """
 `Alternative` implementation for `Option`.
 `<|>` returns the first `Some` value, or its right operand when the left is
 `None`.
@@ -216,9 +235,6 @@ impl Convert<Result<$T>> for Option<$T> {
   Ok(1)
   """
   def to::<Result<$T>>(self: Self) -> Result<$T> {
-    match self {
-      Option::Some(value) => Ok(value),
-      Option::None => Err(NoneError()),
-    }
+    MonadExtractor::extract(self)
   }
 }
