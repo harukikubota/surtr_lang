@@ -22,6 +22,7 @@ REPL は起動時に標準定義ソースと preload を読み切る OnceRead un
 - [Identity](./identity.md)
 - [Reader](./reader.md)
 - [State](./state.md)
+- [Monad の利用と実装](./monad.md)
 - [Monad transformers](./monad-transformers.md)
 - [doによるMonadの逐次処理](./do.md)
 - [Range](./range.md)

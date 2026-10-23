@@ -257,41 +257,17 @@ pipeline = &parse_int >=> &require_small
 
 ## `=?` SafeBind
 
-`=?` は失敗しうる値から成功側だけを束縛し、失敗はそのまま返す構文です。
-通常の関数では、返り型がMonadFailを実装しているときに使えます。
-RHSの失敗とPattern不一致で生じたErrorを、返り型の`fail`に渡します。
-REPL では入力自体は受理しますが、失敗時はエラーを表示してセッションを継続します。
+`=?` は言語の束縛構文です。RHS が `MonadExtractor` を実装しているときは
+`extract` を一度呼び、その Result の成功値を Pattern へ渡します。
+対応型の一段分解、未対応型の partial Pattern、失敗返却先は
+[Monad](./monad.md#safebind)で説明しています。
 
 ```surtr
 value: Int =? try_to::<Int>("1")
 [head, ..tail] =? [1, 2, 3]
 [first, ..rest] =? "source"
-Option::Some(saved) =? Option::Some(1)
+saved =? Option::Some(1)
 ```
-
-自動的に外側を分解する RHS は canonical `Result` だけで、一段だけです。
-Result 以外の RHS は、constructor、literal、list/string、Extractor などの partial pattern が
-値全体を明示検査するときだけそのまま渡されます。Monad payload の暗黙取り出しはありません。
-
-`do`内では`MonadFail > Alternative`の順に失敗を処理します。
-MonadFailがなければ`Alternative::empty()`を使い、どちらもなければコンパイルエラーです。
-`do`外の通常の関数やclosureは、自身の返り型にMonadFailを要求します。
-内側のcallableやdoは、外側の失敗処理能力を引き継ぎません。
-`guard`はFalseのとき、常にAlternativeの`empty`を使います。
-
-`Option::Some(saved) =? Option::Some(1)` は Option 全体を明示的に検査するため有効です。
-一方、`saved =? Option::Some(1)` のような total pattern は、RHS が Result 以外の Monad なので
-compile error です。`saved =? 1` も非Monad RHSとして拒否されます。
-
-`=?` も trait 演算子ではなく、language-level binding form です。
-
-SafeBind の流れは次です。
-
-- RHS が `Err(...)` なら現在の failure target に従い、errorを保持するか`empty`へ接続して早期終了します
-- nested Result は再帰的に分解せず、内側の `Ok` / `Err` は通常 constructor pattern として照合します
-- Extractor の `MatchResult::Err` は元 Error を保持し、literal・pin・variant の不一致は、それぞれの条件に対応する Error にします。構造 pattern 固有の failure kind は維持します
-- LHS には `uncons`、literal match、Extractor を再帰的に書けます
-- 上のチェックが全部成功したときだけ変数が束縛されて続行します
 
 ## `Result` でよくある形
 

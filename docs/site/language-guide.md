@@ -525,13 +525,10 @@ def pick() -> Result<Int> {
 
 `=?` は「Result-style の失敗を伝播しながら pattern を適用する束縛」の入口です。
 通常の関数では、返り型がMonadFailを実装しているときに使えます。
-canonical `Result` RHSだけを外側一段分解し、`Err`を failure target
-へ伝播します。Result以外のRHSは、値全体を明示検査するpartial patternにだけ渡されます。
-Monadのpayloadを暗黙に取り出す規則はありません。
-
-たとえば`Option::Some(num) =? Option::Some(1)`はOption全体をconstructor patternで検査するため有効です。
-一方、`num =? Option::Some(1)`はtotal pattern + non-Result Monad RHSとして拒否されます。
-`num: Int =? Option::Some(1)`も通常のpattern型不一致です。
+RHS が MonadExtractor を実装していれば extract を一度呼び、その Result を一段処理します。
+成功値全体を左辺で照合し、Err は失敗返却先へ渡します。標準実装は Result、Option、Either<Error, A> です。
+未実装の型は値全体を受け取れる partial Pattern で照合できます。
+取り出しと失敗返却先の能力、一段分解、文末の `?` は[Monad](./monad.md)を参照してください。
 
 ```surtr
 [head, ..tail] =? [1, 2, 3]
@@ -546,7 +543,7 @@ print(tail)    # => "ource"
 ```
 
 ```surtr
-Option::Some(value) =? Option::Some(1)
+value =? Option::Some(1)
 print(to_string(value)) # => "1"
 ```
 

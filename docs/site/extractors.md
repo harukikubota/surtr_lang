@@ -54,6 +54,9 @@ do の Alternative route は破棄して `empty` へ進みます。
 成功 payload が Unit の場合は `check()` と子 Pattern を省略でき、
 `check(value: Unit)` や `check(_)` と明示することもできます。
 単値は子 Pattern 1個、tuple は要素数と同じ個数が必要です。
+SafeBind の RHS 分解は[MonadExtractor](./monad.md#safebind)の契約に従い、
+取り出した成功値に Extractor を適用します。子 Pattern に extract を再適用することはありません。
+
 Extractor 本文でも SafeBind を使えます。失敗は本文自身の MatchResult::Err となり、
 成功終端には明示的な MatchResult::Ok が必要です。
 MatchResult は通常の変数・引数・field に保持できず、通常 Closure へ利用権限は継承されません。

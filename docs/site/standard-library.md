@@ -94,6 +94,13 @@ primitive type に強く結びつかない builtin は、ここへ集めます�
 `Monad` と外側の計算を `MonadT::lift` で明示的に接続します。API と capability 条件は
 [`Monad transformers`](./monad-transformers.md) を参照してください。
 
+### Monad の取り出しと失敗
+
+[Monad](./monad.md)は、Functor／Applicative／Monad の利用と実装を説明しています。
+`lib/traits/monad_extractor.srt` の `MonadExtractor::extract` は成功値を Result へ取り出す能力、
+`MonadFail` は Error を受け取る能力です。標準の MonadExtractor は Result、Option、
+Either<Error, A> に実装され、Convert<Result<A>> も各型で明示実装されています。
+
 ## 3. `@builtin type` の契約
 
 標準型宣言は、各対応 file のトップレベルで canonical shape を宣言します。
@@ -376,8 +383,8 @@ defenum Option<$T> {
 ```
 
 `Option` は `|*>`、`|*|`、`|>=`、`>*`、`>=>` に標準実装があります。
-`=?`では`Option::Some(value) =? option`のようなpartial constructor patternでOption全体を検査できますが、
-`value =? option`のようなtotal patternでpayloadを暗黙に取り出すことはできません。
+`MonadExtractor` の標準実装により、`value =? option` で Some の成功値を取り出し、
+None を NoneError として失敗先へ渡せます。Option 全体の照合には `match` や `apply_pattern` を使います。
 Result-styleの失敗伝播へ変換したい場合は`to::<Result>(value)`、通常の分岐には`match`を使います。
 `to::<Option>(value)` は `Err(_)` を `None` に畳み込む明示変換です。
 

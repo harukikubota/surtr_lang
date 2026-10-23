@@ -117,7 +117,7 @@ apply_pattern(scores, hash!["score" => _1]) # Ok(42)
 
 非空 Pattern は失敗し得るため、通常の `=` では使えません。空の `hash![]` は空かどうかを調べず、どの HashMap にも成功します。空かどうかは `HashMap::map_len(map) == 0` で調べてください。`match` では `hash![]` を最後の arm として使えます。
 
-キー欠落を `apply_pattern` や SafeBind で保持すると、`HashMapKeyMissing` の message に欠落キーが入り、発生位置はそのキー指定を指します。子の不一致はその子の Error を保持します。SafeBind は RHS の Result を外側一段だけ分解し、map の中の Result 値はそのまま照合します。API と分解の例は [HashMap](./hash_map.md) を参照してください。
+キー欠落を `apply_pattern` や SafeBind で保持すると、`HashMapKeyMissing` の message に欠落キーが入り、発生位置はそのキー指定を指します。子の不一致はその子の Error を保持します。SafeBind は RHS の MonadExtractor を一度呼び、その成功値を照合します。map 内の値や子 Pattern を自動的に分解することはありません。API と分解の例は [HashMap](./hash_map.md) を参照してください。
 
 ### Enum・Result・Error
 
@@ -311,7 +311,7 @@ apply_pattern("42", decimal(_1: Int)) # Ok(42)
 
 通常の `=` は、変数・wildcard・その組み合わせの Tuple／Record など、必ず成功する Pattern だけに使えます。alias の成功条件は内側の Pattern に従います。literal、pin、List、Enum variant、一般 Extractor など、不一致があり得る Pattern は `=` では拒否されます。
 
-SafeBind `=?` は canonical Result の外側一段を自動分解し、その `Ok` payload を左辺で照合します。Result 以外の右辺では、partial Pattern で値全体を検査する場合だけ受理します。
+SafeBind `=?` は、RHS が MonadExtractor を実装していれば一度 extract を呼び、Result の成功値を左辺で照合します。一段の分解と未対応型の扱いは[Monad](./monad.md#safebind)を参照してください。
 
 ```surtr
 def first(values: List<Int>) -> Result<Int> {

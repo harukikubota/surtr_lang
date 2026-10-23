@@ -14,7 +14,7 @@ Surtr の標準定義ソースは language surface の一部です。
   - `print`, `inspect`, `if`, `require`, `ensure` などの cross-cutting API
   - auto import される最小の標準 API
 - trait modules
-  - capability: `Show`, `Compare`, `Convert`, `TryConvert`, `MonadT`, `MonadFail`
+  - capability: `Show`, `Compare`, `Convert`, `TryConvert`, `MonadT`, `MonadExtractor`, `MonadFail`
   - operator dispatch: `Div`, `Mod`, `Eq`, `Concat` など
 - type modules
   - `Int`, `String`, `Regex`, `Boolean`, `Error`, `List`, `Generator`, `InfiniteGenerator`, `HashMap`, `Result`, `Range`, `Option`, `OptionT`, `EitherT`, `ResultT`, `ReaderT`, `StateT`, `Facet`, `Float`
@@ -29,6 +29,7 @@ Surtr の標準定義ソースは language surface の一部です。
 - 変換: [`Convert / TryConvert`](./traits/convert.md)、`../../lib/traits/convert.srt`, `../../lib/traits/try_convert.srt`
 - 型ごとの helper: `../../lib/types/int.srt`, `../../lib/types/string.srt`, `../../lib/types/list.srt` など
 - range helpers と generator range: `../../lib/types/range.srt`, `../../lib/types/generator.srt`
+- Monad の利用と実装: [Monad](./monad.md)、`../../lib/traits/monad_extractor.srt`（`MonadExtractor::extract`）
 - Errorを保持する失敗処理: `../../lib/traits/monad_fail.srt`（`MonadFail::fail` / `MonadFail::fail_if`）
 - Monad Transformer: `../../lib/traits/monad_t.srt`, `../../lib/types/monad_transformer/`
 - 正規表現: `../../lib/types/regex.srt`
@@ -43,6 +44,10 @@ Surtr の標準定義ソースは language surface の一部です。
 
 auto import されるのは `Bootstrap`, `Kernel` と、`@autoimport` が付いた標準 `impl Type` owner helper surface / 標準 trait です。  
 それ以外の標準定義ソースは同梱されますが、名前空間としては明示 import 前提です。
+
+`MonadExtractor` は autoimport されません。構文の `=?` / 文末 `?` と、修飾した
+`MonadExtractor::extract(value)` は import なしで使えます。bare 名の `extract(value)` には
+`import MonadExtractor` が必要です。
 
 ## REPL で見える最小例
 

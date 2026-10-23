@@ -46,8 +46,9 @@ do内のPattern不一致はbaseによらず`empty`になります。Result base�
 一方、`<-`の右辺が持つbaseのErrは、bind自身の短絡によって保持されます。
 `guard`は常にAlternativeを使います。
 
-SafeBindが自動的に外側一段を取り出すのはcanonical Resultだけです。
-Transformerの取り出しには`run`を、baseからの接続には`MonadT::lift`を明示します。
+SafeBind の取り出しには `MonadExtractor` が必要です。標準の Transformer はこの能力を持ちません。
+Transformer の取り出しには `run` を、base からの接続には `MonadT::lift` を明示します。
+取り出す能力と失敗を受け取る能力の違いは[Monad](./monad.md)を参照してください。
 
 ### ユーザ定義のbaseとTransformer
 

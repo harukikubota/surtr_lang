@@ -16,8 +16,8 @@ operation()?
 - `expr;` はその式を `Unit` として扱う
 - `;` は改行区切りと同様に扱われ、同じ行で次の式を書ける
 - `=` と `=?` 自体の結果型も `Unit`
-- 文末の `?` は独立した文の式全体に付ける。canonical `Result` の成功型をたどった終端が Unit のときだけ使え、成功値を捨てて外側一段の Err を SafeBind と同じ返却先へ伝播する。文自体の型は Unit なので、Result が必要な戻り値位置に置くと通常の型不一致になる
-- 文末の `?` は式の一部に組み込めず、成功時の型は Unit。詳しくは[エラーハンドリング](./error-handling.md)を参照
+- 文末の `?` は独立した文の式全体に付ける。MonadExtractor を要求し、元の型が canonical Result なら成功型が Result だけを経由して Unit に至ること、それ以外なら Monad の成功値の型が直接 Unit であることを要求する。canonical Result の連鎖は Err または Unit まで再帰的に確認し、どの層の失敗も SafeBind と同じ返却先へ渡す。全層が Ok で Unit に達すると続行する。文自体の型は Unit
+- 文末の `?` は式の一部に組み込めず、成功時の型は Unit。詳しくは[Monad](./monad.md)を参照
 - `Unit` を返す closure が期待される場所では、最後の式に `;` を付ければよい
 
 Tuple の番号 selector（`tuple._0?` など）の末尾の `?` は、従来どおり文末アンラップとして扱います。番号 selector は廃止済み OptionalSelector の対象には含めません。
@@ -497,14 +497,14 @@ value: Int =? parse_int("1")
 [head, ..tail] =? [1, 2, 3]
 [head, ..tail] =? Ok([1, 2, 3])
 [first, ..tail] =? "source"
-Option::Some(saved) =? Option::Some(1)
+saved =? Option::Some(1)
 ```
 
-- `pattern =? Result<T, E>` は `Ok` を束縛し、`Err` を早期伝播する
-- canonical `Result` RHS は外側一段だけを自動分解し、nested Result は通常 pattern として扱う
-- Result 以外の RHS は値と型を変えず、constructor / literal / list / string / Extractor などの partial patternが値全体を明示検査するときだけ受理する
-- total pattern + non-Result RHS は、非MonadとResult以外のMonadを区別したSafeBind compile errorにする
-- 通常patternのannotation / constructor arity / Extractor契約エラーはSafeBind固有分類より先に報告する
+- MonadExtractor を持つ RHS は `extract` を一度呼び、返された Result の外側一段を処理する。成功値全体を LHS の Pattern へ渡す
+- 標準実装は Result、Option、Either<Error, A>。一段分解後の成功値や子 Pattern に extract を再適用しない
+- 未実装が確定した型は、元の値全体を受け取れる partial Pattern で照合できる。total な全体束縛は `=` を使う
+- Monad の payload に対する分解を要求する入力では MonadExtractor の実装不足を案内する。総称型では宣言 bound を要求する
+- 分解後の Pattern 不一致は通常の型・Pattern 診断とし、元の値全体へ戻して照合しない。詳しくは [Monad](./monad.md#safebind)を参照
 - `do` 外の通常関数・Closureでは、enclosing callableが`MonadFail` を実装した型を返す必要がある。Extractor・ExtractorClosure本文では、その本文自身の `MatchResult::Err` へ元Errorを保持して返す
 - `do` 内では、do-local carrierのMonadFailを優先し、なければ`Alternative::empty`、どちらもなければcapability errorにする
 - Extractor の `MatchResult::Err` は元 Error を保持する。literal・pin・variant の不一致はそれぞれの Error、List/String 等の構造 Pattern 固有 Error は維持する

@@ -84,7 +84,7 @@ def alice_score(source: Result<HashMap<Int>>) -> Result<Int> {
 alice_score(Ok(scores)) # Ok(10)
 ```
 
-SafeBind は RHS の canonical Result の外側一段だけを分解します。RHS が Err ならキー式を評価せず、その Error を失敗先へ渡します。Result で包まれていない HashMap にも非空の partial Pattern で SafeBind を使えます。空 Pattern の SafeBind は `Result<HashMap<V>>` に使えますが、HashMap を直接渡すと拒否されます。
+SafeBind は RHS の MonadExtractor を一度呼び、返された Result の外側一段だけを処理します。extract の結果が Err ならキー式を評価せず、その Error を失敗先へ渡します。Result で包まれていない HashMap にも非空の partial Pattern で SafeBind を使えます。空 Pattern の SafeBind は `Result<HashMap<V>>` に使えますが、HashMap を直接渡すと拒否されます。
 
 map 内の Result 値は自動で分解しません。変数に束縛すれば Result 全体を受け取り、`Ok(child)` を書けば成功値を照合します。指定していないキーの Err は照合に影響しません。
 

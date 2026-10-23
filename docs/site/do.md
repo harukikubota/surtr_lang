@@ -26,8 +26,8 @@ option # Option::Some(21)
 ## 文とscope
 
 - `pattern <- rhs`: carrierのpayloadをpatternへ渡します。
-- `pattern =? rhs`: SafeBind。自動分解するRHSはResultの外側一段だけです。
-- `expression?`: 文末の `?`。canonical Result の成功型の終端が Unit の場合に、成功値を捨てて外側一段の Err を do-local failure target へ接続します。
+- `pattern =? rhs`: SafeBind。[MonadExtractor による共通の入力規則](./monad.md#safebind)で分解し、失敗を do-local な返却先へ渡します。
+- `expression?`: 文末の `?`。共通の Unit 条件を満たす入力を確認し、失敗を do-local な返却先へ渡します。Result の連鎖では Err または Unit に達するまで確認します。
 - `name = expression`:通常の束縛。Monad payloadを取り出しません。
 - 途中のbare Monad式: payloadを捨てて次の文へ進みます。
 - 最後の式:同じcarrierのMonad値を返します。空blockや末尾bindingだけのblockは拒否されます。
@@ -41,8 +41,9 @@ List等の分岐carrierでは、後続のcontinuationを各payloadについて�
 
 文末の `?` は Unit 文なので、carrier を推論する根拠にはなりません。
 Unit は最終 Monad 値にはならないため、最後の処理は `?` を付けず、その Monad 値を返します。
-内側にネストした Result の Err を再帰的に探す規則もありません。
-詳しい型制約と式位置の拒否は[エラーハンドリング](./error-handling.md)を参照してください。
+文末の `?` は Result の連鎖をたどり、内側の Err も同じ do-local な失敗返却先へ渡します。
+全層が Ok で Unit に達した場合だけ続行します。SafeBind `=?` は一段の分解を維持します。
+詳しい型条件と式位置の制約は[Monad](./monad.md#文末の-)を参照してください。
 
 複数のアサーションは、通常の bare Result 式を順に書けば短絡できます。
 `do` はテストで必須ではなく、文末の `?` や SafeBind でも失敗を伝播できます。
@@ -60,7 +61,7 @@ mismatch: Result<Int> = do::<Result> {
   2 <- Ok(1)
   Ok(3)
 }
-mismatch # Ok(Option::None)
+mismatch # Err(IntLiteralPatternMismatch(...))
 ```
 
 SafeBindでも、RHSの`Err(error)`と、matcherの不一致から生成したErrorを保持します。
@@ -69,15 +70,24 @@ Extractor は `MatchResult` を返し、`Err` の元 Error を MonadFail の経�
 
 ```surtr
 checked: Result<Int> = do::<Result> {
-  Option::Some(value) =? Option<Int>::None
+  value =? Option<Int>::None
   Ok(value)
 }
-checked # Ok(Option::None)
+checked # Err(NoneError("None Value."))
 ```
 
-SafeBindは`<-`の別表記ではありません。non-Result RHSではpartial patternが値全体を検査します。
-`value =? Option::Some(1)`のようなtotal patternはcompile errorで、Option payloadを暗黙に取り出しません。
-SafeBind RHSだけからdo carrierをResultへ決定する規則もありません。
+SafeBind と `<-` は取り出しの入口が異なります。SafeBind は RHS の
+`MonadExtractor::extract`、`<-` は carrier の `Monad::bind` を使います。
+`<-` は bind が渡す payload 全体を Pattern へ渡し、payload の extract を呼びません。
+SafeBind の RHS だけから do の carrier を決めることもありません。
+
+```surtr
+selected: List<Int> = do::<List> {
+  Ok(value) <- [Ok(1), Err(NoneError())]
+  [value]
+}
+selected # [1]
+```
 
 ## Alternative実装型
 
@@ -95,7 +105,7 @@ absent: Option<Int> = do::<Option> {
 absent # Option::None
 
 checked: Option<Int> = do::<Option> {
-  Option::Some(value) =? Option<Int>::None
+  value =? Option<Int>::None
   Option::Some(value)
 }
 checked # Option::None
@@ -126,7 +136,7 @@ baseによらず`Alternative::empty`へ接続します。Result baseでは`Ok(No
 
 ```surtr
 checked: OptionT<Result, Int> = do::<OptionT<Result, _>> {
-  Option::Some(value) =? Option<Int>::None
+  value =? Option<Int>::None
   OptionT::some::<Result>(value)
 }
 OptionT::run(checked) # Ok(Option::None)
