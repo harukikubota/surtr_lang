@@ -300,23 +300,22 @@ sequence、scope、carrier 推論の詳しい規則は[do](./do.md)を参照し�
 
 ## 文末の `?`
 
-`expression?` は処理の成功を確認して次の文へ進み、失敗した場合は Error を伝播します。
-入力の型には次の条件があります。文の型は Unit です。
+`expression?` は成功値が Unit に至るまで分解し、成功なら次の文へ進み、失敗なら Error を現在の失敗返却先へ渡します。異なる MonadExtractor 実装型が入れ子になっていても使えます。文の型は Unit です。
 
-- canonical Result は、成功型が Result だけを経由して Unit に至ること。
-- それ以外は、Monad の成功値の型位置が直接 Unit であること。
-- どちらも MonadExtractor が必要。
+入力から成功値の型を順にたどり、各層に MonadExtractor があり、有限段で Unit に至ることを静的に確認します。総称型では各層に必要な bound を宣言します。未確定の成功型を Unit と推論して受理することはありません。
 
 | 元の入力型 | 利用 |
 |---|---|
-| Result<Unit>、Result<Result<Unit>> など | 可 |
+| Result<Unit>、Result<Result<Unit>> | 可 |
 | Option<Unit>、Either<Error, Unit>、対応するユーザー型 M<Unit> | 可 |
-| Option<Option<Unit>>、Option<Result<Unit>>、Either<Error, Either<Error, Unit>> | 不可 |
-| Result<Option<Unit>>、M<Int> | 不可 |
-| MonadExtractor がない M<Unit> | 実装不足 |
+| Option<Option<Unit>>、Option<Result<Unit>>、Either<Error, Either<Error, Unit>> | 可 |
+| Result<Option<Either<Error, Unit>>> | 可 |
+| M<Int>、Result<Option<Int>> | 不可 |
+| 成功型の列は Unit に至るが、内側を含め MonadExtractor がない Monad 層を持つ型 | 実装不足 |
+| 成功型が未確定、または循環して Unit に至らない型 | 不可 |
+| Unit | 不可 |
 
-非 Result の判定を、extract 後の Result に置き換えて行うことはありません。
-成功値の保存フィールドや内側の container をコンパイラが探索することもありません。
+RHS は一度評価します。到達した各層の extract も一度だけ呼び、その返却 Result を一段判定します。Err なら元 Error を同じ失敗返却先へ渡し、内側の extract と後続を実行しません。Ok の payload が Unit なら続行し、それ以外ならその payload に次の extract を適用します。成功値の保存フィールドや container を探索する規則ではありません。
 
 ```surtr
 def check_present(target: Option<Unit>) -> Result<Int> {
@@ -325,16 +324,14 @@ def check_present(target: Option<Unit>) -> Result<Int> {
 }
 
 def keep_inner_error() -> Result<Int> {
-  nested: Result<Result<Unit>> = Ok(Err(NoneError()))
+  nested: Result<Option<Result<Unit>>> = Ok(Option::Some(Err(NoneError())))
   nested?
   Ok(7)
 }
 ```
 
-`keep_inner_error()` は `Err(NoneError("None Value."))` です。Result が入れ子の場合は、
-Ok の値を順にたどり、どの層でも Err に達したら元 Error を現在の失敗返却先へ渡します。
-全層が Ok で Unit に到達した場合だけ後続へ進みます。例えば `Ok(Ok(()))` は成功です。
-通常の SafeBind `=?` は一段だけを分解するため、この再帰的な確認は文末の `?` に限られます。
+`keep_inner_error()` は `Err(NoneError("None Value."))` です。外側の Result、内側の Option、最内の Result の順に extract を呼び、最後の Err を伝播します。全層が成功して Unit に到達した場合だけ後続へ進みます。例えば `Ok(Option::Some(Ok(())))` は成功です。
+通常の SafeBind `=?` と明示的な extract は一段だけを分解するため、この再帰的な確認は文末の `?` に限られます。
 
 `?` は独立した文の式全体に付けます。`value = operation()?`、`consume(operation()?)`、
 `operation()? + 1`、`operation()??` は使えません。必要な戻り値が Result なら、

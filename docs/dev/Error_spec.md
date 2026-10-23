@@ -148,7 +148,7 @@ Error の主キャプションは生成位置を指す。明示的な構築で�
 
 SafeBind は canonical MonadExtractor の通常呼出しが返した Result を外側一段だけ処理する。RHS が Result でも標準 impl を迂回しない。成功値に含まれる失敗や子 Pattern に自動分解を再適用しない。
 
-文末 `?` は、元の RHS が canonical Result のとき Result の連鎖を再帰的に判定し、どの層でも Err に達したらその元 Error を現在の失敗先へ渡す。全層が Ok で Unit に到達した場合だけ後続へ進む。非 Result の payload は直接 Unit を要求し、内側の Result へ再帰する入力にはしない。
+文末 `?` は、異なる MonadExtractor 実装型の入れ子も含め、成功値が Unit に至るまで各層の extract を一度ずつ呼ぶ。どの層でも返却 Result が Err なら、その元 Error を同じ現在の失敗先へ渡し、内側の分解と後続を実行しない。全層が Ok で Unit に到達した場合だけ後続へ進む。各層の分解能力と有限段で Unit に至ることは静的に確認する。
 
 標準の Result / Either<Error, A> の extract と、文末 `?` の各層からの伝播は、既存 Error の kind・message・Payload・location・cause・diagnostic・stack trace を保持する。Option の None は `NoneError()` を通常どおり生成し、その後の伝播で生成位置を上書きしない。
 

@@ -221,9 +221,6 @@ impl Checker {
                         payload_ty: self.resolve_ty(&payload_ty),
                         error_ty: self.resolve_ty(&error_ty),
                     },
-                    SafeBindRhsProjection::CanonicalResultUnitChain { depth } => {
-                        SafeBindRhsProjection::CanonicalResultUnitChain { depth }
-                    }
                     SafeBindRhsProjection::PatternInput { pattern_input_ty } => {
                         SafeBindRhsProjection::PatternInput {
                             pattern_input_ty: self.resolve_ty(&pattern_input_ty),
@@ -281,9 +278,6 @@ impl Checker {
                             payload_ty: self.resolve_ty(&payload_ty),
                             error_ty: self.resolve_ty(&error_ty),
                         },
-                        SafeBindRhsProjection::CanonicalResultUnitChain { depth } => {
-                            SafeBindRhsProjection::CanonicalResultUnitChain { depth }
-                        }
                         SafeBindRhsProjection::PatternInput { pattern_input_ty } => {
                             SafeBindRhsProjection::PatternInput {
                                 pattern_input_ty: self.resolve_ty(&pattern_input_ty),

@@ -73,7 +73,7 @@ MonadExtractor 未実装が確定した型は元の値全体を入力とし、�
 
 外側の入力関係が成立した後の子、構造・引数数・事前引数、pin の Eq、禁止位置の診断を分解入口不足へ置き換えない。対応型を一段分解した後の型不一致も通常の Pattern 診断とする。入力診断の優先関係・source facts は [diagnostics](diagnostics.md)、評価・文末 `?`・failure target は [do intrinsic](Do_intrinsic_spec.md) に従う。
 
-文末 `?` は Pattern 照合を伴わず、元の RHS が canonical Result の場合に限り Result の連鎖を Err または Unit まで再帰的に判定する。各層の Err は同じ現在の失敗先へ渡す。この規則を通常の SafeBind の成功値や子 Pattern へ適用しない。
+文末 `?` は Pattern 照合を伴わず、成功値が canonical Unit に至るまで各層の MonadExtractor::extract を一度ずつ呼ぶ。異なる実装型が入れ子の場合も同じ規則を使い、各層の能力と有限段で Unit に至ることを静的に確認する。各層の Err は同じ現在の失敗先へ渡し、内側の分解と後続を実行しない。この規則を通常の SafeBind の成功値や子 Pattern へ適用しない。
 
 `<-` は `Monad::bind` が渡す payload 全体をそのまま照合し、MonadExtractor を呼ばない。
 

@@ -188,9 +188,6 @@ impl Checker {
                         payload_ty: self.substitute_ty_with_mapping(&payload_ty, mapping),
                         error_ty: self.substitute_ty_with_mapping(&error_ty, mapping),
                     },
-                    SafeBindRhsProjection::CanonicalResultUnitChain { depth } => {
-                        SafeBindRhsProjection::CanonicalResultUnitChain { depth }
-                    }
                     SafeBindRhsProjection::PatternInput { pattern_input_ty } => {
                         SafeBindRhsProjection::PatternInput {
                             pattern_input_ty: self
@@ -258,9 +255,6 @@ impl Checker {
                             payload_ty: self.substitute_ty_with_mapping(&payload_ty, mapping),
                             error_ty: self.substitute_ty_with_mapping(&error_ty, mapping),
                         },
-                        SafeBindRhsProjection::CanonicalResultUnitChain { depth } => {
-                            SafeBindRhsProjection::CanonicalResultUnitChain { depth }
-                        }
                         SafeBindRhsProjection::PatternInput { pattern_input_ty } => {
                             SafeBindRhsProjection::PatternInput {
                                 pattern_input_ty: self

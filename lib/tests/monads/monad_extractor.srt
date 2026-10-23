@@ -1,4 +1,5 @@
 include "./support/my_either.srt"
+include "./support/traced_extraction.srt"
 import Test
 
 deferror ExtractionFailure(detail: String) {
@@ -48,6 +49,28 @@ def keep_nested_error() -> Result<Int> {
 
 def check_nested_results(target: Result<Result<Result<Unit>>>) -> Result<Int> {
   target?
+  Ok(7)
+}
+
+def generic_nested_units(target: $F<$G<Unit>>) -> Result<Int>
+where
+  $F: MonadExtractor
+  $G: MonadExtractor
+{
+  target?
+  Ok(7)
+}
+
+def traced_question_input(
+  target: TracedExtraction<Option<TracedExtraction<Unit>>>
+) -> TracedExtraction<Option<TracedExtraction<Unit>>> {
+  print("rhs")
+  target
+}
+
+def check_traced_units(target: TracedExtraction<Option<TracedExtraction<Unit>>>) -> Result<Int> {
+  traced_question_input(target)?
+  print("after")
   Ok(7)
 }
 
@@ -124,6 +147,59 @@ test("MonadExtractor") {
       assert_err_kind(ExtractionFailure, check_nested_results(Err(ExtractionFailure("outer"))))
       assert_err_kind(ExtractionFailure, check_nested_results(Ok(Err(ExtractionFailure("middle")))))
       assert_err_kind(ExtractionFailure, check_nested_results(Ok(Ok(Err(ExtractionFailure("inner"))))))
+    }
+  }
+
+  it("recursively extracts generic mixed input constructors") {
+    do {
+      assert_ok_eq(7, generic_nested_units(Option::Some(MyEither<Error, Unit>::Right(()))))
+      assert_ok_eq(7, generic_nested_units(MyEither<Error, Option<Unit>>::Right(Option::Some(()))))
+      assert_err_kind(NoneError, generic_nested_units(MyEither<Error, Option<Unit>>::Right(Option::None)))
+      assert_err_message_eq("inner", generic_nested_units(Option::Some(MyEither<Error, Unit>::Left(ExtractionFailure("inner")))))
+      assert_err_message_eq("outer", generic_nested_units(MyEither<Error, Option<Unit>>::Left(ExtractionFailure("outer"))))
+    }
+  }
+
+  it("evaluates the input and each reached user extract once in order") {
+    do {
+      inner = TracedExtraction::Continue((), "inner")
+      target = TracedExtraction::Continue(Option::Some(inner), "outer")
+      assert_ok_eq(7, check_traced_units(target))
+      assert_stdout_eq(["rhs", "outer", "inner", "after"])
+    }
+  }
+
+  it("stops before inner extract and continuation on an outer failure") {
+    do {
+      target: TracedExtraction<Option<TracedExtraction<Unit>>> = TracedExtraction::Stop(ExtractionFailure("outer"), "outer")
+      assert_err_message_eq("outer", check_traced_units(target))
+      assert_stdout_eq(["rhs", "outer"])
+    }
+  }
+
+  it("stops before inner extract and continuation on a middle failure") {
+    do {
+      target: TracedExtraction<Option<TracedExtraction<Unit>>> = TracedExtraction::Continue(Option::None, "outer")
+      assert_err_kind(NoneError, check_traced_units(target))
+      assert_stdout_eq(["rhs", "outer"])
+    }
+  }
+
+  it("retains inner user extraction errors and skips the continuation") {
+    do {
+      inner: TracedExtraction<Unit> = TracedExtraction::Stop(ExtractionFailure("inner"), "inner")
+      target = TracedExtraction::Continue(Option::Some(inner), "outer")
+      assert_err_message_eq("inner", check_traced_units(target))
+      assert_stdout_eq(["rhs", "outer", "inner"])
+    }
+  }
+
+  it("keeps ordinary SafeBind and direct extract limited to one layer") {
+    do {
+      inner = TracedExtraction::Continue((), "inner")
+      assert_ok(generic_payload(Option::Some(inner)))
+      assert_ok(MonadExtractor::extract(Option::Some(inner)))
+      assert_stdout_eq([])
     }
   }
 

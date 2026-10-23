@@ -695,10 +695,6 @@ pub enum SafeBindRhsProjection {
     /// Project the Result returned by the resolved MonadExtractor::extract
     /// call stored in the RHS. The original RHS is the call's sole argument.
     CanonicalResultOnce { payload_ty: Ty, error_ty: Ty },
-    /// Statement-final `?`: inspect every canonical Result layer returned by
-    /// the single outer extract call, propagating Err until terminal Unit.
-    /// Scar fixes a positive depth from the original RHS's static type.
-    CanonicalResultUnitChain { depth: usize },
     /// Match the checked Pattern input directly. It may itself be Result when
     /// supplied as a Monad payload by `<-`; this projection never unwraps it.
     PatternInput { pattern_input_ty: Ty },

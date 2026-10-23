@@ -30,17 +30,36 @@ fn question_extracts_every_canonical_result_layer_to_unit() {
             panic!("question must use ordinary SafeBind control: {node:?}")
         };
         assert!(matches!(target, SafeBindFailureTarget::TopLevel));
-        assert!(
-            matches!(&rhs.node, TypedInner::TraitCall { method_name, args, .. } if method_name == "extract" && args.len() == 1)
-        );
+        fn extraction_depth(rhs: &TypedNode) -> usize {
+            match &rhs.node {
+                TypedInner::TraitCall {
+                    method_name, args, ..
+                } => {
+                    assert_eq!(method_name, "extract");
+                    assert_eq!(args.len(), 1);
+                    1
+                }
+                TypedInner::Match(call, arms) => {
+                    assert_eq!(extraction_depth(call), 1);
+                    assert!(
+                        matches!(&arms[1].body.node, TypedInner::ConstructorCall(1, fields)
+                        if matches!(&fields[0].node, TypedInner::Var(_)))
+                    );
+                    1 + extraction_depth(&arms[0].body)
+                }
+                other => panic!("expected ordinary extract calls and matches: {other:?}"),
+            }
+        }
+        assert_eq!(extraction_depth(rhs), expected_depth);
         assert!(matches!(
             pattern.unlocated(),
             TypedPattern::Wildcard(Ty::Unit)
         ));
         assert_eq!(
             projection,
-            &SafeBindRhsProjection::CanonicalResultUnitChain {
-                depth: expected_depth
+            &SafeBindRhsProjection::CanonicalResultOnce {
+                payload_ty: Ty::Unit,
+                error_ty: Ty::Error,
             }
         );
     }
@@ -154,7 +173,10 @@ fn question_inside_do_uses_do_local_failure_target() {
     ));
     assert!(matches!(
         control.projection,
-        SafeBindRhsProjection::CanonicalResultUnitChain { depth: 2 }
+        SafeBindRhsProjection::CanonicalResultOnce {
+            payload_ty: Ty::Unit,
+            error_ty: Ty::Error
+        }
     ));
     typecheck_with_builtin_prelude(
         "def outer() -> Int { result = do::<Result> { Ok(())?\n Ok(1) }\n 1 }",
@@ -238,7 +260,10 @@ fn question_preserves_safebind_alternative_target_for_non_result_do() {
     for (operator, expected_projection) in [
         (
             "Ok(())?",
-            SafeBindRhsProjection::CanonicalResultUnitChain { depth: 1 },
+            SafeBindRhsProjection::CanonicalResultOnce {
+                payload_ty: Ty::Unit,
+                error_ty: Ty::Error,
+            },
         ),
         (
             "_ =? Ok(())",

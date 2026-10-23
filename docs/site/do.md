@@ -27,7 +27,7 @@ option # Option::Some(21)
 
 - `pattern <- rhs`: carrierのpayloadをpatternへ渡します。
 - `pattern =? rhs`: SafeBind。[MonadExtractor による共通の入力規則](./monad.md#safebind)で分解し、失敗を do-local な返却先へ渡します。
-- `expression?`: 文末の `?`。共通の Unit 条件を満たす入力を確認し、失敗を do-local な返却先へ渡します。Result の連鎖では Err または Unit に達するまで確認します。
+- `expression?`: 文末の `?`。共通の Unit 条件を満たす入力を確認し、失敗を do-local な返却先へ渡します。成功値が Unit に至るまで各層の extract を呼びます。
 - `name = expression`:通常の束縛。Monad payloadを取り出しません。
 - 途中のbare Monad式: payloadを捨てて次の文へ進みます。
 - 最後の式:同じcarrierのMonad値を返します。空blockや末尾bindingだけのblockは拒否されます。
@@ -41,8 +41,8 @@ List等の分岐carrierでは、後続のcontinuationを各payloadについて�
 
 文末の `?` は Unit 文なので、carrier を推論する根拠にはなりません。
 Unit は最終 Monad 値にはならないため、最後の処理は `?` を付けず、その Monad 値を返します。
-文末の `?` は Result の連鎖をたどり、内側の Err も同じ do-local な失敗返却先へ渡します。
-全層が Ok で Unit に達した場合だけ続行します。SafeBind `=?` は一段の分解を維持します。
+文末の `?` は異なる MonadExtractor 実装型の入れ子も分解し、各層の extract が返す Err を同じ do-local な失敗返却先へ渡します。
+RHS と到達した各層の extract は一度だけ評価し、失敗後の内側と後続は実行しません。全層が成功して Unit に達した場合だけ続行します。SafeBind `=?` は一段の分解を維持します。
 詳しい型条件と式位置の制約は[Monad](./monad.md#文末の-)を参照してください。
 
 複数のアサーションは、通常の bare Result 式を順に書けば短絡できます。

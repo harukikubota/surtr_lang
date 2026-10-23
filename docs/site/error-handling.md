@@ -377,16 +377,16 @@ SafeBind は成功値の中にある Error を失敗へ変えません。
 SafeBind による伝播では生成位置を保持します。新しい Error で wrap すると、
 その構築位置が表示され、元 Error は cause に残ります。
 
-文末の `?` は、`MonadExtractor` を持ち、成功値の型が `Unit` である式に使えます。
-`Result` に限り、`Result<Result<Unit>>` のようなネストも許可します。
-この場合も、Result だけをたどった終端は `Unit` でなければなりません。
-`Result<Int>` や `Result<Result<Int>>` には使えません。
-`Option<Unit>` には使えますが、`Option<Result<Unit>>` のようなネストは許可しません。
+文末の `?` は、成功値が Unit に至るまで各層の `MonadExtractor::extract` を呼びます。
+`Result<Option<Unit>>` や `Option<Result<Unit>>` のように異なる型が入れ子の場合も使えます。
+各層の能力と、有限段で Unit に至ることは静的に確認します。
+`Result<Int>`、未確定の成功型、Unit 自体には使えません。
 
-Result が入れ子なら Ok の値を順に確認し、どの層でも Err に達したら元 Error を
-現在の失敗返却先へ渡します。全層が Ok で Unit に達した場合だけ次の文へ進みます。
-例えば `Ok(Err(error))` に `?` を付けると内側の元 Error を伝播します。
-通常の SafeBind `=?` の分解は一段のままです。最後の Result は `?` を付けずに返します。
+RHS と到達した各層の extract は一度だけ評価します。どの層でも extract が Err を返したら、
+その元 Error を同じ現在の失敗返却先へ渡し、内側の分解と後続を実行しません。
+全層が成功して Unit に達した場合だけ次の文へ進みます。
+例えば `Ok(Option<Unit>::None)` に `?` を付けると、内側の Option が生成した NoneError を伝播します。
+通常の SafeBind `=?` と明示的な extract は一段の分解を維持します。最後の Result は `?` を付けずに返します。
 
 ```surtr
 deferror OutOfRange { "value must be between 0 and 9" }

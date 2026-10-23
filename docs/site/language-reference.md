@@ -16,7 +16,7 @@ operation()?
 - `expr;` はその式を `Unit` として扱う
 - `;` は改行区切りと同様に扱われ、同じ行で次の式を書ける
 - `=` と `=?` 自体の結果型も `Unit`
-- 文末の `?` は独立した文の式全体に付ける。MonadExtractor を要求し、元の型が canonical Result なら成功型が Result だけを経由して Unit に至ること、それ以外なら Monad の成功値の型が直接 Unit であることを要求する。canonical Result の連鎖は Err または Unit まで再帰的に確認し、どの層の失敗も SafeBind と同じ返却先へ渡す。全層が Ok で Unit に達すると続行する。文自体の型は Unit
+- 文末の `?` は独立した文の式全体に付ける。成功値が Unit に至るまで各層の MonadExtractor::extract を一度ずつ呼ぶ。異なる実装型の入れ子も許可し、各層の能力と有限段で Unit に至ることを静的に確認する。RHS は一度評価し、どの層でも extract が Err を返したら同じ失敗返却先へ渡して内側と後続を短絡する。全層が成功して Unit に達すると続行する。Unit 自体には使えず、文自体の型は Unit
 - 文末の `?` は式の一部に組み込めず、成功時の型は Unit。詳しくは[Monad](./monad.md)を参照
 - `Unit` を返す closure が期待される場所では、最後の式に `;` を付ければよい
 

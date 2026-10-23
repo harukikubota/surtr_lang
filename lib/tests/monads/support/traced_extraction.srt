@@ -1,0 +1,54 @@
+defenum TracedExtraction<$A> {
+  Continue($A, String),
+  Stop(Error, String),
+}
+
+impl Functor for TracedExtraction<$T> {
+  def fmap(self: TracedExtraction<$A>, mapper: ($A -> $B)) -> TracedExtraction<$B> {
+    match self {
+      TracedExtraction::Continue(value, label) => TracedExtraction::Continue(mapper(value), label),
+      TracedExtraction::Stop(error, label) => TracedExtraction::Stop(error, label),
+    }
+  }
+}
+
+impl Applicative for TracedExtraction<$T> {
+  def pure::<TracedExtraction<$T>>(value: $A) -> TracedExtraction<$A> {
+    TracedExtraction::Continue(value, "pure")
+  }
+
+  def ap(mapper: TracedExtraction<($A -> $B)>, value: TracedExtraction<$A>) -> TracedExtraction<$B> {
+    match mapper {
+      TracedExtraction::Continue(fun, _) => Functor::fmap(value, fun),
+      TracedExtraction::Stop(error, label) => TracedExtraction::Stop(error, label),
+    }
+  }
+}
+
+impl Monad for TracedExtraction<$T> {
+  def return::<TracedExtraction<$T>>(value: $A) -> TracedExtraction<$A> {
+    TracedExtraction::Continue(value, "return")
+  }
+
+  def bind(self: TracedExtraction<$A>, mapper: ($A -> TracedExtraction<$B>)) -> TracedExtraction<$B> {
+    match self {
+      TracedExtraction::Continue(value, _) => mapper(value),
+      TracedExtraction::Stop(error, label) => TracedExtraction::Stop(error, label),
+    }
+  }
+}
+
+impl MonadExtractor for TracedExtraction<$T> {
+  def extract(self: TracedExtraction<$A>) -> Result<$A> {
+    match self {
+      TracedExtraction::Continue(value, label) => {
+        print(label)
+        Ok(value)
+      },
+      TracedExtraction::Stop(error, label) => {
+        print(label)
+        Err(error)
+      },
+    }
+  }
+}

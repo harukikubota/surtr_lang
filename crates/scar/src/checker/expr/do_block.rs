@@ -890,9 +890,6 @@ impl Checker {
                 payload_ty: self.resolve_ty(&payload_ty),
                 error_ty: self.resolve_ty(&error_ty),
             },
-            SafeBindRhsProjection::CanonicalResultUnitChain { depth } => {
-                SafeBindRhsProjection::CanonicalResultUnitChain { depth }
-            }
             SafeBindRhsProjection::PatternInput { pattern_input_ty } => {
                 SafeBindRhsProjection::PatternInput {
                     pattern_input_ty: self.resolve_ty(&pattern_input_ty),
@@ -1275,40 +1272,143 @@ impl Checker {
         Ok(call)
     }
 
-    fn statement_question_result_chain(
+    /// Resolve every layer before lowering, so an unknown terminal payload is
+    /// never inferred as Unit merely because the statement discards its value.
+    fn check_statement_question_input(
         &mut self,
-        rhs_ty: &Ty,
         span: &Span,
-    ) -> Result<(usize, Vec<Ty>), TypeError> {
-        let rhs_ty = self.resolve_ty(rhs_ty);
-        let mut error_tys = Vec::new();
-        let terminal = if matches!(&rhs_ty, Ty::Result(..)) {
-            let mut terminal = rhs_ty.clone();
-            while let Ty::Result(success, error) = terminal {
-                error_tys.push(self.resolve_ty(&error));
-                terminal = self.resolve_ty(&success);
+        pat: &ResolvedPattern,
+        rhs: TypedNode,
+    ) -> Result<CheckedSafeBindInput, TypeError> {
+        let extraction_key = self.canonical_monad_extractor_key(span)?;
+        let monad = self.canonical_extraction_parent_key(&extraction_key, span)?;
+        let rhs_ty = self.resolve_ty(&rhs.ty);
+        let mut current = rhs_ty.clone();
+        let mut layers = Vec::new();
+        let mut seen = Vec::new();
+        let mut propagated_error_tys = Vec::new();
+        loop {
+            if current == Ty::Unit && !layers.is_empty() {
+                break;
             }
-            terminal
-        } else {
-            error_tys.push(Ty::Error);
-            let extraction_key = self.canonical_monad_extractor_key(span)?;
-            let monad = self.canonical_extraction_parent_key(&extraction_key, span)?;
-            match self.constructor_slot_type_for(&monad, &rhs_ty).into_checked()? {
-                ConstructorApplicationOutcome::Applied(payload) => self.resolve_ty(&payload),
-                _ => return Err(TypeError::new(format!("Statement `?` requires a MonadExtractor RHS with terminal success type Unit; got {}.", self.ty_name(&rhs_ty)), span.clone())),
+            if seen.contains(&current) {
+                return Err(TypeError::new(
+                    format!("Statement `?` requires a finite MonadExtractor success chain ending at Unit; repeated {}.", self.ty_name(&current)),
+                    span.clone(),
+                ));
             }
-        };
-        if terminal != Ty::Unit {
-            return Err(TypeError::new(
-                format!(
-                    "Statement `?` requires terminal success type Unit; got {} in {}.",
-                    self.ty_name(&terminal),
-                    self.ty_name(&rhs_ty),
-                ),
-                span.clone(),
-            ));
+            seen.push(current.clone());
+            let (payload, error) = match &current {
+                Ty::Result(payload, error) => (self.resolve_ty(payload), self.resolve_ty(error)),
+                _ => match self.constructor_slot_type_for(&monad, &current).into_checked()? {
+                    ConstructorApplicationOutcome::Applied(payload) => (self.resolve_ty(&payload), Ty::Error),
+                    _ => return Err(TypeError::new(
+                        format!("Statement `?` requires a MonadExtractor RHS with terminal success type Unit; got {} in {}.", self.ty_name(&current), self.ty_name(&rhs_ty)),
+                        span.clone(),
+                    )),
+                },
+            };
+            propagated_error_tys.push(error);
+            layers.push(payload.clone());
+            current = payload;
         }
-        Ok((error_tys.len(), error_tys))
+
+        // Ordinary calls and matches keep inference, specialization and codegen
+        // on their existing paths. Only the final Result reaches SafeBind's
+        // failure target; inner failures retain their original Error value.
+        let mut input = rhs;
+        let mut calls = Vec::new();
+        for payload_ty in layers {
+            let call = self.extract_safebind_rhs(&extraction_key, input)?;
+            let payload_id = ResolvedId {
+                name: "__question_payload".into(),
+                qualified_name: None,
+                symbol_info: None,
+                unique_id: Self::next_synthetic_range_uid(),
+                compiler_generated: true,
+                span: span.clone(),
+            };
+            input = TypedNode {
+                ty: payload_ty,
+                span: span.clone(),
+                node: TypedInner::Var(payload_id.clone()),
+            };
+            calls.push((call, payload_id));
+        }
+        let (mut result, _) = calls.pop().ok_or_else(|| {
+            self.typecheck_invariant_error("statement `?` nonempty extraction chain", span)
+        })?;
+        for (call, payload_id) in calls.into_iter().rev() {
+            let Ty::Result(_, error_ty) = self.resolve_ty(&call.ty) else {
+                return Err(self.typecheck_invariant_error("statement `?` extraction Result", span));
+            };
+            let error_id = ResolvedId {
+                name: "__question_error".into(),
+                qualified_name: None,
+                symbol_info: None,
+                unique_id: Self::next_synthetic_range_uid(),
+                compiler_generated: true,
+                span: span.clone(),
+            };
+            let failure = TypedNode {
+                ty: result.ty.clone(),
+                span: span.clone(),
+                node: TypedInner::ConstructorCall(
+                    1,
+                    vec![TypedNode {
+                        ty: *error_ty,
+                        span: span.clone(),
+                        node: TypedInner::Var(error_id.clone()),
+                    }],
+                ),
+            };
+            result = TypedNode {
+                ty: result.ty.clone(),
+                span: span.clone(),
+                node: TypedInner::Match(
+                    Box::new(call),
+                    vec![
+                        TypedMatchArm {
+                            direct_expression: false,
+                            pattern: TypedMatchPattern::Constructor {
+                                tag: 0,
+                                fields: vec![TypedMatchPattern::Binding(payload_id)],
+                                field_offset: 0,
+                            },
+                            guard: None,
+                            body: result,
+                        },
+                        TypedMatchArm {
+                            direct_expression: false,
+                            pattern: TypedMatchPattern::Constructor {
+                                tag: 1,
+                                fields: vec![TypedMatchPattern::Binding(error_id)],
+                                field_offset: 0,
+                            },
+                            guard: None,
+                            body: failure,
+                        },
+                    ],
+                ),
+            };
+        }
+        let Ty::Result(payload_ty, error_ty) = self.resolve_ty(&result.ty) else {
+            return Err(self.typecheck_invariant_error("statement `?` terminal Result", span));
+        };
+        if *payload_ty != Ty::Unit {
+            return Err(self.typecheck_invariant_error("statement `?` terminal Unit", span));
+        }
+        let (typed_pattern, pattern_ty) = self.check_pattern(pat, &Ty::Unit, span)?;
+        Ok(CheckedSafeBindInput {
+            typed_pattern,
+            pattern_ty,
+            typed_rhs: result,
+            projection: SafeBindRhsProjection::CanonicalResultOnce {
+                payload_ty: *payload_ty,
+                error_ty: *error_ty,
+            },
+            propagated_error_tys,
+        })
     }
 
     fn check_safebind_input(
@@ -1319,9 +1419,9 @@ impl Checker {
         unit_success_only: bool,
     ) -> Result<CheckedSafeBindInput, TypeError> {
         let mut typed_rhs = self.check_node(rhs)?;
-        let question_chain = unit_success_only
-            .then(|| self.statement_question_result_chain(&typed_rhs.ty, span))
-            .transpose()?;
+        if unit_success_only {
+            return self.check_statement_question_input(span, pat, typed_rhs);
+        }
         if matches!(typed_rhs.ty, Ty::Facet(..)) {
             return Err(self.policy_error(
                 TypeDiagnosticReason::FacetSafeBindForbidden,
@@ -1422,24 +1522,16 @@ impl Checker {
         let (ok_ty, mut propagated_err_tys, rhs_projection) =
             match (extracts, self.resolve_ty(&typed_rhs.ty)) {
                 (true, Ty::Result(ok, err)) => {
-                    if let Some((depth, error_tys)) = question_chain {
-                        (
-                            Ty::Unit,
-                            error_tys,
-                            SafeBindRhsProjection::CanonicalResultUnitChain { depth },
-                        )
-                    } else {
-                        let payload_ty = ok.as_ref().clone();
-                        let error_ty = err.as_ref().clone();
-                        (
-                            payload_ty.clone(),
-                            vec![error_ty.clone()],
-                            SafeBindRhsProjection::CanonicalResultOnce {
-                                payload_ty,
-                                error_ty,
-                            },
-                        )
-                    }
+                    let payload_ty = ok.as_ref().clone();
+                    let error_ty = err.as_ref().clone();
+                    (
+                        payload_ty.clone(),
+                        vec![error_ty.clone()],
+                        SafeBindRhsProjection::CanonicalResultOnce {
+                            payload_ty,
+                            error_ty,
+                        },
+                    )
                 }
                 (false, other) => (
                     other.clone(),

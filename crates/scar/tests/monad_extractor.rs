@@ -41,10 +41,26 @@ fn question_accepts_direct_unit_of_extracting_carriers() {
     for rhs in ["Option::Some(())", "Either<Error, Unit>::Right(())"] {
         typecheck_with_builtin_prelude(&format!("{rhs}?"));
     }
-    for rhs in ["Option::Some(Ok(()))", "Ok(Option::Some(()))"] {
-        typecheck(resolve_with_builtin_prelude(&format!("{rhs}?")))
-            .expect_err("only Result chains may contain nested Unit success");
+    for rhs in [
+        "Option::Some(Ok(()))",
+        "Ok(Option::Some(()))",
+        "Option::Some(Option::Some(()))",
+        "Ok(Option::Some(Either<Error, Unit>::Right(())))",
+    ] {
+        typecheck_with_builtin_prelude(&format!("{rhs}?"));
     }
+}
+
+#[test]
+fn question_requires_extraction_at_each_declared_generic_layer() {
+    typecheck_with_builtin_prelude(
+        "def check(value: $F<$G<Unit>>) -> Result<Unit> where $F: MonadExtractor\n$G: MonadExtractor { value?; Ok(()) }\ncheck(Option::Some(Ok(())))",
+    );
+    let error = typecheck(resolve_with_builtin_prelude(
+        "def check(value: $F<$G<Unit>>) -> Result<Unit> where $F: MonadExtractor\n$G: Monad { value?; Ok(()) }",
+    ))
+    .expect_err("the outer capability cannot supply the inner extraction bound");
+    assert!(error.message.contains("MonadExtractor"), "{error:?}");
 }
 
 #[test]
@@ -229,4 +245,21 @@ fn unknown_rhs_head_cannot_gain_a_non_extracting_success_path() {
         "def reject(target: $T) -> Result<Int> { 1 =? target; Ok(0) }",
     ))
     .expect_err("an unknown RHS head cannot be accepted by switching to whole-value matching");
+}
+
+#[test]
+fn question_rejects_non_extracting_and_non_unit_inner_layers() {
+    for rhs in ["Ok(Identity::new(()))", "Option::Some([()])"] {
+        let error = typecheck(resolve_with_builtin_prelude(&format!("{rhs}?")))
+            .expect_err("every inner constructor must implement extraction");
+        assert!(error.message.contains("MonadExtractor"), "{error:?}");
+    }
+    for rhs in ["Option::Some(Ok(1))", "Ok(Option::Some(1))"] {
+        let error = typecheck(resolve_with_builtin_prelude(&format!("{rhs}?")))
+            .expect_err("the final payload must be Unit");
+        assert!(
+            error.message.contains("terminal success type Unit"),
+            "{error:?}"
+        );
+    }
 }

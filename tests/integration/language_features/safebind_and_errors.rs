@@ -1001,8 +1001,8 @@ print(inspect(run()))
     }
 }
 
-fn statement_question_propagates_each_result_layer_and_evaluates_rhs_once() {
-    let input_ty = "Result<Result<Result<Unit>>>";
+fn statement_question_propagates_mixed_layers_and_evaluates_rhs_once() {
+    let input_ty = "Result<Option<Either<Error, Unit>>>";
     for (body, return_ty, success, failure) in [
         (
             "source(target)?; print(\"after\"); Ok(7)",
@@ -1040,17 +1040,21 @@ fn statement_question_propagates_each_result_layer_and_evaluates_rhs_once() {
 deferror StepError {{ |label: String| label }}
 def source(target: {input_ty}) -> {input_ty} {{ print("rhs"); target }}
 def run(target: {input_ty}) -> {return_ty} {{ {body} }}
-print(inspect(run(Ok(Ok(Ok(()))))))
+print(inspect(run(Ok(Option::Some(Either::Right(()))))))
 print(inspect(run(Err(StepError("outer")))))
-print(inspect(run(Ok(Err(StepError("middle"))))))
-print(inspect(run(Ok(Ok(Err(StepError("inner")))))))
+print(inspect(run(Ok(Option<Either<Error, Unit>>::None))))
+print(inspect(run(Ok(Option::Some(Either::Left(StepError("inner")))))))
 "#
         );
         let mut expected = vec!["rhs".to_string(), "after".to_string(), success.to_string()];
         for label in ["outer", "middle", "inner"] {
             expected.push("rhs".into());
             expected.push(if failure == "error" {
-                format!("Err(StepError(\"{label}\"))")
+                if label == "middle" {
+                    "Err(NoneError(\"None Value.\"))".to_string()
+                } else {
+                    format!("Err(StepError(\"{label}\"))")
+                }
             } else {
                 failure.to_string()
             });
@@ -1066,13 +1070,13 @@ fn statement_question_in_extractor_preserves_nested_errors() {
     assert_output(
         r#"
 deferror StepError { |label: String| label }
-checked: ExtractorClosure<(Result<Result<Unit>> -> MatchResult<Int>)> = *{|target|
+checked: ExtractorClosure<(Result<Either<Error, Unit>> -> MatchResult<Int>)> = *{|target|
   target?
   print("after")
   MatchResult::Ok(7)
 }
-print(inspect(apply_pattern(Ok(Ok(())), checked(_1))))
-print(inspect(apply_pattern(Ok(Err(StepError("inner"))), checked(_1))))
+print(inspect(apply_pattern(Ok(Either::Right(())), checked(_1))))
+print(inspect(apply_pattern(Ok(Either::Left(StepError("inner"))), checked(_1))))
 "#,
         &["after", "Ok(7)", "Err(StepError(\"inner\"))"],
     );
@@ -1095,8 +1099,8 @@ print(inspect(keep(Ok(Err(NoneError())))))
 pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
     let cases: &[(&str, fn())] = &[
         (
-            "statement_question_propagates_each_result_layer_and_evaluates_rhs_once",
-            statement_question_propagates_each_result_layer_and_evaluates_rhs_once as fn(),
+            "statement_question_propagates_mixed_layers_and_evaluates_rhs_once",
+            statement_question_propagates_mixed_layers_and_evaluates_rhs_once as fn(),
         ),
         (
             "statement_question_in_extractor_preserves_nested_errors",

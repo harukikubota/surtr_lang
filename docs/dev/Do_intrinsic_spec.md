@@ -84,24 +84,23 @@ SafeBind の RHS 分解能力と、context の失敗返却能力は分けて検�
 
 MonadExtractor 未実装が確定した型は値全体を照合し、全体に適合する partial Pattern のみ受理する。全体型を受け取る total Pattern は `=` を案内して拒否する。未注釈 total 束縛で RHS が Monad の場合、または LHS が全体とは不整合で直下の mapped payload の入力を要求する場合は、分解入口の不足を案内する。子 Pattern の不一致、無関係な型不一致、Extractor の契約不一致は通常診断を維持する。総称型の bound 不足・推論未確定・trait 候補の不成立や曖昧さは具象型の未実装へ置き換えない。詳細は [diagnostics](diagnostics.md) に従う。
 
-文末の `expression?` は、RHS を一度評価して MonadExtractor で分解し、失敗を現在の失敗先へ渡す。式の型は Unit とする。通常の SafeBind の一段分解とは区別し、元の RHS が canonical Result のときは Result の連鎖を再帰的に判定する。元の RHS 型に次の条件を課す。
-
-- canonical Result の成功型は `UnitSuccess := Unit | Result<UnitSuccess>` とする。
-- それ以外では、Monad の mapped payload 型自体が直接 canonical Unit であることを要求する。
-
-この条件に加えて MonadExtractor の能力を要求する。非 Result の型条件を extract の返す Result から判定しない。内部の保存 field や container を探索せず、成功 slot は constructor slot mapping から求める。alias は通常の正規化に従う。
+文末の `expression?` は、RHS を一度評価し、成功値が canonical Unit に至るまで各層の canonical `MonadExtractor::extract` を呼ぶ。文の型は Unit とする。各層の成功 slot は親 Monad の constructor slot mapping から求め、各層の分解能力と、有限段で Unit に至ることを静的に確認する。異なる MonadExtractor 実装型が入れ子になっていても同じ規則を使う。alias は通常の正規化に従う。内部の保存 field や container を探索しない。
 
 | 元の RHS 型 | 文末 `?` |
 |---|---|
-| `Result<Unit>`、`Result<Result<Unit>>` など Result のみが連続し終端が Unit | 受理 |
+| `Result<Unit>`、`Result<Result<Unit>>` | 受理 |
 | `Option<Unit>`、`Either<Error, Unit>`、MonadExtractor 実装済み `M<Unit>` | 受理 |
-| `Option<Option<Unit>>`、`Either<Error, Either<Error, Unit>>` | 拒否 |
-| `Option<Result<Unit>>`、`Result<Option<Unit>>`、`M<Int>` | Unit 条件で拒否 |
-| MonadExtractor 未実装の具象 `M<Unit>` | 分解入口の不足を案内 |
-| Unit であることを確定できない型 | 既存の推論・型関係の診断で拒否 |
+| `Option<Option<Unit>>`、`Either<Error, Either<Error, Unit>>` | 受理 |
+| `Option<Result<Unit>>`、`Result<Option<Either<Error, Unit>>>` | 受理 |
+| `M<Int>`、`Result<Option<Int>>` | Unit に至らないため拒否 |
+| 成功型の列は Unit に至るが、MonadExtractor 未実装の具象 Monad 型を経由する入力 | 分解入口の不足を案内 |
+| 未確定の成功型、成功型の循環など有限段で Unit に至ると確定できない入力 | 拒否 |
+| `Unit` | 分解する層がないため拒否 |
 
-元の RHS が canonical Result の場合は、外側の通常の extract 呼出しを一度だけ行い、その返却 Result から各層の Ok の成功値を順にたどり、Err または Unit を終端として判定する。内側の確認は文末 `?` 固有の判定であり、extract を再呼出ししない。どの層でも Err に到達したら元 Error を同じ現在の失敗先へ渡し、後続を実行しない。全層が Ok で終端の Unit に到達した場合だけ後続へ進む。`Ok(Err(error))?` は内側の元 Error を伝播する。
-非 Result の場合は直接の Unit payload を処理し、`Option<Result<Unit>>` などへこの再帰判定を広げない。通常の SafeBind の成功値や子 Pattern にも再適用しない。
+総称型では各層に必要な宣言 bound を要求する。未確定の成功型を Unit と単一化して受理しない。
+
+到達した各層の extract は一度だけ呼び、返却した Result の外側一段を判定する。Err なら元 Error を同じ現在の失敗先へ渡し、内側の extract と後続を実行しない。Ok の payload が Unit なら後続へ進み、それ以外ならその payload の型で次の extract を呼ぶ。extract が返す判定用 Result 自体へ再適用する規則ではない。元の RHS が Result であっても、各層で通常の extract を呼ぶ。`Ok(Err(error))?` は内側の元 Error を伝播し、`Ok(Option<Unit>::None)?` は Option の extract が生成した NoneError を伝播する。
+通常の SafeBind と明示的な extract 呼出しの分解は一段のままとし、子 Pattern への自動分解も追加しない。
 do 内では既存 do-local failure target、do 外では最も近い callable 自身の SafeBind target を使う。
 match arm などの通常 Block は新しい target を作らず、成立しない位置は拒否する。
 closure に入ると自身の期待返り型、または自身の未確定返り型へ切り替える。外側 callable の target を継承せず、未確定 target の SafeBind / 文末 `?` は拒否する。
@@ -133,11 +132,11 @@ SafeBind と do partial `<-` では Error 定義 Pattern による直接ダウ�
 
 - Spire: token、RTA、statement分類、pattern/operator/source span。parserではlowerしない。
 - Sigil: canonical identity、surface検証、RHS-first scope、captureとsource origin。
-- Scar: carrier / obligation 推論、pattern 検査、failure target、具体化済み bind / extract / fail / empty dispatch。文末 `?` の元 RHS 型に対する Unit 条件も検査する。
+- Scar: carrier / obligation 推論、pattern 検査、failure target、具体化済み bind / extract / fail / empty dispatch。文末 `?` の各層の能力と、有限段で Unit に至る成功型の列も検査する。
 - Forge: concrete closure、block、match、typed SafeBind control を既存命令へ lower する。SafeBind は解決済みの通常の extract call の返す Result を処理し、元 RHS の型名やレイアウトから extract を推測しない。
 - Eldr:既存命令の実行。carrier推論、candidate探索を行わない。
 
-typed SafeBind は解決済み extract call と一段の Result 判定、success / failure、effective target、result span 等の元 source origins を保持する。文末 `?` の canonical Result 連鎖は型検査で確定した深さを保持し、Forge はその深さに従って Err / Ok / Unit を判定する。元の RHS の型名・runtime 値から深さを推測しない。具体化・substitution・function index・trait dispatch の走査でも extract call を処理する。
+typed SafeBind は解決済み extract call と一段の Result 判定、success / failure、effective target、result span 等の元 source origins を保持する。文末 `?` は Scar で各層の解決済み extract TraitCall と通常の Match を合成し、全体を Result<Unit> に正規化する。既存の一段 SafeBind により同じ失敗先へ接続し、各層の Result の Error 型は失敗先の検査に保持する。Forge は通常の call / match / SafeBind を lower し、Result 連鎖の深さを扱う専用 IR や専用判定を持たない。具体化・substitution・function index・trait dispatch の走査でも各層の extract call を処理する。
 synthetic closureの暗黙return先へ依存せず、現在のdo continuationのcarrierへfailureを接続する。
 Forge前にpending carrier、dispatch、未具体化callableを拒否する。
 do専用opcode、runtime候補探索、旧failure経路、compatibility fallbackを残さない。

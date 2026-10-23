@@ -5,11 +5,16 @@ An Err is passed to the current failure target; an Ok supplies its entire
 payload to the Pattern. Nested payloads and child Patterns are not extracted
 again by SafeBind.
 
-Statement-final `?` uses the same input capability and failure target. For a
-canonical Result input, it checks the Result chain until reaching Err or Unit.
-An Err at any layer retains its original Error and stops the continuation;
-only Ok layers ending in Unit continue. Non-Result inputs must have a direct
-Unit payload. This does not add recursive decomposition to ordinary SafeBind.
+Statement-final `?` repeatedly calls this operation on each successful payload
+until reaching Unit, including nested values with different MonadExtractor
+implementations. Every layer must have the declared capability, and its
+successful type chain must statically reach Unit in finitely many steps.
+An unknown terminal type is not inferred as Unit; Unit itself is not an input.
+The input expression and each reached extract are evaluated once. An Err at
+any layer retains its original Error and stops inner extraction and the
+continuation; only successful layers ending in Unit continue. Each call's
+returned Result is checked once before extracting its payload at the next layer.
+Ordinary SafeBind and explicit extract calls still decompose only one layer.
 
 The standard implementations are Result (identity), Option (None becomes
 NoneError), and Either<Error, A> (Left retains its original Error). Existing
@@ -27,15 +32,14 @@ SafeBind and statement-final `?` need no import. Qualified calls use
 ## REPL
 xldr(1)> MonadExtractor::extract(Option::Some(3))
 Ok(3)
-xldr(2)> import MonadExtractor
-xldr(3)> extract(Ok(Option::Some(3)))
-Ok(Option::Some(3))
+xldr(2)> MonadExtractor::extract(Option<String>::None)
+Err(NoneError())
 
 ## Statement-final question
-xldr(1)> checked: (Result<Result<Unit>> -> Result<Int>) = {|target| target?; Ok(7)}
-xldr(2)> checked(Ok(Ok(())))
+xldr(1)> checked: (Result<Option<Unit>> -> Result<Int>) = {|target| target?; Ok(7)}
+xldr(2)> checked(Ok(Option::Some(())))
 Ok(7)
-xldr(3)> Result::is_err(checked(Ok(Err(NoneError()))))
+xldr(3)> Result::is_err(checked(Ok(Option<Unit>::None)))
 True
 """
 deftrait MonadExtractor
