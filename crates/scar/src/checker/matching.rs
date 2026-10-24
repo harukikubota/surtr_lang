@@ -521,7 +521,9 @@ impl Checker {
             TypedMatchPattern::Or(items) => items
                 .iter()
                 .any(|item| Self::match_or_alternative_matches(item, predicate)),
-            TypedMatchPattern::As(inner, _) => Self::match_or_alternative_matches(inner, predicate),
+            TypedMatchPattern::Located(_, _, inner) | TypedMatchPattern::As(inner, _) => {
+                Self::match_or_alternative_matches(inner, predicate)
+            }
             other => predicate(other),
         }
     }
@@ -595,7 +597,21 @@ impl Checker {
         expected_ty: &Ty,
     ) -> Result<TypedMatchPattern, TypeError> {
         let source_span = Self::resolved_pattern_span(pat)?;
-        self.check_match_subpattern_inner(pat.unlocated(), expected_ty, &source_span)
+        let pattern =
+            self.check_match_subpattern_inner(pat.unlocated(), expected_ty, &source_span)?;
+        Ok(if self.preserve_match_pattern_locations {
+            if matches!(pattern, TypedMatchPattern::Located(..)) {
+                pattern
+            } else {
+                TypedMatchPattern::Located(
+                    source_span,
+                    self.resolve_ty(expected_ty),
+                    Box::new(pattern),
+                )
+            }
+        } else {
+            pattern
+        })
     }
 
     fn check_match_subpattern_inner(
@@ -1319,7 +1335,9 @@ impl Checker {
     pub(super) fn is_match_catch_all(&self, pat: &TypedMatchPattern) -> bool {
         match pat {
             TypedMatchPattern::Binding(_) | TypedMatchPattern::Wildcard => true,
-            TypedMatchPattern::As(inner, _) => self.is_match_catch_all(inner),
+            TypedMatchPattern::Located(_, _, inner) | TypedMatchPattern::As(inner, _) => {
+                self.is_match_catch_all(inner)
+            }
             TypedMatchPattern::Or(items) => items.iter().any(|item| self.is_match_catch_all(item)),
             TypedMatchPattern::Tuple(items) => {
                 items.iter().all(|item| self.is_match_catch_all(item))
@@ -1357,7 +1375,9 @@ impl Checker {
             TypedMatchPattern::ErrorKind(kind) | TypedMatchPattern::ErrorPayload { kind, .. } => {
                 Some(kind)
             }
-            TypedMatchPattern::As(inner, _) => Self::single_error_pattern_identity(inner),
+            TypedMatchPattern::Located(_, _, inner) | TypedMatchPattern::As(inner, _) => {
+                Self::single_error_pattern_identity(inner)
+            }
             TypedMatchPattern::Or(items) => {
                 let first = Self::single_error_pattern_identity(items.first()?)?;
                 items
@@ -1463,6 +1483,7 @@ impl Checker {
 
     fn collect_or_binding_ids(pat: &TypedMatchPattern, out: &mut Vec<ResolvedId>) {
         match pat {
+            TypedMatchPattern::Located(_, _, inner) => Self::collect_or_binding_ids(inner, out),
             TypedMatchPattern::HashMap(entries) => {
                 for entry in entries {
                     Self::collect_or_binding_ids(&entry.pattern, out);
@@ -1497,7 +1518,10 @@ impl Checker {
 }
 
 impl Checker {
-    fn external_pattern_success_value(node: &TypedNode, bindings: &HashSet<u32>) -> bool {
+    pub(super) fn external_pattern_success_value(
+        node: &TypedNode,
+        bindings: &HashSet<u32>,
+    ) -> bool {
         match &node.node {
             TypedInner::EagerBoundary(inner) => {
                 Self::external_pattern_success_value(inner, bindings)
@@ -1546,6 +1570,11 @@ impl Checker {
         node: &TypedNode,
     ) -> Result<(), TypeError> {
         let error = self.find_typed_node(node, &|checker, node| {
+            if let TypedInner::AssertErrorMatches(_, _, Some(ty)) = &node.node {
+                if let Err(error) = checker.ensure_assert_error_direct_type(ty, &node.span) {
+                    return Some(error);
+                }
+            }
             if let TypedInner::Match(_, arms) = &node.node {
                 for arm in arms.iter().filter(|arm| arm.direct_expression) {
                     let mut bindings = HashSet::new();

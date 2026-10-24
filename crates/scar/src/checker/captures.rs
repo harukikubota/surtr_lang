@@ -73,7 +73,7 @@ impl Checker {
                 children.push(then_branch);
                 children.extend(else_branch.as_deref());
             }
-            TypedInner::Match(value, arms) => {
+            TypedInner::Match(value, arms) | TypedInner::AssertErrorMatches(value, arms, _) => {
                 children.push(value);
                 for arm in arms {
                     children.extend(arm.guard.as_ref());
@@ -226,7 +226,7 @@ impl Checker {
                         matching(&entry.pattern, outer, out);
                     }
                 }
-                TypedMatchPattern::As(inner, _) => matching(inner, outer, out),
+                TypedMatchPattern::Located(_, _, inner) | TypedMatchPattern::As(inner, _) => matching(inner, outer, out),
                 TypedMatchPattern::ListCons(a, b) => {
                     matching(a, outer, out);
                     matching(b, outer, out);
@@ -262,7 +262,7 @@ impl Checker {
                 | TypedInner::SafeBind(pattern, ..)
                 | TypedInner::ApplyPattern { pattern, .. } => binding(pattern, outer, out),
                 TypedInner::DoSafeBind(control) => binding(&control.pattern, outer, out),
-                TypedInner::Match(_, arms) => {
+                TypedInner::Match(_, arms) | TypedInner::AssertErrorMatches(_, arms, _) => {
                     for arm in arms {
                         matching(&arm.pattern, outer, out);
                     }

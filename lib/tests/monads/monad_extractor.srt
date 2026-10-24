@@ -85,6 +85,67 @@ def explicit_my_failure(target: Option<Int>) -> MyEither<Error, Int> {
 }
 
 test("MonadExtractor") {
+  it("extracts existing errors from standard and user constructors") {
+    do {
+      source = ExtractionFailure("retained")
+      from_result =? MonadExtractor::extract_error(Result<Int>::Err(source))
+      from_either =? MonadExtractor::extract_error(Either<Error, Int>::Left(source))
+      from_user =? MonadExtractor::extract_error(MyEither<Error, Int>::Left(source))
+      assert_eq(inspect(source), inspect(from_result))
+      assert_eq(inspect(source), inspect(from_either))
+      assert_eq(inspect(source), inspect(from_user))
+      assert_true(match from_user { ExtractionFailure(detail) => detail == "retained", _ => False })
+      missing =? MonadExtractor::extract_error(Option<Int>::None)
+      assert_true(Error::is_kind(missing, NoneError))
+    }
+  }
+
+  it("rejects successes with a fixed message and no saved payload") {
+    do {
+      failed = MonadExtractor::extract_error(Ok({|number: Int| number}))
+      assert_err_kind(ErrorExtractionFailed, failed)
+      assert_err_message_eq("error extraction failed", failed)
+      assert_true(match failed { Err(ErrorExtractionFailed()) => True, _ => False })
+      assert_err_kind(ErrorExtractionFailed, MonadExtractor::extract_error(Option::Some(1)))
+      assert_err_kind(ErrorExtractionFailed, MonadExtractor::extract_error(Either<Error, Int>::Right(1)))
+      assert_err_kind(ErrorExtractionFailed, MonadExtractor::extract_error(MyEither<Error, Int>::Right(1)))
+    }
+  }
+
+  it("extracts errors one layer at a time and after explicit flattening") {
+    do {
+      nested: Result<Result<Int>> = Ok(Err(ExtractionFailure("inner")))
+      assert_err_kind(ErrorExtractionFailed, MonadExtractor::extract_error(nested))
+      error =? MonadExtractor::extract_error(Result::flatten(nested))
+      assert_eq("inner", error.message)
+      assert_true(match error { ExtractionFailure(detail) => detail == "inner", _ => False })
+    }
+  }
+
+  it("evaluates the error extraction input and user extract once") {
+    do {
+      source = ExtractionFailure("traced")
+      input: (-> TracedExtraction<Int>) = {|| print("input"); TracedExtraction::Stop(source, "extract")}
+      error =? MonadExtractor::extract_error(input())
+      assert_eq("traced", error.message)
+      assert_stdout_eq(["input", "extract"])
+      assert_err_kind(ErrorExtractionFailed,
+        MonadExtractor::extract_error(TracedExtraction::Continue({|n: Int| n}, "success")))
+      assert_stdout_eq(["success"])
+    }
+  }
+
+  it("preserves original error rendering and cause when extracting errors") {
+    do {
+      source: Result<Int> = Result::cause(Err(NoneError()), ExtractionFailure("retained"))
+      error =? MonadExtractor::extract_error(source)
+      retained: Result<Int> = Err(error)
+      assert_cause_chain([ExtractionFailure, NoneError], retained)
+      assert_eq(inspect(source), inspect(retained))
+      assert_true(match error { ExtractionFailure(detail) => detail == "retained", _ => False })
+    }
+  }
+
   it("extracts standard successes with ordinary qualified calls") {
     do {
       assert_ok_eq(3, MonadExtractor::extract(Ok(3)))

@@ -6704,10 +6704,15 @@ fn test_process_message_wrappers_use_common_execution_boundary() {
             other => panic!("expected process declaration, got {other:?}"),
         };
         for wrapper in wrappers {
-            let wrapper_body = body.iter().find_map(|node| match node {
-                Ast::Def(_, name, _, _, _, _, body, _) if name == wrapper => Some(body.as_ref()),
-                _ => None,
-            }).expect("generated message wrapper");
+            let wrapper_body = body
+                .iter()
+                .find_map(|node| match node {
+                    Ast::Def(_, name, _, _, _, _, body, _) if name == wrapper => {
+                        Some(body.as_ref())
+                    }
+                    _ => None,
+                })
+                .expect("generated message wrapper");
             let stmts = process_execution_statements(wrapper_body);
             assert!(matches!(stmts.first(), Some(Ast::SafeBind(_, AstPattern::Annotated(_, name, AstTy::Named(_, state)), _, _))
                 if name == "state" && state == "Int"),
@@ -8588,9 +8593,10 @@ fn pattern_consumer_names_reject_ordinary_qualified_callables() {
             ] {
                 let error = parse(&source).expect_err(&source);
                 assert!(
-                    error
-                        .message()
-                        .contains("reserved for the canonical Kernel consumer"),
+                    error.message().contains(&format!(
+                        "reserved for the canonical {} consumer",
+                        consumer.owner()
+                    )),
                     "{source}: {error:?}"
                 );
             }
@@ -9098,5 +9104,62 @@ fn source_reflections_validate_builtin_function_declarations() {
     }
     for source in ["__LINE__()", "__DIR__(1)", "&__LINE__", "^__LINE__"] {
         assert!(parse(source).is_err(), "{source}");
+    }
+}
+
+#[test]
+fn assert_error_matches_accepts_expression_and_both_block_forms() {
+    for source in [
+        "Test::assert_error_matches(err, Failure(value) @ alias, check(value))",
+        "assert_error_matches(err, Failure(value), { check(value) })",
+        "assert_error_matches(err, Failure(value)) { check(value) }",
+    ] {
+        let ast = parse(source).expect(source);
+        let Ast::PatternConsumerCall(_, _, args) = &ast[0] else {
+            panic!("expected Pattern consumer: {source}: {:?}", ast[0]);
+        };
+        assert_eq!(args.len(), 3, "{source}");
+        assert!(args[1].pattern.is_some(), "{source}");
+        if source.contains('{') {
+            assert!(
+                matches!(args[2].expression.as_deref(), Some(Ast::Closure(_, params, _)) if params.is_empty()),
+                "{source}"
+            );
+        }
+    }
+}
+
+#[test]
+fn assert_error_matches_rejects_root_and_nested_or_patterns() {
+    for pattern in [
+        "Failure | Other",
+        "Failure(x) | Other(x)",
+        "Failure(1 | 2)",
+        "Failure(x | x)",
+    ] {
+        let source = format!("Test::assert_error_matches(err, {pattern}, check())");
+        let error = parse(&source).expect_err(&source);
+        assert!(
+            error.message().contains("OR patterns"),
+            "{source}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn assert_error_matches_keeps_pattern_slot_and_rejects_named_arguments() {
+    let ast = parse("err |> Test::assert_error_matches(Failure(_1), check())").unwrap();
+    let Ast::Pipe(_, _, call) = &ast[0] else { panic!("{ast:?}") };
+    let Ast::PatternConsumerCall(_, _, args) = call.as_ref() else { panic!("{call:?}") };
+    assert!(args[0].pattern.is_some(), "pipe insertion selects the Pattern grammar");
+    let annotated = parse("Test::assert_error_matches(err, bound: Error, check())").unwrap();
+    let Ast::PatternConsumerCall(_, _, args) = &annotated[0] else { panic!("{annotated:?}") };
+    assert!(matches!(args[1].pattern.as_deref(), Some(AstPattern::Annotated(_, name, _)) if name == "bound"), "the Pattern slot keeps annotation grammar");
+    for source in [
+        "Test::assert_error_matches(error: err, Failure, check())",
+        "Test::assert_error_matches(err, Failure, check: check())",
+        "Test::assert_error_matches(err, &1, check())",
+    ] {
+        parse(source).expect_err(source);
     }
 }

@@ -61,7 +61,7 @@ mod pipe_contract_tests {
             .resolve_pattern_consumer_identity(&callee)
             .expect_err("consumer syntax cannot become an ordinary call");
         assert!(
-            error.message.contains("canonical Kernel consumer"),
+            error.message.contains("canonical consumer"),
             "{error:?}"
         );
     }
@@ -98,7 +98,7 @@ impl Resolver {
             return Ok(kind);
         }
         Err(consumer_error(
-            "Pattern consumer syntax does not identify the canonical Kernel consumer",
+            "Pattern consumer syntax does not identify the canonical consumer",
             callee.span().clone(),
         ))
     }
@@ -155,7 +155,41 @@ impl Resolver {
             && !self.pattern_has_deferred_application(&pattern)
             && super::special_forms::pattern_has_binding_vars(&pattern)
         {
-            return Err(consumer_error("`is_match` pattern does not allow binding variables. Use `_` to ignore a value, or use `if_let` / `match` when you need bindings.", super::special_forms::ast_pattern_span(&pattern).clone()));
+            return Err(consumer_error(
+                "`is_match` pattern does not allow binding variables. Use `_` to ignore a value, or use `if_let` / `match` when you need bindings.",
+                super::special_forms::ast_pattern_span(&pattern).clone(),
+            ));
+        }
+        if kind == PatternConsumer::AssertErrorMatches {
+            let body = Self::consumer_expression(args.next().unwrap())?;
+            let eager =
+                matches!(&body, Ast::Grouped(..)) && !self.is_direct_capture_parameter(&body);
+            let eager_body = if eager {
+                Some(self.resolve_lazy_input(body.clone())?)
+            } else {
+                None
+            };
+            let resolved = self.resolve_node(Ast::Match(
+                span.clone(),
+                Box::new(term),
+                vec![AstMatchArm {
+                    pattern,
+                    guard: None,
+                    body: if eager {
+                        Ast::Lit(span.clone(), Lit::Unit)
+                    } else {
+                        body
+                    },
+                }],
+            ))?;
+            let Resolved::Match(_, input, mut arms) = resolved else {
+                unreachable!()
+            };
+            let mut success = arms.remove(0);
+            if let Some(body) = eager_body {
+                success.body = body;
+            }
+            return Ok(Resolved::AssertErrorMatches(span, input, Box::new(success)));
         }
         let (body, fallback) = match kind {
             PatternConsumer::IsMatch => (
@@ -170,7 +204,7 @@ impl Resolver {
                 Self::consumer_expression(args.next().unwrap())?,
                 Ast::Lit(span.clone(), Lit::Unit),
             ),
-            PatternConsumer::ApplyPattern => unreachable!(),
+            PatternConsumer::ApplyPattern | PatternConsumer::AssertErrorMatches => unreachable!(),
         };
         // A Lazy argument's grouping is evaluated in the scope before matching.
         // Grouped synthetic capture parameters are ordinary parameter references.

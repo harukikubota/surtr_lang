@@ -78,6 +78,8 @@ depthは型の先頭に連続する0引数関数の段数である。引数付�
 `Result::or_else`の右辺は左辺と同じ`Result<T>`を返す`(-> Result<T>)`を要求し、左辺が`Err`のときだけconsumeする。括弧によるeager境界は左辺の評価後・分岐選択前に一回評価し、その結果を再利用する。
 個別の評価条件は標準 API の契約に従う。Error は通常の値として受け渡す。
 
+`Test::assert_error_matches` の check は、Pattern の束縛がある場合も `(-> Result<Unit>)` に正規化し、照合成功時に一度だけ consume する。単一式と括弧内・後置 block は同じ結果型を要求し、その場の closure を未実行の成功値として返さない。束縛ありの直接記述検査、照合前 scope の eager 境界と内部の失敗返却先は [Pattern spec](Pattern_spec.md#testassert_error_matches) に従う。既存 if_let の DirectExpression 経路とは区別する。
+
 ## キャプチャの要求型
 
 直接placeholderには、正規化済みのbranch型を要求する。placeholder自体を一段wrapして型不一致を救済しない。

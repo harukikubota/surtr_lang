@@ -518,10 +518,8 @@ impl Resolver {
             Ast::PatternConsumerCall(_, callee, args) => {
                 let kind = match callee.as_ref() {
                     Ast::Var(_, name) => sindr::pattern::PatternConsumer::from_name(name),
-                    Ast::Path(_, path)
-                        if path.segments.len() == 2 && path.segments[0] == "Kernel" =>
-                    {
-                        sindr::pattern::PatternConsumer::from_name(&path.segments[1])
+                    Ast::Path(_, path) => {
+                        sindr::pattern::PatternConsumer::from_source_path(&path.segments)
                     }
                     _ => None,
                 };
@@ -2521,8 +2519,13 @@ impl Resolver {
                 qualified.and_then(sindr::pattern::PatternConsumer::from_canonical_name)
             {
                 return Err(ResolveError {
-                    message: format!("Pattern consumer `{}::{}` cannot be used as a value or capture; use its complete call syntax", sindr::pattern::PatternConsumer::OWNER, kind.name()),
-                    span, related_labels: Vec::new(),
+                    message: format!(
+                        "Pattern consumer `{}::{}` cannot be used as a value or capture; use its complete call syntax",
+                        kind.owner(),
+                        kind.name()
+                    ),
+                    span,
+                    related_labels: Vec::new(),
                     diagnostic: crate::error::ResolveErrorDiagnostic {
                         reason: crate::error::ResolveErrorReason::SpecialForm, subject: Some(id.name.clone()),
                     },

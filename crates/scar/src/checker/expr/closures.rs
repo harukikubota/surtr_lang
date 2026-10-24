@@ -319,6 +319,7 @@ impl Checker {
                     body,
                     Resolved::If(..)
                         | Resolved::IfLet(..)
+                    | Resolved::AssertErrorMatches(..)
                         | Resolved::LazyApp(_, LazyCaptureKind::If | LazyCaptureKind::IfThen, _, _)
                 )
                 || self.body_tail_is_return_type_argument_call(body)

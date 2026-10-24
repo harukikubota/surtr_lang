@@ -99,7 +99,7 @@ fn children(node: &mut TypedNode, visitor: &mut dyn FnMut(&mut TypedNode)) {
                 visitor(no);
             }
         }
-        TypedInner::Match(value, arms) => {
+        TypedInner::Match(value, arms) | TypedInner::AssertErrorMatches(value, arms, _) => {
             visitor(value);
             for arm in arms {
                 if let Some(guard) = &mut arm.guard {

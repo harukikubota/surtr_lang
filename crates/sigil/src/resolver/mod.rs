@@ -885,6 +885,11 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
             rebase_resolved_node(value, base, offset);
             rebase_resolved_node(err, base, offset);
         }
+        Resolved::AssertErrorMatches(_, input, arm) => {
+            rebase_resolved_node(input, base, offset);
+            rebase_pattern(&mut arm.pattern, base, offset);
+            rebase_resolved_node(&mut arm.body, base, offset);
+        }
         Resolved::Match(_, scrutinee, arms)
         | Resolved::IsMatch(_, scrutinee, arms)
         | Resolved::IfLet(_, scrutinee, arms, _) => {

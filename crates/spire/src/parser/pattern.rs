@@ -15,7 +15,7 @@ impl Parser<'_> {
                 self.peek_span(),
             ));
         }
-        self.reject_binding_or(&pat)?;
+        self.reject_or_pattern(&pat, "OR patterns are not allowed in binding patterns")?;
         let operator_span = self.advance().span;
         let rhs = self.parse_expr()?;
         self.ensure_non_associative_assignment(&rhs)?;
@@ -46,7 +46,7 @@ impl Parser<'_> {
         // Recognize the full LHS before applying the binding restriction.
         // `<-` also commits an OR rejection if do lookahead stopped at a newline.
         if matches!(assign_tok, Token::Bind | Token::SafeBind | Token::LeftArrow) {
-            self.reject_binding_or(&pat)?;
+            self.reject_or_pattern(&pat, "OR patterns are not allowed in binding patterns")?;
         }
         if !matches!(assign_tok, Token::Bind | Token::SafeBind) {
             return Err(ParseError::syntax(
@@ -566,7 +566,7 @@ impl Parser<'_> {
         }
     }
 
-    pub(super) fn reject_binding_or(&self, pattern: &AstPattern) -> Result<(), ParseError> {
+    pub(super) fn reject_or_pattern(&self, pattern: &AstPattern, message: &str) -> Result<(), ParseError> {
         let Some(or_span) = pattern_or_span(pattern) else {
             return Ok(());
         };
@@ -587,7 +587,7 @@ impl Parser<'_> {
             })?;
         Err(ParseError::syntax(
             crate::error::ParseErrorReason::PatternSyntax,
-            "OR patterns are not allowed in binding patterns",
+            message,
             pipe.span.clone(),
         ))
     }

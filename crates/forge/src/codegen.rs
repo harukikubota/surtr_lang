@@ -266,7 +266,9 @@ fn collect_match_pattern_expressions<'a>(
                 collect_match_pattern_expressions(&entry.pattern, expressions);
             }
         }
-        TypedMatchPattern::As(inner, _) => collect_match_pattern_expressions(inner, expressions),
+        TypedMatchPattern::Located(_, _, inner) | TypedMatchPattern::As(inner, _) => {
+            collect_match_pattern_expressions(inner, expressions)
+        }
         TypedMatchPattern::ListCons(head, tail) => {
             collect_match_pattern_expressions(head, expressions);
             collect_match_pattern_expressions(tail, expressions);
@@ -310,7 +312,7 @@ fn collect_missing_singleton_calls(
         TypedInner::DoSafeBind(control) => {
             collect_pattern_expressions(&control.pattern, &mut pattern_expressions);
         }
-        TypedInner::Match(_, arms) => {
+        TypedInner::Match(_, arms) | TypedInner::AssertErrorMatches(_, arms, _) => {
             for arm in arms {
                 collect_match_pattern_expressions(&arm.pattern, &mut pattern_expressions);
             }
@@ -603,7 +605,7 @@ fn collect_missing_singleton_calls(
                 );
             }
         }
-        TypedInner::Match(scrutinee, arms) => {
+        TypedInner::Match(scrutinee, arms) | TypedInner::AssertErrorMatches(scrutinee, arms, _) => {
             collect_missing_singleton_calls(
                 scrutinee,
                 surface_to_process,
@@ -9054,6 +9056,9 @@ impl Codegen {
             TypedInner::Match(scrutinee, arms) => {
                 self.emit_match(scrutinee, arms)?;
             }
+            TypedInner::AssertErrorMatches(value, arms, _) => {
+                self.emit_assert_error_matches(value, arms, &node.span)?;
+            }
 
             TypedInner::FieldAccess(expr, idx) => {
                 self.emit_node(expr)?;
@@ -10715,41 +10720,51 @@ impl Codegen {
                 )?;
                 self.emit_pattern_failure_from_error_stack(span, None, destination)
             }
-            TypedPattern::Constructor { ty, tag, .. } => {
-                if self.pattern_failure_is_discarded(&span, destination)? {
-                    return Ok(());
-                }
-                let (enum_name, expected) = self.variant_identity(*tag, &span)?;
-                let kind = if matches!(ty, Ty::Result(..)) {
-                    "ResultVariantPatternMismatch"
-                } else {
-                    "EnumVariantPatternMismatch"
-                };
-                if kind == "EnumVariantPatternMismatch" {
-                    let c =
-                        self.add_constant(Constant::Str(surface_path_name(&enum_name).to_string()));
-                    self.emit(Opcode::LoadConst(c));
-                }
-                let c = self.add_constant(Constant::Str(expected));
-                self.emit(Opcode::LoadConst(c));
-                self.emit_variant_name_from_local(value_slot, &enum_name, &span)?;
-                let arity = if kind == "EnumVariantPatternMismatch" {
-                    3
-                } else {
-                    2
-                };
-                self.emit_language_error_call(
-                    kind,
-                    &vec![sindr::ir::ErrorValueSchema::String; arity],
-                    &span,
-                )?;
-                self.emit_pattern_failure_from_error_stack(span, None, destination)
-            }
+            TypedPattern::Constructor { ty, tag, .. } => self
+                .emit_constructor_pattern_mismatch_failure(ty, *tag, value_slot, span, destination),
             _ => Err(CodegenError {
                 message: "Pattern failure has no checked language Error contract".into(),
                 span,
             }),
         }
+    }
+
+    fn emit_constructor_pattern_mismatch_failure(
+        &mut self,
+        ty: &Ty,
+        tag: u32,
+        value_slot: u32,
+        span: Span,
+        destination: PatternFailureDestination,
+    ) -> Result<(), CodegenError> {
+        if self.pattern_failure_is_discarded(&span, destination)? {
+            return Ok(());
+        }
+        let (enum_name, expected) = self.variant_identity(tag, &span)?;
+        let kind = if matches!(ty, Ty::Result(..)) {
+            "ResultVariantPatternMismatch"
+        } else {
+            "EnumVariantPatternMismatch"
+        };
+        if kind == "EnumVariantPatternMismatch" {
+            let constant =
+                self.add_constant(Constant::Str(surface_path_name(&enum_name).to_string()));
+            self.emit(Opcode::LoadConst(constant));
+        }
+        let constant = self.add_constant(Constant::Str(expected));
+        self.emit(Opcode::LoadConst(constant));
+        self.emit_variant_name_from_local(value_slot, &enum_name, &span)?;
+        let arity = if kind == "EnumVariantPatternMismatch" {
+            3
+        } else {
+            2
+        };
+        self.emit_language_error_call(
+            kind,
+            &vec![sindr::ir::ErrorValueSchema::String; arity],
+            &span,
+        )?;
+        self.emit_pattern_failure_from_error_stack(span, None, destination)
     }
 
     fn emit_literal_pattern_mismatch_failure(
@@ -12874,14 +12889,292 @@ impl Codegen {
         Ok(())
     }
 
+    fn emit_assert_error_matches(
+        &mut self,
+        value: &TypedNode,
+        arms: &[TypedMatchArm],
+        span: &Span,
+    ) -> Result<(), CodegenError> {
+        let [success] = arms else {
+            return Err(CodegenError {
+                message: "Error assertion requires one checked success arm".into(),
+                span: span.clone(),
+            });
+        };
+        if success.guard.is_some() {
+            return Err(CodegenError {
+                message: "Error assertion cannot have a guard".into(),
+                span: span.clone(),
+            });
+        }
+        let eager = self.materialize_eager_boundary(&success.body)?;
+        self.emit_node(value)?;
+        let slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(slot));
+        let mismatch = self.fresh_label();
+        let end = self.fresh_label();
+        let decomposition = self.emit_match_pattern_test_with_mode(
+            &success.pattern,
+            slot,
+            mismatch,
+            span,
+            ExtractorFailurePolicy::ExpressionResult(end),
+        )?;
+        self.emit_match_pattern_bind(&success.pattern, slot, Some(decomposition), span)?;
+        self.emit_lazy_argument(&success.body, eager)?;
+        self.emit_jump(end);
+        self.patch_label(mismatch);
+        self.emit_total_pattern_contract_violation(span.clone())?;
+        self.patch_label(end);
+        Ok(())
+    }
+
+    fn emit_assert_match_failure(
+        &mut self,
+        pattern: &TypedMatchPattern,
+        checked_ty: &Ty,
+        slot: u32,
+        source: &Span,
+        end: Label,
+    ) -> Result<(), CodegenError> {
+        let destination = PatternFailureDestination::ExpressionResult(end);
+        let pattern = match pattern {
+            TypedMatchPattern::ErrorKind(kind) | TypedMatchPattern::ErrorPayload { kind, .. } => {
+                let expected =
+                    self.add_constant(Constant::Str(surface_path_name(kind).to_string()));
+                self.emit(Opcode::LoadConst(expected));
+                self.emit(Opcode::LoadLocal(slot));
+                self.emit_internal_builtin_call("kind", 1, source)?;
+                self.emit_language_error_call(
+                    "TestErrorPatternKindMismatch",
+                    &vec![sindr::ir::ErrorValueSchema::String; 2],
+                    source,
+                )?;
+                return self.emit_pattern_failure_from_error_stack(
+                    source.clone(),
+                    None,
+                    destination,
+                );
+            }
+            TypedMatchPattern::BoolLit(value) => TypedPattern::BoolLit(Ty::Bool, *value),
+            TypedMatchPattern::IntLit(value) => TypedPattern::IntLit(Ty::Int, value.clone()),
+            TypedMatchPattern::StrLit(value) => TypedPattern::StrLit(Ty::Str, value.clone()),
+            TypedMatchPattern::DurationLit(value) => {
+                TypedPattern::DurationLit(checked_ty.clone(), value.clone())
+            }
+            TypedMatchPattern::Pin { id, ty, dispatch } => {
+                TypedPattern::Pin(ty.clone(), id.clone(), dispatch.clone())
+            }
+            TypedMatchPattern::ListCons(..) => {
+                return self.emit_empty_list_failure("List", source.clone(), destination);
+            }
+            TypedMatchPattern::Constructor { tag, .. } => {
+                return self.emit_constructor_pattern_mismatch_failure(
+                    checked_ty,
+                    *tag,
+                    slot,
+                    source.clone(),
+                    destination,
+                );
+            }
+            _ => {
+                return Err(CodegenError {
+                    message: "Error assertion Pattern has no checked failure contract".into(),
+                    span: source.clone(),
+                })
+            }
+        };
+        self.emit_safebind_pattern_failure(&pattern, slot, source.clone(), destination)
+    }
+
+    fn exact_match_list_items(pattern: &TypedMatchPattern) -> Option<Vec<&TypedMatchPattern>> {
+        fn walk<'a>(pattern: &'a TypedMatchPattern, out: &mut Vec<&'a TypedMatchPattern>) -> bool {
+            match pattern {
+                TypedMatchPattern::Located(_, _, inner) | TypedMatchPattern::As(inner, _) => {
+                    walk(inner, out)
+                }
+                TypedMatchPattern::ListNil => true,
+                TypedMatchPattern::ListCons(head, tail) => {
+                    out.push(head);
+                    walk(tail, out)
+                }
+                _ => false,
+            }
+        }
+        let mut items = Vec::new();
+        walk(pattern, &mut items).then_some(items)
+    }
+
+    fn emit_exact_match_list_preserving(
+        &mut self,
+        items: &[&TypedMatchPattern],
+        slot: u32,
+        mismatch: Label,
+        source: &Span,
+        end: Label,
+    ) -> Result<MatchPatternDecomp, CodegenError> {
+        let shorts = (0..items.len())
+            .map(|_| self.fresh_label())
+            .collect::<Vec<_>>();
+        let long = self.fresh_label();
+        let success = self.fresh_label();
+        let mut current = slot;
+        let mut links = Vec::new();
+        for (index, item) in items.iter().enumerate() {
+            self.emit(Opcode::LoadLocal(current));
+            self.emit(Opcode::ListIsEmpty);
+            self.emit_jump_if_true(shorts[index]);
+            let head = self.state.next_slot;
+            self.state.next_slot += 1;
+            self.emit(Opcode::LoadLocal(current));
+            self.emit(Opcode::ListHead);
+            self.emit(Opcode::StoreLocal(head));
+            let decomp = self.emit_match_pattern_test_with_mode(
+                item,
+                head,
+                mismatch,
+                source,
+                ExtractorFailurePolicy::ExpressionResult(end),
+            )?;
+            let tail = self.state.next_slot;
+            self.state.next_slot += 1;
+            self.emit(Opcode::LoadLocal(current));
+            self.emit(Opcode::ListTail);
+            self.emit(Opcode::StoreLocal(tail));
+            links.push((head, decomp, tail));
+            current = tail;
+        }
+        self.emit(Opcode::LoadLocal(current));
+        self.emit(Opcode::ListIsEmpty);
+        self.emit_jump_if_false(long);
+        self.emit_jump(success);
+        for (length, label) in shorts.into_iter().enumerate() {
+            self.patch_label(label);
+            self.emit_list_len_mismatch_failure_concrete(
+                items.len(),
+                length,
+                ">",
+                source.clone(),
+                PatternFailureDestination::ExpressionResult(end),
+            )?;
+        }
+        self.patch_label(long);
+        self.emit_list_len_mismatch_failure_rhs_long(
+            items.len(),
+            current,
+            source.clone(),
+            PatternFailureDestination::ExpressionResult(end),
+        )?;
+        self.patch_label(success);
+        Ok(links.into_iter().rev().fold(
+            MatchPatternDecomp::None,
+            |tail, (head_slot, decomp, tail_slot)| MatchPatternDecomp::ListCons {
+                head: Box::new(MatchPatternDecompChild {
+                    slot: head_slot,
+                    decomp,
+                }),
+                tail: Box::new(MatchPatternDecompChild {
+                    slot: tail_slot,
+                    decomp: tail,
+                }),
+            },
+        ))
+    }
+
     fn emit_match_pattern_test(
         &mut self,
         pat: &TypedMatchPattern,
         slot: u32,
         fail_label: Label,
+        span: &Span,
+    ) -> Result<MatchPatternDecomp, CodegenError> {
+        self.emit_match_pattern_test_with_mode(
+            pat,
+            slot,
+            fail_label,
+            span,
+            ExtractorFailurePolicy::Discard,
+        )
+    }
+
+    fn emit_match_pattern_test_with_mode(
+        &mut self,
+        pat: &TypedMatchPattern,
+        slot: u32,
+        fail_label: Label,
+        span: &Span,
+        policy: ExtractorFailurePolicy,
+    ) -> Result<MatchPatternDecomp, CodegenError> {
+        if matches!(policy, ExtractorFailurePolicy::Discard) {
+            return self.emit_match_pattern_test_inner(pat, slot, fail_label, span, policy);
+        }
+        let TypedMatchPattern::Located(source, checked_ty, inner) = pat else {
+            return Err(CodegenError {
+                message: "Preserving match consumer requires Pattern source location".into(),
+                span: span.clone(),
+            });
+        };
+        if matches!(
+            inner.as_ref(),
+            TypedMatchPattern::ListNil | TypedMatchPattern::ListCons(..)
+        ) {
+            if let Some(items) = Self::exact_match_list_items(inner) {
+                let ExtractorFailurePolicy::ExpressionResult(end) = policy else {
+                    return Err(CodegenError {
+                        message: "Preserving list match requires a Result destination".into(),
+                        span: source.clone(),
+                    });
+                };
+                return self
+                    .emit_exact_match_list_preserving(&items, slot, fail_label, source, end);
+            }
+        }
+        if matches!(
+            inner.as_ref(),
+            TypedMatchPattern::Binding(_)
+                | TypedMatchPattern::Wildcard
+                | TypedMatchPattern::Tuple(_)
+                | TypedMatchPattern::Record(_)
+                | TypedMatchPattern::As(..)
+                | TypedMatchPattern::Extractor { .. }
+                | TypedMatchPattern::HashMap(_)
+        ) {
+            return self.emit_match_pattern_test_inner(inner, slot, fail_label, source, policy);
+        }
+        let mismatch = self.fresh_label();
+        let success = self.fresh_label();
+        let decomp = self.emit_match_pattern_test_inner(inner, slot, mismatch, source, policy)?;
+        self.emit_jump(success);
+        self.patch_label(mismatch);
+        let ExtractorFailurePolicy::ExpressionResult(end) = policy else {
+            return Err(CodegenError {
+                message: "Error assertion requires an expression Result destination".into(),
+                span: source.clone(),
+            });
+        };
+        self.emit_assert_match_failure(inner, checked_ty, slot, source, end)?;
+        self.patch_label(success);
+        Ok(decomp)
+    }
+
+    fn emit_match_pattern_test_inner(
+        &mut self,
+        pat: &TypedMatchPattern,
+        slot: u32,
+        fail_label: Label,
         err_span: &Span,
+        failure_policy: ExtractorFailurePolicy,
     ) -> Result<MatchPatternDecomp, CodegenError> {
         let decomp = match pat {
+            TypedMatchPattern::Located(source, _, inner) => self
+                .emit_match_pattern_test_with_mode(
+                    inner,
+                    slot,
+                    fail_label,
+                    source,
+                    failure_policy,
+                )?,
             TypedMatchPattern::Binding(_) | TypedMatchPattern::Wildcard => MatchPatternDecomp::None,
             TypedMatchPattern::Pin { id, ty, dispatch } => {
                 let pinned_slot = self.existing_slot_for_id(id, err_span)?;
@@ -12889,9 +13182,13 @@ impl Codegen {
                 self.emit_jump_if_false(fail_label);
                 MatchPatternDecomp::None
             }
-            TypedMatchPattern::As(inner, _) => {
-                self.emit_match_pattern_test(inner, slot, fail_label, err_span)?
-            }
+            TypedMatchPattern::As(inner, _) => self.emit_match_pattern_test_with_mode(
+                inner,
+                slot,
+                fail_label,
+                err_span,
+                failure_policy,
+            )?,
             TypedMatchPattern::BoolLit(b) => {
                 self.emit(Opcode::LoadLocal(slot));
                 let bool_const = self.add_constant(Constant::Bool(*b));
@@ -12937,8 +13234,13 @@ impl Codegen {
                         payload_len: fields.len() as u32,
                     });
                     self.emit(Opcode::StoreLocal(item_slot));
-                    let decomp =
-                        self.emit_match_pattern_test(pattern, item_slot, fail_label, err_span)?;
+                    let decomp = self.emit_match_pattern_test_with_mode(
+                        pattern,
+                        item_slot,
+                        fail_label,
+                        err_span,
+                        failure_policy,
+                    )?;
                     children.push(MatchPatternDecompChild {
                         slot: item_slot,
                         decomp,
@@ -12950,7 +13252,13 @@ impl Codegen {
                 let success_label = self.fresh_label();
                 for item in items {
                     let next_label = self.fresh_label();
-                    let decomp = self.emit_match_pattern_test(item, slot, next_label, err_span)?;
+                    let decomp = self.emit_match_pattern_test_with_mode(
+                        item,
+                        slot,
+                        next_label,
+                        err_span,
+                        failure_policy,
+                    )?;
                     self.emit_match_pattern_bind(item, slot, Some(decomp), err_span)?;
                     self.emit_jump(success_label);
                     self.patch_label(next_label);
@@ -12969,8 +13277,13 @@ impl Codegen {
                         field_index: index as u32,
                     });
                     self.emit(Opcode::StoreLocal(item_slot));
-                    let item_decomp =
-                        self.emit_match_pattern_test(item, item_slot, fail_label, err_span)?;
+                    let item_decomp = self.emit_match_pattern_test_with_mode(
+                        item,
+                        item_slot,
+                        fail_label,
+                        err_span,
+                        failure_policy,
+                    )?;
                     children.push(MatchPatternDecompChild {
                         slot: item_slot,
                         decomp: item_decomp,
@@ -12986,13 +13299,14 @@ impl Codegen {
                         &entry.key_span,
                         slot,
                         fail_label,
-                        ExtractorFailurePolicy::Discard,
+                        failure_policy,
                     )?;
-                    let decomp = self.emit_match_pattern_test(
+                    let decomp = self.emit_match_pattern_test_with_mode(
                         &entry.pattern,
                         value_slot,
                         fail_label,
                         err_span,
+                        failure_policy,
                     )?;
                     children.push(MatchPatternDecompChild {
                         slot: value_slot,
@@ -13011,8 +13325,13 @@ impl Codegen {
                         field_index: index as u32,
                     });
                     self.emit(Opcode::StoreLocal(inner_slot));
-                    let field_decomp =
-                        self.emit_match_pattern_test(field_pat, inner_slot, fail_label, err_span)?;
+                    let field_decomp = self.emit_match_pattern_test_with_mode(
+                        field_pat,
+                        inner_slot,
+                        fail_label,
+                        err_span,
+                        failure_policy,
+                    )?;
                     children.push(MatchPatternDecompChild {
                         slot: inner_slot,
                         decomp: field_decomp,
@@ -13041,8 +13360,13 @@ impl Codegen {
                         field_index: *field_offset + idx as u32,
                     });
                     self.emit(Opcode::StoreLocal(inner_slot));
-                    let field_decomp =
-                        self.emit_match_pattern_test(field_pat, inner_slot, fail_label, err_span)?;
+                    let field_decomp = self.emit_match_pattern_test_with_mode(
+                        field_pat,
+                        inner_slot,
+                        fail_label,
+                        err_span,
+                        failure_policy,
+                    )?;
                     children.push(MatchPatternDecompChild {
                         slot: inner_slot,
                         decomp: field_decomp,
@@ -13056,9 +13380,13 @@ impl Codegen {
                 self.emit_jump_if_false(fail_label);
                 MatchPatternDecomp::None
             }
-            TypedMatchPattern::ListCons(_, _) => {
-                self.emit_list_cons_match_pattern_test(pat, slot, fail_label)?
-            }
+            TypedMatchPattern::ListCons(_, _) => self.emit_list_cons_match_pattern_test_with_mode(
+                pat,
+                slot,
+                fail_label,
+                err_span,
+                failure_policy,
+            )?,
             TypedMatchPattern::Extractor {
                 input_ty,
                 extractor,
@@ -13080,13 +13408,18 @@ impl Codegen {
                     items.len(),
                     slot,
                     fail_label,
-                    ExtractorFailurePolicy::Discard,
+                    failure_policy,
                     &extractor.span,
                 )?;
                 let mut children = Vec::with_capacity(items.len());
                 for (item, item_slot) in items.iter().zip(item_slots.iter()) {
-                    let item_decomp =
-                        self.emit_match_pattern_test(item, *item_slot, fail_label, err_span)?;
+                    let item_decomp = self.emit_match_pattern_test_with_mode(
+                        item,
+                        *item_slot,
+                        fail_label,
+                        err_span,
+                        failure_policy,
+                    )?;
                     children.push(MatchPatternDecompChild {
                         slot: *item_slot,
                         decomp: item_decomp,
@@ -13106,6 +13439,9 @@ impl Codegen {
         err_span: &Span,
     ) -> Result<(), CodegenError> {
         match pat {
+            TypedMatchPattern::Located(source, _, inner) => {
+                self.emit_match_pattern_bind(inner, slot, decomp, source)?
+            }
             TypedMatchPattern::Binding(id) => {
                 let bind_slot = self.alloc_slot(id.unique_id);
                 self.emit(Opcode::LoadLocal(slot));
@@ -13287,7 +13623,53 @@ impl Codegen {
         Ok(())
     }
 
-    fn emit_list_cons_match_pattern_test(
+    fn emit_list_cons_match_pattern_test_with_mode(
+        &mut self,
+        pat: &TypedMatchPattern,
+        slot: u32,
+        fail: Label,
+        span: &Span,
+        policy: ExtractorFailurePolicy,
+    ) -> Result<MatchPatternDecomp, CodegenError> {
+        if matches!(policy, ExtractorFailurePolicy::Discard) {
+            return self.emit_list_cons_match_pattern_test_discard(pat, slot, fail);
+        }
+        let TypedMatchPattern::ListCons(head, tail) = pat else {
+            return Err(CodegenError {
+                message: "List Pattern contract missing".into(),
+                span: span.clone(),
+            });
+        };
+        self.emit(Opcode::LoadLocal(slot));
+        self.emit(Opcode::ListIsEmpty);
+        self.emit_jump_if_true(fail);
+        let head_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::LoadLocal(slot));
+        self.emit(Opcode::ListHead);
+        self.emit(Opcode::StoreLocal(head_slot));
+        let head_decomp =
+            self.emit_match_pattern_test_with_mode(head, head_slot, fail, span, policy)?;
+        let tail_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::LoadLocal(slot));
+        self.emit(Opcode::ListTail);
+        self.emit(Opcode::StoreLocal(tail_slot));
+        let tail_decomp =
+            self.emit_match_pattern_test_with_mode(tail, tail_slot, fail, span, policy)?;
+        Ok(MatchPatternDecomp::ListCons {
+            head: Box::new(MatchPatternDecompChild {
+                slot: head_slot,
+                decomp: head_decomp,
+            }),
+            tail: Box::new(MatchPatternDecompChild {
+                slot: tail_slot,
+                decomp: tail_decomp,
+            }),
+        })
+    }
+
+    fn emit_list_cons_match_pattern_test_discard(
         &mut self,
         pat: &TypedMatchPattern,
         slot: u32,

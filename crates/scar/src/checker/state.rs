@@ -2,6 +2,7 @@ use super::*;
 
 pub(super) struct Checker {
     pub(super) test_script: bool,
+    pub(super) preserve_match_pattern_locations: bool,
     pub(super) active_lazy_capture: Option<ActiveLazyCapture>,
     pub(super) env: TypeEnv,
     pub(super) function_return_ty: Option<Ty>,
@@ -96,6 +97,7 @@ impl Checker {
     ) -> Self {
         Self {
             test_script: context.test_script,
+            preserve_match_pattern_locations: false,
             env: state.env,
             function_return_ty: None,
             error_definition_uid: None,

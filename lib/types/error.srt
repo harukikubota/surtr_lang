@@ -24,7 +24,8 @@ message, Payload, location and cause without reconstructing the error.
 
 The `deferror` header declares saved fields; constructor inputs are the leading
 block arguments. A nonempty Payload requires a direct terminal construction.
-Only successful `match`, `if_let`, and `if_let_then` bindings expose concrete fields.
+Only successful `match`, `if_let`, `if_let_then`, and `Test::assert_error_matches`
+bindings expose concrete fields.
 The constructor itself returns common `Error`; transport does not grant field access.
 Concrete Payload paths are readonly and remain local to the successful scope.
 

@@ -162,6 +162,29 @@ impl MonadExtractor for MyEither<Error, $R> {
 }
 ```
 
+### Error を取り出す
+
+`MonadExtractor::extract_error(value)` は extract を一度呼び、失敗側の Error を
+`Ok(error)` として取り出します。成功側なら `Err(ErrorExtractionFailed())` を返します。
+
+```surtr
+checked = MonadExtractor::extract_error(Option<Int>::None)
+# checked は NoneError を保持する Ok(error)
+```
+
+取り出すのは一段だけです。`Ok(Err(error))` は外側が成功なので取り出しに失敗します。
+内側の失敗を調べるときは、対象の層を明示的に畳み込みます。
+
+```surtr
+nested: Result<Result<Int>> = Ok(Err(NoneError()))
+flattened: Result<Int> = Result::flatten(nested)
+checked: Result<Error> = MonadExtractor::extract_error(flattened)
+# checked は内側の NoneError を保持する Ok(error)
+```
+
+Test モジュールの `expect_error` も同じ一段の取り出しを行い、失敗時には元入力を表示します。
+テストで Payload を検証する例は[テスト](./test.md)を参照してください。
+
 ### 失敗を受け取る MonadFail
 
 MonadFail は Error を受け取って失敗値を作り、元 Error を保持する能力です。

@@ -465,6 +465,9 @@ pub enum TypedInner {
     Cause(Box<TypedNode>, Box<TypedNode>),
     ErrorKind(String),
     Match(Box<TypedNode>, Vec<TypedMatchArm>),
+    /// Error Pattern assertion with exactly one success arm and expression-local failure.
+    /// The optional source type retains an external value requirement through specialization.
+    AssertErrorMatches(Box<TypedNode>, Vec<TypedMatchArm>, Option<Ty>),
     /// Expression-local Pattern execution with projection results in slot order.
     ApplyPattern {
         value: Box<TypedNode>,
@@ -755,6 +758,8 @@ pub struct DoSafeBindOrigins {
 /// Match pattern (typed).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TypedMatchPattern {
+    /// Source position and checked input type for consumers that preserve Pattern failures.
+    Located(Span, Ty, Box<TypedMatchPattern>),
     Binding(ResolvedId),
     Pin {
         id: ResolvedId,

@@ -288,7 +288,7 @@ impl Checker {
                     self.concretize_pending_trait_calls_in_place(branch)?;
                 }
             }
-            TypedInner::Match(scrutinee, arms) => {
+            TypedInner::Match(scrutinee, arms) | TypedInner::AssertErrorMatches(scrutinee, arms, _) => {
                 self.concretize_pending_trait_calls_in_place(scrutinee)?;
                 for arm in arms {
                     if let Some(guard) = &mut arm.guard {

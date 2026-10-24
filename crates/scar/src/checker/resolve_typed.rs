@@ -395,6 +395,20 @@ impl Checker {
                 self.resolve_typed_node(*value),
                 self.resolve_typed_node(*err),
             ),
+            TypedInner::AssertErrorMatches(value, arms, external_ty) => {
+                TypedInner::AssertErrorMatches(
+                    self.resolve_typed_node(*value),
+                    arms.into_iter()
+                        .map(|arm| TypedMatchArm {
+                            direct_expression: arm.direct_expression,
+                            pattern: self.resolve_typed_match_pattern(arm.pattern),
+                            guard: arm.guard.map(|node| *self.resolve_typed_node(node)),
+                            body: *self.resolve_typed_node(arm.body),
+                        })
+                        .collect(),
+                    external_ty.map(|ty| self.resolve_ty(&ty)),
+                )
+            }
             TypedInner::Match(scrutinee, arms) => TypedInner::Match(
                 self.resolve_typed_node(*scrutinee),
                 arms.into_iter()
@@ -745,6 +759,11 @@ impl Checker {
         pattern: TypedMatchPattern,
     ) -> TypedMatchPattern {
         match pattern {
+            TypedMatchPattern::Located(span, ty, inner) => TypedMatchPattern::Located(
+                span,
+                self.resolve_ty(&ty),
+                Box::new(self.resolve_typed_match_pattern(*inner)),
+            ),
             TypedMatchPattern::HashMap(entries) => TypedMatchPattern::HashMap(
                 entries
                     .into_iter()

@@ -339,6 +339,74 @@ defmod Test {
   }
 
   @doc """
+  Extract one layer with MonadExtractor and return its original Error inside Ok.
+  Calls extract once. A successful input fails with TestExpectedError, showing
+  inspect(value) for the original input. Inspection happens only on that failure
+  branch; no Eq or Show capability is required.
+
+  Nested payloads are not searched: Ok(Err(error)) is a successful outer layer.
+  Flatten the intended Result layers explicitly before checking their failure.
+  This API is available only in test scripts.
+
+  ```surtr
+  import Test;
+  test("expect_error") {
+    it("selects an inner failure explicitly") {
+      nested: Result<Result<Int>> = Ok(Err(NoneError()))
+      flattened: Result<Int> = Result::flatten(nested)
+      checked: Result<Error> = Test::expect_error(flattened)
+      error =? checked
+      assert_true(Error::is_kind(error, NoneError))
+    }
+  }
+  ```
+  """
+  def expect_error(value: $M<$A>) -> Result<Error>
+  where
+    $M: MonadExtractor
+  {
+    match MonadExtractor::extract(value) {
+      Err(error) => Ok(error),
+      Ok(_) => Err(TestExpectedError(inspect(value))),
+    }
+  }
+
+  @doc """
+  Match an Error against one Pattern and run check only after the whole Pattern succeeds.
+  The Error is evaluated once, and the check is called once on success. Check must
+  return Result<Unit>; both a single expression and a zero-argument closure work.
+  The result is returned unchanged. Result inputs are not unwrapped automatically.
+
+  Saved Payload bindings and concrete aliases are local to the successful check.
+  When the Pattern binds names, write the expression or closure directly in this
+  call. An external thunk is accepted only when the Pattern binds no names.
+  OR Patterns and projection slots are rejected. An explicitly parenthesized eager
+  check is evaluated before matching and cannot refer to the Pattern's bindings.
+
+  A concrete Error kind mismatch returns TestErrorPatternKindMismatch with an
+  empty Payload. Child Pattern and Extractor failures keep their original Error
+  and failure location, and skip the remaining Patterns and check.
+  Blocks inside or after the argument list are zero-argument closures: their
+  internal ? and SafeBind failures return from that closure. Propagate this
+  call's Result to fail the current case.
+
+  ```surtr
+  import Test;
+  test("assert_error_matches") {
+    it("checks saved fields") {
+      error =? expect_error(List::at([1], 3))
+      assert_error_matches(error, ListIndexOutOfBounds(index, length) @ e) {
+        assert_eq(3, index)?
+        assert_eq(1, length)?
+        assert_eq(index, e.index)
+      }
+    }
+  }
+  ```
+  """
+  @builtin def assert_error_matches(error: Error, pattern: $Pattern, check: Lazy<Result<()>>) -> Result<()>
+
+  @doc """
   Check Err against a concrete deferror declaration's canonical identity.
   Payloads, messages, causes, and locations do not participate in the comparison.
   The marker is an ordinary ErrorKind value. Strings and Error instances are rejected.
@@ -708,6 +776,11 @@ deferror TestExpectedErr(actual: String) {
   Self(message: "expected Err, got Ok(#{actual})", actual)
 }
 
+deferror TestExpectedError() {
+  |actual: String|
+  Self(message: "expected an error, got #{actual}")
+}
+
 deferror TestExpectedErrMessage(expected: String, actual: String) {
   |expected: String, actual: String|
   Self(
@@ -745,6 +818,11 @@ deferror TestApproxMismatch(expected: Float, actual: Float, tolerance: Float) {
 deferror TestErrorKindMismatch(expected: String, actual: String) {
   |expected: String, actual: String|
   Self(message: "expected Err kind #{expected}, got #{actual}", expected, actual)
+}
+
+deferror TestErrorPatternKindMismatch() {
+  |expected: String, actual: String|
+  Self(message: "expected error kind #{expected}, got #{actual}")
 }
 
 deferror TestExpectedErrorKind(expected: String, actual: String) {

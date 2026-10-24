@@ -434,6 +434,27 @@ impl Checker {
         expected: Option<&Ty>,
         call_span: &Span,
     ) -> Result<LazyInput, TypeError> {
+        self.check_lazy_input_with_closure_result(arg, expected, None, call_span)
+    }
+
+    /// A consumer with a fixed result contract can provide it to inline closures
+    /// before their bodies select the target of `?` and SafeBind.
+    pub(in crate::checker) fn check_required_lazy_input(
+        &mut self,
+        arg: &Resolved,
+        required: &Ty,
+        call_span: &Span,
+    ) -> Result<LazyInput, TypeError> {
+        self.check_lazy_input_with_closure_result(arg, Some(required), Some(required), call_span)
+    }
+
+    fn check_lazy_input_with_closure_result(
+        &mut self,
+        arg: &Resolved,
+        expected: Option<&Ty>,
+        closure_result: Option<&Ty>,
+        call_span: &Span,
+    ) -> Result<LazyInput, TypeError> {
         if let Resolved::Var(span, id) = arg {
             if id.name.starts_with("__pipe_slot_") {
                 return Err(TypeError {
@@ -446,7 +467,12 @@ impl Checker {
         }
         let placeholder = Self::is_lazy_placeholder(arg);
         if let Resolved::Grouped(span, inner) = arg {
-            let mut input = self.check_lazy_input(inner, expected, call_span)?;
+            let mut input = self.check_lazy_input_with_closure_result(
+                inner,
+                expected,
+                closure_result,
+                call_span,
+            )?;
             // Parentheses around a normalized capture parameter only group it.
             if placeholder {
                 input.placeholder = true;
@@ -460,7 +486,22 @@ impl Checker {
             };
             return Ok(input);
         }
-        let node = if self.branch_tail_is_return_type_argument_call(arg) && expected.is_some() {
+        let direct_closure = match arg {
+            Resolved::Closure(span, params, captures, body) if params.is_empty() => {
+                closure_result.map(|result| (span, params, captures, body, result))
+            }
+            _ => None,
+        };
+        let node = if let Some((span, params, captures, body, result)) = direct_closure {
+            self.check_closure(
+                span,
+                params,
+                captures,
+                body,
+                Some(&Ty::Func(vec![], Box::new(result.clone()))),
+                None,
+            )?
+        } else if self.branch_tail_is_return_type_argument_call(arg) && expected.is_some() {
             let checkpoint = self.candidate_probe_checkpoint();
             match self.check_node(arg) {
                 Ok(node) => node,
@@ -507,6 +548,7 @@ impl Checker {
                     | Resolved::EnumConstructorCall(..)
                     | Resolved::If(..)
                     | Resolved::IfLet(..)
+                    | Resolved::AssertErrorMatches(..)
                     | Resolved::Cause(..)
                     | Resolved::ApplyPattern(..)
                     | Resolved::IsMatch(..)

@@ -389,6 +389,23 @@ impl Checker {
                 Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
                 Box::new(self.substitute_typed_node_with_mapping(*err, mapping)),
             ),
+            TypedInner::AssertErrorMatches(value, arms, external_ty) => {
+                TypedInner::AssertErrorMatches(
+                    Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
+                    arms.into_iter()
+                        .map(|arm| TypedMatchArm {
+                            direct_expression: arm.direct_expression,
+                            pattern: self
+                                .substitute_typed_match_pattern_with_mapping(arm.pattern, mapping),
+                            guard: arm
+                                .guard
+                                .map(|node| self.substitute_typed_node_with_mapping(node, mapping)),
+                            body: self.substitute_typed_node_with_mapping(arm.body, mapping),
+                        })
+                        .collect(),
+                    external_ty.map(|ty| self.substitute_ty_with_mapping(&ty, mapping)),
+                )
+            }
             TypedInner::Match(scrutinee, arms) => TypedInner::Match(
                 Box::new(self.substitute_typed_node_with_mapping(*scrutinee, mapping)),
                 arms.into_iter()
@@ -863,6 +880,11 @@ impl Checker {
         mapping: &HashMap<u32, Ty>,
     ) -> TypedMatchPattern {
         match pattern {
+            TypedMatchPattern::Located(span, ty, inner) => TypedMatchPattern::Located(
+                span,
+                self.substitute_ty_with_mapping(&ty, mapping),
+                Box::new(self.substitute_typed_match_pattern_with_mapping(*inner, mapping)),
+            ),
             TypedMatchPattern::HashMap(entries) => TypedMatchPattern::HashMap(
                 entries
                     .into_iter()

@@ -30,6 +30,7 @@ mod expr;
 mod handler_captures;
 mod lazy_diagnostics;
 mod matching;
+mod assert_error_matches;
 use lazy_diagnostics::{ActiveLazyCapture, LazyCaptureDiagnostic};
 mod inference;
 mod patterns;

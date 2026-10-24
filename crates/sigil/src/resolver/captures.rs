@@ -228,6 +228,13 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
             collect_captures_inner(value, bound, free);
             collect_captures_inner(err, bound, free);
         }
+        Resolved::AssertErrorMatches(_, input, arm) => {
+            collect_captures_inner(input, bound, free);
+            let mut arm_bound = bound.clone();
+            collect_pattern_captures(&arm.pattern, &arm_bound, free);
+            collect_bind_pattern_bindings(&arm.pattern, &mut arm_bound);
+            collect_captures_inner(&arm.body, &mut arm_bound, free);
+        }
         Resolved::Match(_, scrutinee, arms)
         | Resolved::IsMatch(_, scrutinee, arms)
         | Resolved::IfLet(_, scrutinee, arms, _) => {

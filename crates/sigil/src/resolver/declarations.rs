@@ -1298,8 +1298,9 @@ pub(super) fn validate_reserved_callable_declaration(
         if sindr::pattern::PatternConsumer::from_canonical_name(qualified_name) != Some(kind) {
             return Err(ResolveError {
                 message: format!(
-                    "Pattern consumer name `{}` is reserved for the canonical Kernel consumer",
-                    kind.name()
+                    "Pattern consumer name `{}` is reserved for the canonical {} consumer",
+                    kind.name(),
+                    kind.owner()
                 ),
                 span: span.clone(),
                 diagnostic: crate::error::ResolveErrorDiagnostic {

@@ -102,26 +102,56 @@ value: Int =? Either<String, Int>::Right(1)
     );
 }
 
-#[test]
-fn matching_extraction_impl_retains_its_unsatisfied_constraint() {
-    let error = typecheck(resolve_with_builtin_prelude(
-        r#"
+const EQ_IDENTITY_EXTRACTOR: &str = r#"
 impl MonadExtractor for Identity<$T>
 where $T: MonadExtractor.$A + Eq
 {
   def extract(self: Identity<$A>) -> Result<$A> { Ok(Identity::run(self)) }
 }
-whole = *{|value: Identity<(Int -> Int)>| MatchResult::Ok(())}
-whole() =? Identity::new({|value: Int| value})
+"#;
+
+#[test]
+fn conditional_extraction_impl_inherits_its_bound_in_default_methods() {
+    for implementation in [
+        EQ_IDENTITY_EXTRACTOR.to_owned(),
+        format!(
+            "impl Eq for Identity<$T> where $T: Eq {{ def eq(self: Self, rhs: Self) -> Boolean {{ Eq::eq(self.value, rhs.value) }} }}\n{}",
+            EQ_IDENTITY_EXTRACTOR.replace(
+                "$T: MonadExtractor.$A + Eq",
+                "$T: MonadExtractor.$A\nSelf: Eq",
+            ),
+        ),
+    ] {
+        typecheck_with_builtin_prelude(&format!(
+            "{implementation}\nvalue: Int =? Identity::new(1)\nerror = MonadExtractor::extract_error(Identity::new(1))"
+        ));
+    }
+}
+
+#[test]
+fn matching_extraction_impl_retains_its_unsatisfied_constraint() {
+    let source = format!(
+        r#"{EQ_IDENTITY_EXTRACTOR}
+whole = *{{|value: Identity<(Int -> Int)>| MatchResult::Ok(())}}
+whole() =? Identity::new({{|value: Int| value}})
 "#,
-    ))
-    .expect_err("a matching implementation with a failed constraint cannot inspect the whole RHS");
-    assert_ne!(
+    );
+    let error = typecheck(resolve_with_builtin_prelude(&source))
+        .expect_err("a matching implementation with a failed constraint cannot inspect the whole RHS");
+    assert_eq!(
         error.reason(),
-        Some(diagnostics::TypeDiagnosticReason::SafeBindMissingMonadExtractor),
+        Some(diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability),
         "{error:?}"
     );
-    assert!(error.message.contains("Eq"), "{error:?}");
+    let input = "Identity::new({|value: Int| value})";
+    let start = source.find(input).expect("rejected input");
+    assert_eq!(error.span, spire::ast::Span { start, end: start + input.len() }, "{error:?}");
+    let diagnostic = error.structured.as_ref().expect("constructor capability diagnostic");
+    let diagnostics::DiagnosticData::TypeConstructorCarrier(data) = &diagnostic.data else {
+        panic!("expected constructor capability details: {error:?}");
+    };
+    assert_eq!(data.actual_carrier, "Identity<(Int -> Int)>");
+    assert_eq!(data.required_capability, "MonadExtractor");
 }
 
 fn check_standard_program(

@@ -541,6 +541,15 @@ impl ScarSession {
                 Self::rewrite_fun_indices_in_node(value, rewrites);
                 Self::rewrite_fun_indices_in_node(err, rewrites);
             }
+            TypedInner::AssertErrorMatches(value, arms, external_ty) => {
+                Self::rewrite_fun_indices_in_node(value, rewrites);
+                for arm in arms {
+                    Self::rewrite_fun_indices_in_match_arm(arm, rewrites);
+                }
+                if let Some(ty) = external_ty {
+                    Self::rewrite_fun_indices_in_ty(ty, rewrites);
+                }
+            }
             TypedInner::Match(scrutinee, arms) => {
                 Self::rewrite_fun_indices_in_node(scrutinee, rewrites);
                 for arm in arms {
@@ -735,6 +744,10 @@ impl ScarSession {
                     Self::rewrite_fun_indices_in_node(&mut entry.key, rewrites);
                     Self::rewrite_fun_indices_in_match_pattern(&mut entry.pattern, rewrites);
                 }
+            }
+            TypedMatchPattern::Located(_, ty, inner) => {
+                Self::rewrite_fun_indices_in_ty(ty, rewrites);
+                Self::rewrite_fun_indices_in_match_pattern(inner, rewrites);
             }
             TypedMatchPattern::As(inner, _) => {
                 Self::rewrite_fun_indices_in_match_pattern(inner, rewrites)

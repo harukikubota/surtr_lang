@@ -951,7 +951,7 @@ impl Checker {
                 self.collect_bound_tyvars_in_node(value, ordered, seen);
                 self.collect_bound_tyvars_in_node(err, ordered, seen);
             }
-            TypedInner::Match(scrutinee, arms) => {
+            TypedInner::Match(scrutinee, arms) | TypedInner::AssertErrorMatches(scrutinee, arms, _) => {
                 self.collect_bound_tyvars_in_node(scrutinee, ordered, seen);
                 for arm in arms {
                     if let Some(guard) = &arm.guard {

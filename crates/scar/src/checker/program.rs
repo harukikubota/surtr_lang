@@ -380,6 +380,11 @@ impl Checker {
                     self.validate_constructor_body_positions(branch, constructor_traits)?;
                 }
             }
+            Resolved::AssertErrorMatches(_, value, arm) => {
+                self.validate_constructor_body_positions(value, constructor_traits)?;
+                self.validate_constructor_pattern(&arm.pattern, constructor_traits)?;
+                self.validate_constructor_body_positions(&arm.body, constructor_traits)?;
+            }
             Resolved::Match(_, scrutinee, arms)
             | Resolved::IsMatch(_, scrutinee, arms)
             | Resolved::IfLet(_, scrutinee, arms, _) => {

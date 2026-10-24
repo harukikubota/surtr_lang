@@ -751,6 +751,7 @@ impl Checker {
         out: &mut HashSet<u32>,
     ) -> Result<(), TypeError> {
         match pattern {
+            TypedMatchPattern::Located(_, _, inner) => Self::typed_match_pattern_bindings(inner, out)?,
             TypedMatchPattern::HashMap(entries) => {
                 for entry in entries {
                     Self::typed_match_pattern_bindings(&entry.pattern, out)?;
@@ -762,6 +763,7 @@ impl Checker {
                 Self::insert_pattern_binding(out, id)?;
             }
             TypedMatchPattern::Tuple(items)
+            | TypedMatchPattern::Record(items)
             | TypedMatchPattern::ErrorPayload { fields: items, .. }
             | TypedMatchPattern::Constructor { fields: items, .. }
             | TypedMatchPattern::Extractor { items, .. } => {
@@ -821,7 +823,7 @@ impl Checker {
         }
         fn matching<'a>(pattern: &'a TypedMatchPattern, out: &mut Vec<(&'a Ty, &'a Span)>) {
             match pattern {
-                TypedMatchPattern::As(inner, _) => matching(inner, out),
+                TypedMatchPattern::Located(_, _, inner) | TypedMatchPattern::As(inner, _) => matching(inner, out),
                 TypedMatchPattern::HashMap(entries) => {
                     for entry in entries {
                         matching(&entry.pattern, out);
@@ -860,7 +862,7 @@ impl Checker {
             | TypedInner::SafeBind(pattern, ..)
             | TypedInner::ApplyPattern { pattern, .. } => binding(pattern, &mut out),
             TypedInner::DoSafeBind(control) => binding(&control.pattern, &mut out),
-            TypedInner::Match(_, arms) => {
+            TypedInner::Match(_, arms) | TypedInner::AssertErrorMatches(_, arms, _) => {
                 for arm in arms {
                     matching(&arm.pattern, &mut out);
                 }
@@ -919,7 +921,7 @@ impl Checker {
                         matching(item, out);
                     }
                 }
-                TypedMatchPattern::As(inner, _) => matching(inner, out),
+                TypedMatchPattern::Located(_, _, inner) | TypedMatchPattern::As(inner, _) => matching(inner, out),
                 TypedMatchPattern::ListCons(head, tail) => {
                     matching(head, out);
                     matching(tail, out);
@@ -942,7 +944,7 @@ impl Checker {
             | TypedInner::SafeBind(pattern, ..)
             | TypedInner::ApplyPattern { pattern, .. } => binding(pattern, &mut out),
             TypedInner::DoSafeBind(control) => binding(&control.pattern, &mut out),
-            TypedInner::Match(_, arms) => {
+            TypedInner::Match(_, arms) | TypedInner::AssertErrorMatches(_, arms, _) => {
                 for arm in arms {
                     matching(&arm.pattern, &mut out);
                 }
@@ -1001,7 +1003,7 @@ impl Checker {
                         matching(item, out);
                     }
                 }
-                TypedMatchPattern::As(inner, _) => matching(inner, out),
+                TypedMatchPattern::Located(_, _, inner) | TypedMatchPattern::As(inner, _) => matching(inner, out),
                 TypedMatchPattern::ListCons(head, tail) => {
                     matching(head, out);
                     matching(tail, out);
@@ -1024,7 +1026,7 @@ impl Checker {
             | TypedInner::SafeBind(pattern, ..)
             | TypedInner::ApplyPattern { pattern, .. } => binding(pattern, &mut out),
             TypedInner::DoSafeBind(control) => binding(&mut control.pattern, &mut out),
-            TypedInner::Match(_, arms) => {
+            TypedInner::Match(_, arms) | TypedInner::AssertErrorMatches(_, arms, _) => {
                 for arm in arms {
                     matching(&mut arm.pattern, &mut out);
                 }

@@ -512,6 +512,9 @@ impl Checker {
             Resolved::Cond(span, clauses) => self.check_cond(span, clauses, None),
             Resolved::If(span, cond, then, else_opt) => self.check_if(span, cond, then, else_opt),
             Resolved::Cause(span, value, err) => self.check_cause(span, value, err),
+            Resolved::AssertErrorMatches(span, value, success) => {
+                self.check_assert_error_matches(span, value, success)
+            }
             Resolved::IfLet(span, scrutinee, arms, then_only) => {
                 self.check_if_let(span, scrutinee, arms, None, *then_only)
             }
@@ -993,6 +996,9 @@ impl Checker {
             Resolved::Cond(span, clauses) => self.check_cond(span, clauses, Some(expected_ty)),
             Resolved::If(span, cond, then, else_opt) => {
                 self.check_if_with_expected(span, cond, then, else_opt, expected_ty)
+            }
+            Resolved::AssertErrorMatches(span, value, success) => {
+                self.check_assert_error_matches(span, value, success)
             }
             Resolved::IfLet(span, scrutinee, arms, then_only) => {
                 self.check_if_let(span, scrutinee, arms, Some(expected_ty), *then_only)

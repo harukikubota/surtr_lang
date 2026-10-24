@@ -437,10 +437,45 @@ impl Checker {
                 &method.value_parameters,
                 Some(method.ret_ty.as_ref().unwrap_or(&trait_method.ret_ty)),
             );
+            // A synthesized constructor default originates in the trait namespace:
+            // Self<$A> replaces the impl's mapped payload slot, such as $T.
+            // Instantiate the impl assumptions for that receiver before checking
+            // calls in the default body; the original head variable is a distinct type.
+            let mut impl_body_tyvars = method_tyvars.clone();
+            let mut impl_body_self = target_ty.clone();
+            if resolved_method.is_none() && !impl_info.constructor_slot_positions.is_empty() {
+                let receiver = trait_method
+                    .value_parameters
+                    .iter()
+                    .zip(&param_tys)
+                    .rev()
+                    .find_map(|(parameter, ty)| {
+                        matches!(parameter.ty.syntax(), AstTy::Generic(_, name, _) if name == "Self")
+                            .then_some(ty)
+                    });
+                let output_is_self = matches!(
+                    trait_method.ret_ty.syntax(),
+                    AstTy::Generic(_, name, _) if name == "Self"
+                );
+                let receiver = receiver.or(output_is_self.then_some(&expected_ret));
+                if let Some(receiver) = receiver {
+                    self.collect_signature_ty_bindings(
+                        target_ast_ty,
+                        receiver,
+                        &mut impl_body_tyvars,
+                    );
+                    impl_body_self = receiver.clone();
+                    impl_body_tyvars.insert("Self".into(), receiver.clone());
+                }
+            }
             let mut method_block_capabilities = if impl_info.generated_derive {
-                self.generated_derive_capability_uses(where_clause, &method_tyvars, &target_ty)?
+                self.generated_derive_capability_uses(
+                    where_clause,
+                    &impl_body_tyvars,
+                    &impl_body_self,
+                )?
             } else {
-                self.resolved_capability_uses(where_clause, &method_tyvars)?
+                self.resolved_capability_uses(where_clause, &impl_body_tyvars)?
             };
             self.consume_signature_constructor_capabilities(
                 &mut method_block_capabilities,

@@ -211,14 +211,15 @@ impl Checker {
                 specialization_fun_idxs,
                 generated_defs,
             ),
-            TypedInner::Match(..) => self.rewrite_match_specializations_in_node(
-                node,
-                defs_by_fun_idx,
-                bound_tyvars_by_fun_idx,
-                needs_specialization,
-                specialization_fun_idxs,
-                generated_defs,
-            ),
+            TypedInner::Match(..) | TypedInner::AssertErrorMatches(..) => self
+                .rewrite_match_specializations_in_node(
+                    node,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                ),
             TypedInner::Closure(..)
             | TypedInner::ExtractorClosure(..)
             | TypedInner::CaptureClosure(..)
@@ -535,8 +536,13 @@ impl Checker {
     ) -> Result<Box<TypedNode>, Box<TypeError>> {
         let span = node.span.clone();
         let ty = node.ty.clone();
+        let assertion_metadata = match &node.node {
+            TypedInner::AssertErrorMatches(_, _, external_ty) => Some(external_ty.clone()),
+            _ => None,
+        };
         let node = match node.node {
-            TypedInner::Match(scrutinee, arms) => TypedInner::Match(
+            TypedInner::Match(scrutinee, arms)
+            | TypedInner::AssertErrorMatches(scrutinee, arms, _) => TypedInner::Match(
                 self.rewrite_specializations_in_node(
                     *scrutinee,
                     defs_by_fun_idx,
@@ -589,6 +595,12 @@ impl Checker {
             _ => unreachable!("specialization dispatcher selected a non-match node"),
         };
 
+        let node = match (node, assertion_metadata) {
+            (TypedInner::Match(value, arms), Some(metadata)) => {
+                TypedInner::AssertErrorMatches(value, arms, metadata)
+            }
+            (node, _) => node,
+        };
         Ok(Box::new(TypedNode { ty, span, node }))
     }
 

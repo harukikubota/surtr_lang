@@ -63,6 +63,17 @@ impl Checker {
             if let Some(error) = self.find_typed_node(definition, &|checker, node| {
                 let mut collected = collected.borrow_mut();
                 let (direct, calls, pending_variables, pending) = &mut *collected;
+                if let TypedInner::AssertErrorMatches(_, _, Some(ty)) = &node.node {
+                    let ty = checker.resolve_ty(ty);
+                    if let Err(error) = checker.ensure_assert_error_direct_type(&ty, &node.span) {
+                        return Some(error);
+                    }
+                    if let Ty::Var(variable) = ty {
+                        if signature.contains(&variable) && !direct.contains(&variable) {
+                            direct.push(variable);
+                        }
+                    }
+                }
                 if let TypedInner::Match(_, arms) = &node.node {
                     for arm in arms {
                         match checker.deferred_direct_pattern_variable(arm) {
@@ -165,7 +176,7 @@ impl Checker {
                 Self::typed_pattern_has_pending_dispatch(&control.pattern)
                     || matches!(control.failure_target, SafeBindFailureTarget::Deferred(_))
             }
-            TypedInner::Match(_, arms) => arms
+            TypedInner::Match(_, arms) | TypedInner::AssertErrorMatches(_, arms, _) => arms
                 .iter()
                 .any(|arm| Self::typed_match_pattern_has_pending_dispatch(&arm.pattern)),
             _ => false,

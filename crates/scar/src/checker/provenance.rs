@@ -460,7 +460,7 @@ impl Checker {
                     (1, vec![(Provenance::RequiresProof, Ty::Error)]),
                 ])
             }
-            TypedInner::Match(scrutinee, arms) => {
+            TypedInner::Match(scrutinee, arms) | TypedInner::AssertErrorMatches(scrutinee, arms, _) => {
                 let source = self.cached_source_provenance(scrutinee, bindings, cache);
                 self.common_constructor_provenance(
                     &arms
@@ -574,7 +574,7 @@ impl Checker {
                 }
                 return;
             }
-            TypedInner::Match(value, arms) => {
+            TypedInner::Match(value, arms) | TypedInner::AssertErrorMatches(value, arms, _) => {
                 self.capture_call_provenance(value, bindings, calls, cache);
                 let source = self.cached_source_provenance(value, bindings, cache);
                 for arm in arms {
@@ -2687,6 +2687,7 @@ impl Checker {
         bindings: &mut Bindings,
     ) {
         match pattern {
+            TypedMatchPattern::Located(_, _, inner) => self.match_provenance_bindings(inner, source, bindings),
             TypedMatchPattern::HashMap(entries) => {
                 let payload = self.project_provenance(source, &Projection::Element, &Ty::Hole);
                 for entry in entries {

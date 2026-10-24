@@ -575,15 +575,36 @@ fn parse_and_resolve(src: &str) -> Result<Vec<Resolved>, ResolveError> {
 }
 
 fn kernel_pattern_test_module() -> StagedModuleAst {
-    staged_auto_import_module("Kernel", parse_module_ast(
-        "@builtin def if_let(value: $A, pattern: $Pattern, yes: Lazy<$B>, no: Lazy<$B>) -> $B\n@builtin def if_let_then(value: $A, pattern: $Pattern, yes: Lazy<Unit>) -> Unit\n@builtin def is_match(value: $A, pattern: $Pattern) -> Boolean\n@builtin def apply_pattern(value: $A, pattern: $Pattern) -> Result<$B>", "Kernel"))
+    staged_auto_import_module(
+        "Kernel",
+        parse_module_ast(
+            "@builtin def if_let(value: $A, pattern: $Pattern, yes: Lazy<$B>, no: Lazy<$B>) -> $B\n@builtin def if_let_then(value: $A, pattern: $Pattern, yes: Lazy<Unit>) -> Unit\n@builtin def is_match(value: $A, pattern: $Pattern) -> Boolean\n@builtin def apply_pattern(value: $A, pattern: $Pattern) -> Result<$B>",
+            "Kernel",
+        ),
+    )
+}
+
+fn test_pattern_test_module() -> StagedModuleAst {
+    staged_module(
+        "Test",
+        parse_module_ast(
+            "@builtin def assert_error_matches(error: Error, pattern: $Pattern, check: Lazy<Result<()>>) -> Result<()>",
+            "Test",
+        ),
+    )
 }
 
 fn parse_and_resolve_pattern_consumers(src: &str) -> Result<Vec<Resolved>, ResolveError> {
     let user_len = spire::parse_with_context(src, spire::ParserContext::project(0))
         .unwrap()
         .len();
-    let mut resolved = resolve_user_with_modules(src, &[vec![kernel_pattern_test_module()]])?;
+    let mut resolved = resolve_user_with_modules(
+        src,
+        &[vec![
+            kernel_pattern_test_module(),
+            test_pattern_test_module(),
+        ]],
+    )?;
     Ok(resolved.split_off(resolved.len() - user_len))
 }
 
@@ -5005,8 +5026,8 @@ g = &print"#,
 fn canonical_pattern_consumers_cannot_be_values_or_captures() {
     for consumer in sindr::pattern::PatternConsumer::ALL {
         for source in [
-            format!("f = Kernel::{}", consumer.name()),
-            format!("f = &Kernel::{}", consumer.name()),
+            format!("f = {}::{}", consumer.owner(), consumer.name()),
+            format!("f = &{}::{}", consumer.owner(), consumer.name()),
         ] {
             let error = parse_and_resolve_pattern_consumers(&source)
                 .expect_err("canonical Pattern consumers are syntax, not callable values");
@@ -10045,7 +10066,7 @@ fn named_infix_keeps_undefined_callable_diagnostic() {
 }
 
 #[test]
-fn pattern_consumer_builtin_declarations_require_kernel_identity() {
+fn pattern_consumer_builtin_declarations_require_canonical_identity() {
     for consumer in sindr::pattern::PatternConsumer::ALL {
         for owner in ["Regex", "Custom", "Nested::Kernel"] {
             let source = format!(
@@ -10055,9 +10076,10 @@ fn pattern_consumer_builtin_declarations_require_kernel_identity() {
             let stages = vec![vec![staged_module(owner, parse_module_ast(&source, owner))]];
             let error = precollect_declaration_index(&stages).expect_err(owner);
             assert!(
-                error
-                    .message
-                    .contains("reserved for the canonical Kernel consumer"),
+                error.message.contains(&format!(
+                    "reserved for the canonical {} consumer",
+                    consumer.owner()
+                )),
                 "{owner}: {error:?}"
             );
         }
@@ -10493,4 +10515,123 @@ fn ordinary_lazy_declaration_identity_rejects_bare_capture() {
             .contains("has Lazy arguments and cannot be captured without explicit arguments"),
         "{error:?}"
     );
+}
+
+#[test]
+fn assert_error_matches_requires_import_and_uses_test_identity() {
+    let source = "err = 1\nassert_error_matches(err, _, 1)";
+    let error =
+        parse_and_resolve_pattern_consumers(source).expect_err("short name requires import");
+    assert!(error.message.contains("Undefined"), "{error:?}");
+    for prefix in ["import Test;\n", ""] {
+        let callee = if prefix.is_empty() {
+            "Test::assert_error_matches"
+        } else {
+            "assert_error_matches"
+        };
+        let source = format!("{prefix}err = 1\n{callee}(err, bound, bound)");
+        let resolved = parse_and_resolve_pattern_consumers(&source).expect(&source);
+        let Resolved::AssertErrorMatches(_, _, arm) = resolved.last().unwrap() else {
+            panic!("{resolved:?}")
+        };
+        let ResolvedPattern::Var(binding) = arm.pattern.unlocated() else {
+            panic!("{:?}", arm.pattern)
+        };
+        assert!(matches!(&arm.body, Resolved::Var(_, id) if id.unique_id == binding.unique_id));
+    }
+}
+
+#[test]
+fn assert_error_matches_preserves_closure_and_eager_scope() {
+    for body in [", { bound }", ") { bound }"] {
+        let source = if body.starts_with(',') {
+            format!("Test::assert_error_matches(1, bound{body})")
+        } else {
+            format!("Test::assert_error_matches(1, bound{body}")
+        };
+        let resolved = parse_and_resolve_pattern_consumers(&source).expect(&source);
+        let Resolved::AssertErrorMatches(_, _, arm) = resolved.last().unwrap() else {
+            panic!("{resolved:?}")
+        };
+        assert!(
+            matches!(&arm.body, Resolved::Closure(_, params, _, _) if params.is_empty()),
+            "{source}: {:?}",
+            arm.body
+        );
+    }
+    let error =
+        parse_and_resolve_pattern_consumers("Test::assert_error_matches(1, bound, (bound))")
+            .expect_err("eager expression uses the preceding scope");
+    assert!(
+        error.message.contains("Undefined variable: bound"),
+        "{error:?}"
+    );
+    let resolved = parse_and_resolve_pattern_consumers(
+        "bound = 10\nTest::assert_error_matches(1, bound, (bound))",
+    )
+    .unwrap();
+    let Resolved::Bind(_, before, _) = &resolved[0] else {
+        panic!("{resolved:?}")
+    };
+    let ResolvedPattern::Var(before) = before.unlocated() else {
+        panic!("{before:?}")
+    };
+    let Resolved::AssertErrorMatches(_, _, arm) = resolved.last().unwrap() else {
+        panic!("{resolved:?}")
+    };
+    assert!(
+        matches!(&arm.body, Resolved::Grouped(_, inner) if matches!(inner.as_ref(), Resolved::Var(_, id) if id.unique_id == before.unique_id))
+    );
+}
+
+#[test]
+fn assert_error_matches_pipe_and_capture_keep_argument_roles() {
+    for source in [
+        "err = 1\nerr |> Test::assert_error_matches(bound, bound)",
+        "err = 1\nerr |> Test::assert_error_matches(_1, bound, bound)",
+        "f = &Test::assert_error_matches(&1, bound, bound + &2)",
+        "f = &Test::assert_error_matches(&1, _, &2)",
+    ] {
+        parse_and_resolve_pattern_consumers(source).expect(source);
+    }
+    for (source, message) in [
+        ("err = 1\nerr |> Test::assert_error_matches(err, _1, 1)", "pipe injection into a Pattern"),
+        ("err = 1\nerr |> Test::assert_error_matches(err, _, _1)", "pipe injection into a Lazy"),
+        ("f = &Test::assert_error_matches(&1, _, (&2 + 1))", "capture placeholder is not available"),
+        ("Test::assert_error_matches(1, _, _1)", "numbered placeholders"),
+    ] {
+        let error = parse_and_resolve_pattern_consumers(source).expect_err(source);
+        assert!(error.message.contains(message), "{source}: {error:?}");
+    }
+    let resolved = parse_and_resolve_pattern_consumers("f = &Test::assert_error_matches(&1, _, &2)").unwrap();
+    let Resolved::Bind(_, _, body) = resolved.last().unwrap() else { panic!("{resolved:?}") };
+    let Resolved::CaptureClosure(_, params, _, _) = body.as_ref() else { panic!("{body:?}") };
+    assert_eq!(params.len(), 2);
+    let lazy = params[1].lazy_capture.as_ref().expect("check placeholder retains its Lazy role");
+    assert_eq!(lazy.kind, LazyCaptureKind::AssertErrorMatches);
+    assert!(!lazy.ordinary);
+    assert_eq!(lazy.lazy_uses[0].0, 2);
+}
+
+#[test]
+fn assert_error_matches_pin_and_extractor_prearguments_keep_outer_scope() {
+    let mut stages = preargument_test_modules();
+    stages[0].push(test_pattern_test_module());
+    let source = "amount = 10\nTest::assert_error_matches((2, 3, 10), (amount, Bounds::offset(amount, adjusted), ^amount), amount + adjusted)";
+    let resolved = resolve_user_with_modules(source, &stages).unwrap();
+    let outer = resolved.iter().find_map(|node| match node {
+        Resolved::Bind(_, ResolvedPattern::Var(id), _) if id.name == "amount" => Some(id.unique_id),
+        _ => None,
+    }).unwrap();
+    let Resolved::AssertErrorMatches(_, _, arm) = resolved.last().unwrap() else { panic!("{resolved:?}") };
+    let ResolvedPattern::Tuple(items) = arm.pattern.unlocated() else { panic!("{:?}", arm.pattern) };
+    let [ResolvedPattern::Var(shadow), ResolvedPattern::Extractor(_, args, _), ResolvedPattern::Pin(pin)] = items.as_slice() else { panic!("{items:?}") };
+    assert_ne!(shadow.unique_id, outer);
+    assert_eq!(pin.unique_id, outer);
+    assert!(matches!(args.as_slice(), [Resolved::Var(_, id)] if id.unique_id == outer));
+    for pattern in ["(fresh, ^fresh)", "(fresh, Bounds::offset(fresh, _))"] {
+        let source = format!("Test::assert_error_matches((1, 2), {pattern}, 1)");
+        let error = resolve_user_with_modules(&source, &stages).expect_err(&source);
+        assert!(error.message.contains("fresh"), "{source}: {error:?}");
+    }
 }

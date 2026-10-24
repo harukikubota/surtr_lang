@@ -15,6 +15,9 @@ any layer retains its original Error and stops inner extraction and the
 continuation; only successful layers ending in Unit continue. Each call's
 returned Result is checked once before extracting its payload at the next layer.
 Ordinary SafeBind and explicit extract calls still decompose only one layer.
+`extract_error` uses the same one-layer extraction, returning the original Error
+inside Ok. A successful outer layer fails with ErrorExtractionFailed, even if
+its payload contains an Err. Flatten the layers you want to inspect explicitly.
 
 The standard implementations are Result (identity), Option (None becomes
 NoneError), and Either<Error, A> (Left retains its original Error). Existing
@@ -59,4 +62,37 @@ where
   True
   """
   def extract(self: Self<$A>) -> Result<$A>
+
+  @doc """
+  Extract one layer and return its original Error inside Ok.
+  Calls extract once. A successful input returns ErrorExtractionFailed with the
+  fixed message "error extraction failed" and no saved Payload. No Eq or Show
+  capability is required, and successful values are not inspected.
+
+  This does not search nested payloads. Ok(Err(error)) has a successful outer
+  layer; flatten the intended Result layers before extracting their failure.
+
+  ## REPL
+  xldr(1)> nested: Result<Result<Int>> = Ok(Err(NoneError()))
+  xldr(2)> Result::is_err(MonadExtractor::extract_error(nested))
+  True
+  xldr(3)> flattened: Result<Int> = Result::flatten(nested)
+  xldr(4)> checked: Result<Error> = MonadExtractor::extract_error(flattened)
+  xldr(5)> match checked { Ok(error) => Error::is_kind(error, NoneError), Err(_) => False }
+  True
+  """
+  def extract_error(self: Self<$A>) -> Result<Error> {
+    match MonadExtractor::extract(self) {
+      Err(error) => Ok(error),
+      Ok(_) => Err(ErrorExtractionFailed()),
+    }
+  }
+}
+
+@doc """
+The selected MonadExtractor layer succeeded instead of yielding an Error.
+The message is fixed and the saved Payload is empty.
+"""
+deferror ErrorExtractionFailed() {
+  Self(message: "error extraction failed")
 }

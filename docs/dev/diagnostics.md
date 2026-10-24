@@ -78,7 +78,7 @@ include 文全体とし、拒否された宣言、または衝突する双方の
 - JSON の `data` は source location の rebase 後に typed projection から生成する。必須 key は省略せず、該当しない値は `null` にする。`related` は primary fact も含み、型は `type`、source role は `left_value` / `right_value` などの snake_case とする。
 - constructor `family_id` は同じ族の canonical Trait ID をソートして構成する。familyはcapability継承を表し、別direct parameterのcarrier同一性を暗黙に作らない。完全な source value の型には captured 引数と `Result` の error 型も含める。登録順や内部 inference ID を表示しない。
 - structured input がある場合、optional field の欠落を理由に message / label / source の解析へ戻らない。SafeBind、pattern / Extractor / exhaustiveness、policy、runtime、parser、resolver、REPL command/query の各 family は producer-owned reason/data から表示する。
-- OR Pattern は `match` arm、`if_let`、`if_let_then` と binding-free な `is_match` で root / nested ともに許可する。Sigil は alternative 間の束縛名・順序不一致を Pattern resolve error、Scar は同名束縛の解決済み型不一致を `PatternTypeMismatch` で拒否する。`is_match` の全 alternative で binding を禁止する既存診断は維持する。Spire は `=` / `=?`、do `<-` / `=?`、`apply_pattern` の root / nested OR を `PatternSyntax` で拒否し、禁止された `|` token を primary span にする。consumer input / RHS にある通常 `match` の OR はこの禁止対象ではない。
+- OR Pattern は `match` arm、`if_let`、`if_let_then` と binding-free な `is_match` で root / nested ともに許可する。Sigil は alternative 間の束縛名・順序不一致を Pattern resolve error、Scar は同名束縛の解決済み型不一致を `PatternTypeMismatch` で拒否する。`is_match` の全 alternative で binding を禁止する既存診断は維持する。Spire は `=` / `=?`、do `<-` / `=?`、`apply_pattern`、`Test::assert_error_matches` の root / nested OR を `PatternSyntax` で拒否し、禁止された `|` token を primary span にする。consumer input / RHS にある通常 `match` の OR はこの禁止対象ではない。
 
 - `apply_pattern` の projection は選択済み Pattern 引数だけで検査する。index の範囲・重複・欠番・許可位置と注釈型の不一致は静的エラーとし、runtime `Err` に変換しない。通常 Pattern 不一致には既存の literal / list / constructor 診断を使い、Extractor の `Err` は kind・message・cause・source を保持する。consumer 自体は外側 callable / do へ早期 return しない。
 
@@ -106,7 +106,7 @@ Lazy の正規化は最大一段の wrap に限定する。正規化後の型不
 外側の注釈によって既知 branch の評価方法を変更しない。
 
 Lazyキャプチャの型不一致では、通常のreasonを維持し、解決済み標準関数の由来が確定している場合に関数別の説明・修正案を追加する。
-対象は`and`、`or`、`if`、`if_then`、`if_let`、`if_let_then`、`require`、`ensure`、`Result::map_err`、`Result::cause`。
+対象は`and`、`or`、`if`、`if_then`、`if_let`、`if_let_then`、`Test::assert_error_matches`、`require`、`ensure`、`Result::map_err`、`Result::cause`。
 案内は生成されたsignatureとplaceholderの対応に従い、引数の並べ替えも反映する。関数名や関数型の形、エラー文面から由来を推測しない。
 同じplaceholderに通常値とLazyの要求が競合する場合は番号を分ける案内とし、両branchが未知の場合は具体的な期待関数型を与える案内とする。
 Pattern bindingを伴う成功branchにはDirectExpressionの契約を適用し、通常値をthunkで包む修正案を出さない。

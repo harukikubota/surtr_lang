@@ -66,6 +66,20 @@ pub(in crate::checker) fn special_form_shape_apply_pattern(
             .is_some_and(|ty| Checker::is_result_of_named(ty, "$Return"))
 }
 
+fn special_form_shape_assert_error_matches(
+    params: &[ResolvedValueParameter],
+    ret_ty: &Option<AstTy>,
+) -> bool {
+    params.len() == 3
+        && Checker::is_named_type(&params[0].ty, "Error")
+        && Checker::is_named_type(&params[1].ty, "$Pattern")
+        && matches!(params[2].ty.syntax(), AstTy::Generic(_, name, args)
+            if name == "Lazy" && args.len() == 1 && Checker::is_result_of_named(&args[0], "Unit"))
+        && ret_ty
+            .as_ref()
+            .is_some_and(|ty| Checker::is_result_of_named(ty, "Unit"))
+}
+
 fn special_form_shape_require(params: &[ResolvedValueParameter], ret_ty: &Option<AstTy>) -> bool {
     params.len() == 2
         && Checker::is_named_type(&params[0].ty, "Boolean")
@@ -612,6 +626,7 @@ impl Checker {
                 | "if_let_then"
                 | "is_match"
                 | "apply_pattern"
+                | "assert_error_matches"
                 | "cause"
                 | "and"
                 | "or"
@@ -688,6 +703,11 @@ impl Checker {
                 expected_qname: "Kernel::apply_pattern",
                 expected_signature: "@builtin def apply_pattern(value: $Value, pattern: $Pattern) -> Result<$Return>",
                 shape_ok: special_form_shape_apply_pattern,
+            },
+            "assert_error_matches" => SpecialFormContract {
+                expected_qname: "Test::assert_error_matches",
+                expected_signature: "@builtin def assert_error_matches(error: Error, pattern: $Pattern, check: Lazy<Result<()>>) -> Result<()>",
+                shape_ok: special_form_shape_assert_error_matches,
             },
             "is_match" => SpecialFormContract {
                 expected_qname: "Kernel::is_match",

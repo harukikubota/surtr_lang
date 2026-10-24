@@ -364,6 +364,11 @@ impl Checker {
                     self.specialize_pattern_pin_dispatch(&ty, dispatch, span, context)?;
                 TypedMatchPattern::Pin { id, ty, dispatch }
             }
+            TypedMatchPattern::Located(source, ty, inner) => TypedMatchPattern::Located(
+                source.clone(),
+                ty,
+                Box::new(self.concretize_specialized_match_pattern(*inner, &source, context)?),
+            ),
             TypedMatchPattern::As(inner, id) => TypedMatchPattern::As(
                 Box::new(self.concretize_specialized_match_pattern(*inner, span, context)?),
                 id,

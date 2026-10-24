@@ -80,7 +80,7 @@ PairError(a: a, b) # a: a, b: b
 
 Error 名だけの Pattern は、Payload の有無にかかわらず kind だけを照合する。`NegativeValue(number)` は kind 一致後に保存 Payload を分解する。外部入力署名を分解しない。名前指定も同じ保存スキーマに対応させる。
 
-`match`、`if_let`、`if_let_then` で単一の Error identity への照合に成功した `@ e` は、元 Error を保持する局所具象束縛になる。`Err(e)`、`_ @ e`、異なる具象 identity を束ねた OR 全体の alias は共通 Error である。同名・同型の Payload を持つ別 identity も統合しない。OR の束縛名・canonical 型・個数の Set 比較、重複拒否、評価順は [Pattern spec](Pattern_spec.md) に従う。
+`match`、`if_let`、`if_let_then`、`Test::assert_error_matches` で単一の Error identity への照合に成功した `@ e` は、元 Error を保持する局所具象束縛になる。`Err(e)`、`_ @ e`、異なる具象 identity を束ねた OR 全体の alias は共通 Error である。同名・同型の Payload を持つ別 identity も統合しない。OR の束縛名・canonical 型・個数の Set 比較、重複拒否、評価順は [Pattern spec](Pattern_spec.md) に従う。
 
 ```surtr
 def read_number(error: Error) -> Int {
@@ -101,6 +101,10 @@ def read_number(error: Error) -> Int {
 成功スコープで作った通常の closure はレキシカルな束縛と具象情報を捕捉する。同名再束縛は新しい束縛であり、旧束縛を捕捉した closure に影響しない。closure が Error 自体を返せば戻り値は共通 Error、保存フィールドを返せば通常のフィールド型になる。
 
 `is_match` は kind と Payload 子 Pattern の一致・不一致を Boolean で返し、通常 bind と as alias を許可しない。局所具象束縛を作らない。Error 定義 Pattern は通常 Bind、SafeBind、do partial `<-`、`apply_pattern` で拒否する。Error 全体の通常値運搬とユーザー定義 Extractor は既存規則に従う。kind の文字列比較による型絞り込みや一般のキャストは追加しない。
+
+`Test::assert_error_matches` は照合成功 scope の局所具象情報と保存 Payload を同じ規則で扱う。Error identity の不一致は空 Payload の `TestErrorPatternKindMismatch` とし、子 Pattern・Extractor の失敗は元 Error と失敗位置を保持する。成功側の Lazy callable は Result<Unit> を返す。詳細は [Pattern spec](Pattern_spec.md#testassert_error_matches) に従う。
+
+`MonadExtractor::extract_error` と `Test::expect_error` は extract を一度だけ呼び、Err 内の Error を全情報を保持した Ok に移す。一段だけを対象とし、成功値の内側は調べない。成功入力にはそれぞれ空 Payload の `ErrorExtractionFailed`（固定 message `error extraction failed`）、`TestExpectedError`（`expected an error, got <元入力の inspect>`）を返す。共通側は inspect せず、Test 側は失敗分岐だけで元入力を一度 inspect する。
 
 ## 5. 共通観測と readonly Facet
 

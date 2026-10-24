@@ -243,6 +243,7 @@ pub enum Resolved {
     /// Canonical is_match call; preserves the source call boundary for Lazy normalization.
     IsMatch(Span, Box<Resolved>, Vec<ResolvedMatchArm>),
     IfLet(Span, Box<Resolved>, Vec<ResolvedMatchArm>, bool),
+    AssertErrorMatches(Span, Box<Resolved>, Box<ResolvedMatchArm>),
 
     /// Field access: `expr.field`
     FieldAccess(Span, Box<Resolved>, Symbol),
@@ -639,6 +640,7 @@ pub enum LazyCaptureKind {
     IfThen,
     IfLet,
     IfLetThen,
+    AssertErrorMatches,
     Require,
     Ensure,
     MapErr,

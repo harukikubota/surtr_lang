@@ -9385,7 +9385,7 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
             TypedInner::Cause(value, err) => {
                 has_pending_trait_call(value) || has_pending_trait_call(err)
             }
-            TypedInner::Match(scrutinee, arms) => {
+            TypedInner::Match(scrutinee, arms) | TypedInner::AssertErrorMatches(scrutinee, arms, _) => {
                 has_pending_trait_call(scrutinee)
                     || arms.iter().any(|arm| {
                         arm.guard.as_ref().is_some_and(has_pending_trait_call)
@@ -9500,7 +9500,7 @@ fn range_duration_comparisons_specialize_without_pending_trait_calls() {
             TypedInner::Cause(value, err) => {
                 has_pending_trait_call(value) || has_pending_trait_call(err)
             }
-            TypedInner::Match(scrutinee, arms) => {
+            TypedInner::Match(scrutinee, arms) | TypedInner::AssertErrorMatches(scrutinee, arms, _) => {
                 has_pending_trait_call(scrutinee)
                     || arms.iter().any(|arm| {
                         arm.guard.as_ref().is_some_and(has_pending_trait_call)

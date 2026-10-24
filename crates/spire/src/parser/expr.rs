@@ -84,8 +84,9 @@ impl Parser<'_> {
                 return Err(ParseError::syntax(
                     crate::error::ParseErrorReason::ExpressionSyntax,
                     format!(
-                        "Pattern consumer name `{}` is reserved for the canonical Kernel consumer",
-                        kind.name()
+                        "Pattern consumer name `{}` is reserved for the canonical {} consumer",
+                        kind.name(),
+                        kind.owner()
                     ),
                     span,
                 ));
@@ -1753,7 +1754,10 @@ impl Parser<'_> {
         }
         let pattern = self.parse_pattern()?;
         if !kind.allows_or() {
-            self.reject_binding_or(&pattern)?;
+            self.reject_or_pattern(
+                &pattern,
+                &format!("OR patterns are not allowed in {}", kind.name()),
+            )?;
         }
         Ok(pattern)
     }
@@ -1876,7 +1880,7 @@ impl Parser<'_> {
         };
         let inject_first = pipe_outer_call && slots.is_empty();
         let mut args = Vec::new();
-        let end = if matches!(self.peek(), Token::Unit) {
+        let mut end = if matches!(self.peek(), Token::Unit) {
             self.advance().span.end
         } else {
             self.expect(&Token::LParen)?;
@@ -1900,6 +1904,14 @@ impl Parser<'_> {
             }
             self.expect(&Token::RParen)?.end
         };
+        if kind == sindr::pattern::PatternConsumer::AssertErrorMatches {
+            let (trailing, call_end) = self.attach_trailing_block_arg(&callee, Vec::new(), end)?;
+            end = call_end;
+            args.extend(trailing.into_iter().map(|arg| match arg {
+                RecordLitArg::Positional(expr) => Self::consumer_expression_argument(expr),
+                RecordLitArg::Named(..) => unreachable!("trailing block is positional"),
+            }));
+        }
         Ok(Ast::PatternConsumerCall(
             Span { start, end },
             Box::new(callee),

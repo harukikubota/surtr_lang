@@ -1720,6 +1720,158 @@ fn test_command_extended_assertions_return_expected_results() {
 }
 
 #[test]
+fn test_command_concrete_error_assertions_keep_payload_and_lazy_boundaries() {
+    check_assertion_cases(
+        "surtr_test_concrete_errors",
+        r#"deferror SavedError(value: Int, nested: Error) {
+  |value: Int, nested: Error| Self(message: "saved", value, nested)
+}
+deferror CollectionError(items: List<Int>, choice: Option<Int>, duration: Duration) {
+  |items: List<Int>, choice: Option<Int>, duration: Duration| Self(message: "collection", items, choice, duration)
+}"#,
+        &[
+            ("extract once", "input: (-> Result<Int>) = {|| print(\"input\"); Err(NoneError())}\nerr =? expect_error(input())\nassert_stdout_eq([\"input\"])?\nassert_error_matches(err, NoneError, Ok(()))", None),
+            ("named payload", "assert_error_matches(SavedError(3, NoneError()), SavedError(value: number, nested: NoneError) @ e, assert_eq(number, e.value))", None),
+            ("parenthesized block", "saved = assert_error_matches(SavedError(3, NoneError()), SavedError(number, _) @ e, { assert_eq(3, number)?; assert_eq(number, e.value) })\nassert_ok(saved)", None),
+            ("trailing block", "saved = assert_error_matches(SavedError(3, NoneError()), SavedError(number, _) @ e) { assert_eq(3, number)?; reader = {|| e.value}; assert_eq(number, reader()) }\nassert_ok(saved)", None),
+            ("direct closure is called", "assert_error_matches(NoneError(), NoneError, {|| print(\"checked\"); Ok(()) })?\nassert_stdout_eq([\"checked\"])", None),
+            ("binding closure is called", "assert_error_matches(SavedError(3, NoneError()), SavedError(number, _), {|| print(to_string(number)); Ok(()) })?\nassert_stdout_eq([\"3\"])", None),
+            ("unbound external thunk", "check = {|| print(\"thunk\"); Ok(())}\nassert_error_matches(NoneError(), NoneError, check)?\nassert_stdout_eq([\"thunk\"])", None),
+            ("outer pin scope", "number = 3\nassert_error_matches(SavedError(3, NoneError()), SavedError(^number, _) @ e, assert_eq(number, e.value))", None),
+            ("eager check before mismatch", "check = {|| print(\"eager\"); Ok(())}\nsaved = assert_error_matches(NoneError(), SavedError, (check()))\nassert_err_kind(TestErrorPatternKindMismatch, saved)?\nassert_stdout_eq([\"eager\"])", None),
+            ("pipe target", "NoneError() |> assert_error_matches(NoneError, Ok(()))", None),
+            ("captured binding check", "check: (Error, Int -> Result<()>) = &Test::assert_error_matches(&1, SavedError(number, _), assert_eq(&2, number))\ncheck(SavedError(3, NoneError()), 3)", None),
+            ("captured lazy placeholder", "check: (Error, (-> Result<()>) -> Result<()>) = &Test::assert_error_matches(&1, NoneError, &2)\ncheck(NoneError(), {|| print(\"placeholder\"); Ok(())})?\nassert_stdout_eq([\"placeholder\"])", None),
+            ("list length mismatch", "saved = assert_error_matches(CollectionError([1, 2], Option::Some(3), 2ms), CollectionError([1], _, _), Ok(()))\nassert_err_kind(ListPatternTooLong, saved)", None),
+            ("list child mismatch", "saved = assert_error_matches(CollectionError([1, 2], Option::Some(3), 2ms), CollectionError([1, 9], _, _), Ok(()))\nassert_err_kind(IntLiteralPatternMismatch, saved)", None),
+            ("enum child mismatch", "saved = assert_error_matches(CollectionError([], Option::Some(3), 2ms), CollectionError(_, Option::None, _), Ok(()))\nassert_err_kind(EnumVariantPatternMismatch, saved)", None),
+            ("duration child mismatch", "saved = assert_error_matches(CollectionError([], Option::Some(3), 2ms), CollectionError(_, _, 3ms), Ok(()))\nassert_err_kind(DurationLiteralPatternMismatch, saved)", None),
+            ("kind mismatch skips check", "saved = assert_error_matches(NoneError(), SavedError, { print(\"unexpected\"); Ok(()) })\nassert_err_kind(TestErrorPatternKindMismatch, saved)?\nassert_err_message_eq(\"expected error kind SavedError, got NoneError\", saved)?\nassert_stdout_eq([])", None),
+            ("block failure is stored", "saved = assert_error_matches(NoneError(), NoneError, { fail(\"inner failure\")?; print(\"unexpected\"); Ok(()) })\nassert_err_message_eq(\"inner failure\", saved)?\nassert_stdout_eq([])", None),
+            ("trailing failure is stored", "saved = assert_error_matches(NoneError(), NoneError) { fail(\"inner failure\")?; print(\"unexpected\"); Ok(()) }\nassert_err_message_eq(\"inner failure\", saved)?\nassert_stdout_eq([])", None),
+            ("parenthesized SafeBind failure is stored", "saved = assert_error_matches(NoneError(), NoneError, { value =? Option<Int>::None; print(\"unexpected\"); Ok(()) })\nassert_err_kind(NoneError, saved)?\nassert_stdout_eq([])", None),
+            ("trailing SafeBind failure is stored", "saved = assert_error_matches(NoneError(), NoneError) { value =? Option<Int>::None; print(\"unexpected\"); Ok(()) }\nassert_err_kind(NoneError, saved)?\nassert_stdout_eq([])", None),
+            ("kind mismatch empty payload", "saved = assert_error_matches(NoneError(), SavedError, Ok(()))\nerr =? expect_error(saved)\nassert_error_matches(err, TestErrorPatternKindMismatch(), Ok(()))", None),
+            ("expect success rejected", "error =? expect_error(Option::Some(7))\nOk(())", Some("expected an error, got Option::Some(7)")),
+            ("one layer only", "nested: Result<Result<Int>> = Ok(Err(NoneError()))\nerror =? expect_error(nested)\nOk(())", Some("expected an error, got Ok(Err(NoneError")),
+            ("explicit flatten", "nested: Result<Result<Int>> = Ok(Err(NoneError()))\nerr =? expect_error(Result::flatten(nested))\nassert_error_matches(err, NoneError, Ok(()))", None),
+            ("propagated check failure", "assert_error_matches(NoneError(), NoneError) { fail(\"propagated failure\") }?\nprint(\"unexpected\")\nOk(())", Some("propagated failure")),
+            ("following case runs", "assert_stdout_eq([])", None),
+        ],
+    );
+}
+
+#[test]
+fn test_command_concrete_error_pattern_failures_keep_their_error_and_location() {
+    let temp = unique_temp_dir("surtr_test_error_pattern_failures");
+    let helpers = r#"deferror SavedError(value: Int, nested: Error) {
+  |value: Int, nested: Error| Self(message: "saved", value, nested)
+}
+deferror OriginalError(value: Int) { |value: Int| Self(message: "original", value) }
+defmod ErrorChecks {
+  defextractor bump(value: Int) -> MatchResult<Int> {
+    print("bump")
+    MatchResult::Ok(value + 1)
+  }
+  defextractor reject(original: Error, value: Int) -> MatchResult<Int> {
+    print("reject")
+    MatchResult::Err(original)
+  }
+  defextractor later(value: Error) -> MatchResult<Error> {
+    print("later")
+    MatchResult::Ok(value)
+  }
+}
+"#;
+    let traced =
+        fs::read_to_string(repo_root().join("lib/tests/monads/support/traced_extraction.srt"))
+            .unwrap();
+    write_source(
+        &temp.join("lib/tests/local/support/errors.srt"),
+        &format!("{traced}\n{helpers}"),
+    );
+    let source = r#"include "./support/errors.srt"
+import Test;
+it("evaluates target and successful extractor once") {
+  input = {|| print("target"); SavedError(3, NoneError())}
+  assert_error_matches(input(), SavedError(ErrorChecks::bump(number), _) @ e) {
+    assert_eq(4, number)?
+    assert_eq(3, e.value)
+  }?
+  assert_stdout_eq(["target", "bump"])
+}
+it("retains extractor Error") {
+  original_result: Result<Int> = Result::cause(Err(NoneError()), OriginalError(7))
+  original =? expect_error(original_result)
+  saved = assert_error_matches(SavedError(3, NoneError()), SavedError(ErrorChecks::reject(original, _), ErrorChecks::later(_))) {
+    print("check")
+    Ok(())
+  }
+  assert_cause_chain([OriginalError, NoneError], saved)?
+  retained =? expect_error(saved)
+  assert_error_matches(retained, OriginalError(value), assert_eq(7, value))?
+  retained_result: Result<()> = Err(original)
+  assert_eq(inspect(retained_result), inspect(saved))?
+  assert_stdout_eq(["reject"])
+}
+it("kind location") {
+  assert_error_matches(NoneError(), SavedError, Ok(()))
+}
+it("child location") {
+  assert_error_matches(SavedError(3, NoneError()), SavedError(9, ErrorChecks::later(_))) {
+    print("check")
+    Ok(())
+  }
+}
+it("nested kind location") {
+  assert_error_matches(SavedError(3, NoneError()), SavedError(_, OriginalError), Ok(()))
+}
+it("custom extraction once") {
+  input: (-> TracedExtraction<Int>) = {|| print("input"); TracedExtraction::Stop(OriginalError(8), "extract")}
+  err =? expect_error(input())
+  assert_error_matches(err, OriginalError(value), assert_eq(8, value))?
+  assert_stdout_eq(["input", "extract"])
+}
+it("custom success displays original input") {
+  saved = expect_error(TracedExtraction::Continue(7, "extract"))
+  assert_err_message_eq("expected an error, got TracedExtraction::Continue(7, \"extract\")", saved)?
+  assert_stdout_eq(["extract"])
+}
+it("empty Test error payload") {
+  err =? expect_error(expect_error(Ok(4)))
+  assert_error_matches(err, TestExpectedError(), Ok(()))
+}
+it("next case") { assert_stdout_eq([]) }
+"#;
+    write_math_test(&temp, source);
+    let output = run_surtr(
+        &temp,
+        &["test", "lib/tests/local/math.srt", "--format=json"],
+    );
+    let report = test_json(&output);
+    assert_eq!(output.status.code(), Some(1), "{report}");
+    assert_eq!(report["summary"]["script_errors"], 0, "{report}");
+    assert_eq!(report["summary"]["passed"], 6, "{report}");
+    assert_eq!(report["summary"]["failed"], 3, "{report}");
+    for (index, kind, fragment) in [
+        (2, "TestErrorPatternKindMismatch", "SavedError, Ok"),
+        (3, "IntLiteralPatternMismatch", "9, ErrorChecks"),
+        (4, "TestErrorPatternKindMismatch", "OriginalError), Ok"),
+    ] {
+        let case = &report["cases"][index];
+        assert!(
+            case["diagnostic"]["kind"].as_str().unwrap().ends_with(kind),
+            "{case}"
+        );
+        let start = source.find(fragment).unwrap();
+        assert_eq!(case["diagnostic"]["span_start"], start, "{case}");
+        assert_eq!(case["io"]["stdout"], serde_json::json!([]), "{case}");
+    }
+    assert_test_counts(&report);
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
 fn test_command_validation_assertions_and_composition() {
     check_assertion_cases(
         "surtr_test_validation_assertions",

@@ -203,6 +203,56 @@ String や Error は ErrorKind の代わりには渡せません。空の列は�
 `assert_err_kind(OuterError, result)` は原因の有無を問いませんが、
 `assert_cause_chain([OuterError], result)` は原因がないことも確かめます。
 
+### 取り出した Error の Payload を検証する
+
+`expect_error(value)` は MonadExtractor の extract を一度呼び、失敗側の Error を
+`Ok(error)` として取り出します。Result、Option、Either<Error, A>、独自の対応型に使えます。
+成功入力には `TestExpectedError` を返し、元の入力全体を失敗メッセージに表示します。
+
+`assert_error_matches(error, pattern, check)` は Error を照合し、成功したときだけ check を一度実行します。
+保存 Payload を直接束縛でき、単一の Error の種類に絞った alias では保存フィールドも読めます。
+
+```surtr
+import Test;
+
+test("list errors") {
+  it("checks payload") {
+    err =? expect_error(List::at([1], 3))
+    assert_error_matches(err, ListIndexOutOfBounds(index, length) @ e) {
+      assert_eq(3, index)?
+      assert_eq(1, length)?
+      assert_eq(index, e.index)
+    }
+  }
+}
+```
+
+check は単一式、括弧内の block、後置 block で書けます。
+その中の `?` は内部を短絡し、失敗を呼出し結果へ返します。結果を変数に保存して調べることもできます。
+ケースを失敗させる場合は、通常のアサーションと同じく結果をケースへ伝播します。
+Pattern が束縛を作る場合は、check をその場に直接書きます。外部の thunk 変数は渡せません。
+OR Pattern は使えず、子の代替条件は check の中に書きます。
+
+種類の不一致は `TestErrorPatternKindMismatch` となります。子 Pattern や Extractor の失敗は
+元の Error と位置を保持し、後続の子と check を実行しません。
+
+`expect_error` の取り出しは一段だけです。`Ok(Err(error))` は外側が成功なので失敗します。
+内側の失敗を検証するには、対象の層を明示的に畳み込みます。
+
+```surtr
+import Test;
+it("checks a nested failure") {
+  nested: Result<Result<Int>> = Ok(Err(NoneError()))
+  flattened: Result<Int> = Result::flatten(nested)
+  checked: Result<Error> = Test::expect_error(flattened)
+  err =? checked
+  assert_error_matches(err, NoneError, Ok(()))
+}
+```
+
+この `checked` は、内側の NoneError を保持する `Ok(error)` です。
+さらに深いネストや異なる対応型も、検証したい範囲を畳み込んでから渡します。
+
 ## 出力や入力を確かめる
 
 `assert_stdout_eq(expected)` と `assert_stderr_eq(expected)` には、期待する出力を文字列の List で渡します。

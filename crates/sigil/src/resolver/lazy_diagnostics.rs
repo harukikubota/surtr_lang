@@ -27,6 +27,9 @@ impl Resolver {
                 let kind = match self.resolve_pattern_consumer_identity(callee).ok() {
                     Some(PatternConsumer::IfLet) => LazyCaptureKind::IfLet,
                     Some(PatternConsumer::IfLetThen) => LazyCaptureKind::IfLetThen,
+                    Some(PatternConsumer::AssertErrorMatches) => {
+                        LazyCaptureKind::AssertErrorMatches
+                    }
                     _ => return Ok(None),
                 };
                 let Some(pattern) = arguments.get(1).and_then(|arg| arg.pattern.as_deref()) else {
@@ -39,7 +42,9 @@ impl Resolver {
                 };
                 let binding = Self::pattern_expression_roles_selected(&pattern)
                     .then(|| super::special_forms::pattern_has_binding_vars(&pattern));
-                let lazy = if binding == Some(false) {
+                let lazy = if kind == LazyCaptureKind::AssertErrorMatches {
+                    vec![2]
+                } else if binding == Some(false) {
                     vec![2, 3]
                 } else {
                     vec![3]

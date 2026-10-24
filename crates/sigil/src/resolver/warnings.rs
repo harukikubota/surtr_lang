@@ -216,6 +216,11 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
             collect_node_usage(value, usage);
             collect_node_usage(err, usage);
         }
+        Resolved::AssertErrorMatches(_, input, arm) => {
+            collect_node_usage(input, usage);
+            collect_pattern_usage(&arm.pattern, usage);
+            collect_node_usage(&arm.body, usage);
+        }
         Resolved::Match(_, scrutinee, arms)
         | Resolved::IsMatch(_, scrutinee, arms)
         | Resolved::IfLet(_, scrutinee, arms, _) => {

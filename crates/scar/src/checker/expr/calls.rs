@@ -1429,6 +1429,7 @@ impl Checker {
             | Resolved::If(span, _, _, _)
             | Resolved::Cause(span, _, _)
             | Resolved::IfLet(span, _, _, _)
+            | Resolved::AssertErrorMatches(span, _, _)
             | Resolved::Match(span, _, _)
             | Resolved::IsMatch(span, _, _)
             | Resolved::FieldAccess(span, _, _)

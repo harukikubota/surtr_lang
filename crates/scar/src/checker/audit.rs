@@ -213,7 +213,7 @@ impl Checker {
             TypedInner::If(condition, then_branch, else_branch) => recurse(condition)
                 .or_else(|| recurse(then_branch))
                 .or_else(|| else_branch.as_deref().and_then(recurse)),
-            TypedInner::Match(scrutinee, arms) => recurse(scrutinee).or_else(|| {
+            TypedInner::Match(scrutinee, arms) | TypedInner::AssertErrorMatches(scrutinee, arms, _) => recurse(scrutinee).or_else(|| {
                 arms.iter().find_map(|arm| {
                     arm.guard
                         .as_ref()
@@ -407,7 +407,7 @@ impl Checker {
             TypedInner::Cause(value, err) => self
                 .find_typed_node(value, inspect)
                 .or_else(|| self.find_typed_node(err, inspect)),
-            TypedInner::Match(scrutinee, arms) => {
+            TypedInner::Match(scrutinee, arms) | TypedInner::AssertErrorMatches(scrutinee, arms, _) => {
                 self.find_typed_node(scrutinee, inspect).or_else(|| {
                     arms.iter().find_map(|arm| {
                         arm.guard
@@ -567,7 +567,7 @@ impl Checker {
                         collect(branch, obligations);
                     }
                 }
-                TypedInner::Match(scrutinee, arms) => {
+                TypedInner::Match(scrutinee, arms) | TypedInner::AssertErrorMatches(scrutinee, arms, _) => {
                     collect(scrutinee, obligations);
                     for arm in arms {
                         if let Some(guard) = &arm.guard {
@@ -824,7 +824,7 @@ impl Checker {
             TypedInner::If(cond, then_branch, else_branch) => visit(cond)
                 .or_else(|| visit(then_branch))
                 .or_else(|| else_branch.as_deref().and_then(visit)),
-            TypedInner::Match(scrutinee, arms) => visit(scrutinee).or_else(|| {
+            TypedInner::Match(scrutinee, arms) | TypedInner::AssertErrorMatches(scrutinee, arms, _) => visit(scrutinee).or_else(|| {
                 arms.iter().find_map(|arm| {
                     arm.guard
                         .as_ref()
@@ -958,7 +958,7 @@ impl Checker {
                     TraitDispatch::Pending | TraitDispatch::Selected(_)
                 )
             }
-            TypedMatchPattern::As(inner, _) => {
+            TypedMatchPattern::Located(_, _, inner) | TypedMatchPattern::As(inner, _) => {
                 Self::typed_match_pattern_has_pending_dispatch(inner)
             }
             TypedMatchPattern::Or(items)
@@ -1108,7 +1108,7 @@ impl Checker {
                 Self::typed_node_has_pending_trait_call(value)
                     || Self::typed_node_has_pending_trait_call(err)
             }
-            TypedInner::Match(scrutinee, arms) => {
+            TypedInner::Match(scrutinee, arms) | TypedInner::AssertErrorMatches(scrutinee, arms, _) => {
                 Self::typed_node_has_pending_trait_call(scrutinee)
                     || arms.iter().any(|arm| {
                         Self::typed_match_pattern_has_pending_dispatch(&arm.pattern)
