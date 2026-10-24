@@ -5,6 +5,7 @@
   "scripts": {
     "generate": "cd tree-sitter-surtr && tree-sitter generate --abi 15",
     "test": "npm run generate && node --test tests/*.test.cjs",
+    "test:snippets": "cargo build --manifest-path ../Cargo.toml -p rune --bin surtr && node --test tests/snippets-runtime.cjs",
     "dev": "npm run generate && node scripts/prepare-dev.cjs"
   },
   "devDependencies": {

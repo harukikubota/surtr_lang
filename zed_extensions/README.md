@@ -38,7 +38,7 @@ Zed の拡張画面で開発用拡張を Rebuild してください。
 - ブロック・引数・リスト・文字列補間の自動インデント（既定はスペース2個）
 - 関数・module・trait・型・impl・定数・型エイリアスのアウトライン
 - Vimモードでの関数・宣言・コメント単位の移動と選択
-- `def`・`defmod`・`match`・`do`・`doc`のスニペット
+- 関数、struct・record・enum・error、trait・impl、定数、関数型alias、式のスニペット
 - `Test`モジュールの`test`・`describe`・`it`・`xit`・`pend`、
   `assert_eq`・`assert_true`・`assert_false`のスニペット
 
@@ -47,6 +47,10 @@ Zed の拡張画面で開発用拡張を Rebuild してください。
 ケース末尾のアサーションは`Result<()>`をそのまま返します。
 複数のアサーションを並べるときは、途中のアサーションだけに`?`を付けます。
 `xit`・`pend`には理由を記入してください。テストは`surtr test <file>`で実行します。
+
+スニペットの構文と採用項目は、現行の言語仕様・実装・標準定義から決めます。
+prefix一覧、使用条件、仕様の参照先は[スニペット仕様](./SNIPPETS.md)にまとめています。
+`npm run test:snippets`で全スニペットの既定値を展開し、現在のSurtrで実行できます。
 
 Vimモードでは`af`・`if`で名前付き関数の全体・本文、`ac`・`ic`で
 moduleやtraitなどの宣言全体・本文を選択できます。`[m`・`]m`は関数間を移動します。
@@ -62,7 +66,7 @@ LSPによる補完、診断、定義移動には対応しません。
 
 - `tree-sitter-surtr/`: 文法と文字列境界・アノテーション用の外部 scanner
 - `surtr/`: 拡張メタデータと言語設定、`highlights.scm`
-- `tests/`: Tree-sitter が実際に生成した構文木・capture の検証
+- `tests/`: Tree-sitterの構文木・captureと、Surtrでのスニペット展開コードの検証
 - `scripts/prepare-dev.cjs`: 開発用拡張の準備
 
 `npm run dev` は `dist/grammar-source` に破棄可能な Git リポジトリを作り、
