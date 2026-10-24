@@ -2455,16 +2455,15 @@ impl Parser<'_> {
                 .as_ref()
                 .map(|span| span.start)
                 .unwrap_or_else(|| self.peek_span().start);
-            if attrs.hidden
-                && !self
-                    .context
-                    .parse_rules
-                    .allowed_top_level_decl_kinds
-                    .allows(super::context::TopLevelDeclKind::BuiltinDecl)
+            if !self
+                .context
+                .parse_rules
+                .allowed_top_level_decl_kinds
+                .allows(super::context::TopLevelDeclKind::BuiltinDecl)
             {
                 return Err(ParseError::syntax(
-                    crate::error::ParseErrorReason::DeclarationSyntax,
-                    "@hidden is only allowed together with @builtin in standard/internal source",
+                    crate::error::ParseErrorReason::UserBuiltinDeclaration,
+                    "@builtin declarations are only allowed in standard/internal source",
                     start_span.unwrap_or_else(|| self.peek_span()),
                 ));
             }
@@ -4218,7 +4217,7 @@ impl Parser<'_> {
                 || self.context.module_path.as_deref() != Some("Facet")
             {
                 return Err(ParseError::syntax(
-                    crate::error::ParseErrorReason::DeclarationSyntax,
+                    crate::error::ParseErrorReason::UserStandardTypeDeclaration,
                     "@FacetPathKind Type declarations are only allowed in canonical standard library source",
                     start_span.unwrap_or_else(|| self.peek_span()),
                 ));
@@ -4252,25 +4251,12 @@ impl Parser<'_> {
                 .allows(super::context::TopLevelDeclKind::BuiltinDecl)
             {
                 return Err(ParseError::syntax(
-                    crate::error::ParseErrorReason::DeclarationSyntax,
+                    crate::error::ParseErrorReason::UserBuiltinDeclaration,
                     "@builtin declarations are only allowed in standard/internal source",
                     start_span.unwrap_or_else(|| self.peek_span()),
                 ));
             }
             attrs.builtin = true;
-            if attrs.hidden
-                && !self
-                    .context
-                    .parse_rules
-                    .allowed_top_level_decl_kinds
-                    .allows(super::context::TopLevelDeclKind::BuiltinDecl)
-            {
-                return Err(ParseError::syntax(
-                    crate::error::ParseErrorReason::DeclarationSyntax,
-                    "@hidden is only allowed together with @builtin in standard/internal source",
-                    start_span.unwrap_or_else(|| self.peek_span()),
-                ));
-            }
             match self.peek() {
                 Token::Def => self.parse_builtin_decl(start, attrs),
                 Token::Defextractor => self.parse_builtin_extractor_decl(start, attrs),

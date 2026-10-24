@@ -5,6 +5,7 @@ use spire::ast::Span;
 pub enum ResolveErrorReason {
     NameResolution,
     Namespace,
+    DeclarationCollision,
     Visibility,
     Import,
     Capture,

@@ -550,6 +550,7 @@ impl Checker {
             }
             R::NameResolution => D::NameResolution,
             R::Namespace => D::Namespace,
+            R::DeclarationCollision => D::DeclarationCollision,
             R::Visibility => D::Visibility,
             R::Import => D::Import,
             R::Capture => D::Capture,

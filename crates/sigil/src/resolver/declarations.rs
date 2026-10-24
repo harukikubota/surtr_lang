@@ -991,7 +991,7 @@ impl OwnerRegistry {
                 ),
                 span: entry.span.clone(),
                 diagnostic: crate::error::ResolveErrorDiagnostic {
-                    reason: crate::error::ResolveErrorReason::Namespace,
+                    reason: crate::error::ResolveErrorReason::DeclarationCollision,
                     subject: Some(global_surface_name(&entry.canonical_key).to_string()),
                 },
                 related_labels: vec![

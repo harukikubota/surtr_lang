@@ -1,5 +1,6 @@
 mod command_error;
 pub mod error_display;
+mod include_diagnostic;
 mod loader;
 mod project_runner;
 pub mod repl;
@@ -16,6 +17,7 @@ use std::sync::{
 
 pub use command_error::{CommandDiagnostic, CommandError, CommandResult};
 pub use error_display::ErrorDisplayMode;
+pub use include_diagnostic::{attach_include_diagnostic, attach_resolve_include_diagnostic};
 use loader::stdlib_module_spec_cache_key;
 pub use loader::{
     collect_additional_default_std_module_inputs, collect_lib_module_inputs,
@@ -2325,7 +2327,7 @@ impl User {
   @doc """Builtin helper doc."""
   @builtin def inspect_name(user: User) -> String
 }"#,
-            spire::ParserContext::module(1, None),
+            spire::ParserContext::module(1, None).with_rules(spire::ParseRules::std_module()),
         )
         .expect("annotated builtin impl method docs should parse");
 

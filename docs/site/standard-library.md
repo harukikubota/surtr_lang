@@ -21,6 +21,15 @@ stage、user source の順で読み込まれます。完全なモジュール in
 このうち auto import されるのは `Bootstrap`, `Kernel` と、`@autoimport` が付いた標準 `impl Type` owner helper surface および標準 trait です。  
 他の標準定義ソースは標準定義ソースとして同梱されますが、名前空間としては明示 import 前提です。
 
+通常実行と REPL の標準環境は `Test` を含みません。`surtr test` は `Test` も読み込みます。
+`import` と修飾名による参照はロード済みのモジュールを利用するもので、標準ソースを追加ロードする操作ではありません。
+
+`include` は常にユーザー定義のモジュールファイルを読み込みます。
+標準ソースのパスや同じ本文のコピーでも、ユーザー定義では許可されない `@builtin` などの宣言は拒否します。
+解析できた宣言が導入済みの定義と衝突した場合も拒否します。
+これらの診断では include 文を主位置、拒否された宣言や衝突する双方の宣言を関連位置に示します。
+`Test` の利用方法は[テストを書く](test.md)、診断の契約は[Diagnostics 開発指針](../dev/diagnostics.md#include-の拒否診断)を参照してください。
+
 ## 2. 各モジュールの役割
 
 ### `Bootstrap`

@@ -4,6 +4,9 @@ use std::process::Output;
 
 use crate::common::{repo_root, surtr_command, unique_temp_dir, write_source};
 
+#[path = "include_diagnostics.rs"]
+mod include_diagnostics;
+
 fn run_surtr(temp: &Path, args: &[&str]) -> Output {
     surtr_command()
         .args(args)

@@ -5943,6 +5943,20 @@ fn test_module_compile_unit_rejects_builtin_type_decl() {
 }
 
 #[test]
+fn user_impl_members_reject_builtin_declarations() {
+    for source in [
+        "defstruct User {}\nimpl User { @builtin def read(value: User) -> Int }",
+        "defstruct User {}\nimpl User { @builtin defp read(value: User) -> Int }",
+        "defstruct User {}\nimpl User { @builtin defextractor read(value: User) -> MatchResult<Int, Error> }",
+        "impl Eq for Int { @builtin def eq(self: Self, other: Self) -> Boolean }",
+    ] {
+        let error = parse_with_context(source, ParserContext::module(1, None))
+            .expect_err("user impls must not introduce builtin declarations");
+        assert_eq!(error.reason(), crate::error::ParseErrorReason::UserBuiltinDeclaration, "{source}: {error:?}");
+    }
+}
+
+#[test]
 fn test_std_module_compile_unit_accepts_builtin_decl() {
     let ast = parse_with_context(
         "defmod Bootstrap { @builtin def print(a: String) -> Unit }",

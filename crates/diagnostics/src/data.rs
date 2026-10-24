@@ -195,6 +195,8 @@ pub enum ParseDiagnosticReason {
     LiteralSyntax,
     PositionRule,
     SourcePolicy,
+    UserBuiltinDeclaration,
+    UserStandardTypeDeclaration,
     InterpolationSyntax,
     ReturnTypeArgumentArityMismatch,
     InvalidDoCarrierReturnTypeArgument,
@@ -215,6 +217,8 @@ impl ParseDiagnosticReason {
             Self::LiteralSyntax => "LiteralSyntax",
             Self::PositionRule => "PositionRule",
             Self::SourcePolicy => "SourcePolicy",
+            Self::UserBuiltinDeclaration => "UserBuiltinDeclaration",
+            Self::UserStandardTypeDeclaration => "UserStandardTypeDeclaration",
             Self::InterpolationSyntax => "InterpolationSyntax",
             Self::ReturnTypeArgumentArityMismatch => "ReturnTypeArgumentArityMismatch",
             Self::InvalidDoCarrierReturnTypeArgument => "InvalidDoCarrierReturnTypeArgument",
@@ -229,6 +233,7 @@ impl ParseDiagnosticReason {
 pub enum ResolveDiagnosticReason {
     NameResolution,
     Namespace,
+    DeclarationCollision,
     Visibility,
     Import,
     Capture,
@@ -268,6 +273,7 @@ impl ResolveDiagnosticReason {
         match self {
             Self::NameResolution => "NameResolution",
             Self::Namespace => "Namespace",
+            Self::DeclarationCollision => "DeclarationCollision",
             Self::Visibility => "Visibility",
             Self::Import => "Import",
             Self::Capture => "Capture",

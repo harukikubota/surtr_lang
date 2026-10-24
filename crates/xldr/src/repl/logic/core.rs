@@ -228,7 +228,9 @@ impl std::fmt::Display for ReplLoadError {
 #[derive(Debug, Clone)]
 struct PreparedScriptPreload {
     file_name: String,
+    original_source: String,
     source_for_parse: String,
+    include_directives: Vec<crate::ScriptIncludeDirective>,
     include_modules: Vec<crate::ModuleInput>,
 }
 
@@ -6997,6 +6999,51 @@ fn compile_repl_preload_from_module_stages(
     mode: PreloadCompileMode,
     runtime_execution: PreloadRuntimeExecution,
 ) -> Result<PreloadedChunkState, ReplLoadError> {
+    compile_repl_preload_from_module_stages_inner(
+        module_input_stages,
+        prepared_script.as_ref(),
+        mode,
+        runtime_execution,
+    )
+    .map_err(|mut error| {
+        if let (
+            Some(script),
+            ReplLoadError::Diagnostic {
+                sources,
+                source_id,
+                spec,
+                ..
+            },
+        ) = (prepared_script.as_ref(), &mut error)
+        {
+            let script_source_id = sources
+                .entries()
+                .iter()
+                .find(|entry| entry.file_name == script.file_name)
+                .expect("preload script source registered")
+                .id;
+            sources.update_source(script_source_id, script.original_source.clone());
+            let (primary, updated) = crate::attach_include_diagnostic(
+                sources,
+                script_source_id,
+                *source_id,
+                spec.clone(),
+                &script.include_directives,
+                &script.include_modules,
+            );
+            *source_id = primary;
+            *spec = updated;
+        }
+        error
+    })
+}
+
+fn compile_repl_preload_from_module_stages_inner(
+    module_input_stages: Vec<Vec<crate::ModuleInput>>,
+    prepared_script: Option<&PreparedScriptPreload>,
+    mode: PreloadCompileMode,
+    runtime_execution: PreloadRuntimeExecution,
+) -> Result<PreloadedChunkState, ReplLoadError> {
     let mut repl_sources = loader::collect_repl_sources_with_module_stages(&module_input_stages)
         .map_err(ReplLoadError::Load)?;
 
@@ -7082,11 +7129,11 @@ fn compile_repl_preload_from_module_stages(
         sigil::PrecollectedDeclarations {
             declaration_index: snapshot.declaration_index().clone(),
             owner_registry: sigil::precollect_owner_registry(&module_stage_asts)
-                .map_err(|e| preload_resolve_error(&compile_sources, &e))?,
+                .map_err(|e| preload_resolve_error(&compile_sources, &e, prepared_script))?,
         }
     } else {
         sigil::precollect_declarations(&module_stage_asts)
-            .map_err(|e| preload_resolve_error(&compile_sources, &e))?
+            .map_err(|e| preload_resolve_error(&compile_sources, &e, prepared_script))?
     };
     merge_user_preload_declarations(
         &mut precollected,
@@ -7105,7 +7152,7 @@ fn compile_repl_preload_from_module_stages(
         snapshot.default_stage_count,
         snapshot.resolve_state(),
     )
-    .map_err(|e| preload_resolve_error(&compile_sources, &e))?;
+    .map_err(|e| preload_resolve_error(&compile_sources, &e, prepared_script))?;
 
     let environment =
         sigil::ResolveEnvironment::from_precollected(&module_stage_asts, &precollected);
@@ -7114,7 +7161,7 @@ fn compile_repl_preload_from_module_stages(
         Some(repl_sources.repl_module_path.clone()),
         staged_program.resume_state,
     )
-    .map_err(|e| preload_resolve_error(&compile_sources, &e))?;
+    .map_err(|e| preload_resolve_error(&compile_sources, &e, prepared_script))?;
 
     let mut preload_imported = Vec::new();
     if !user_ast.is_empty() {
@@ -7143,7 +7190,7 @@ fn compile_repl_preload_from_module_stages(
                 user_ast.clone(),
                 user_source_id,
             ))
-            .map_err(|e| preload_resolve_error(&compile_sources, &e))?;
+            .map_err(|e| preload_resolve_error(&compile_sources, &e, prepared_script))?;
         preload_imported = sigil_session.last_imports().imported_symbols.clone();
         bind_preload_script_qualified_names(
             &mut sigil_session,
@@ -7559,7 +7606,9 @@ fn prepare_script_preload(
 
     Ok(Some(PreparedScriptPreload {
         file_name: file_name.to_string(),
+        original_source: source.to_string(),
         source_for_parse: prepared.source_for_parse,
+        include_directives: prepared.include_directives,
         include_modules: prepared.include_modules,
     }))
 }
@@ -7588,12 +7637,12 @@ fn merge_user_preload_declarations(
     let mut staged_user = vec![Vec::new(); stage_index];
     staged_user.push(stage);
     let user_precollected = sigil::precollect_declarations(&staged_user)
-        .map_err(|e| preload_resolve_error(compile_sources, &e))?;
+        .map_err(|e| preload_resolve_error(compile_sources, &e, None))?;
 
     let mut validated_owner_registry = precollected.owner_registry.clone();
     validated_owner_registry
         .merge(&user_precollected.owner_registry)
-        .map_err(|e| preload_resolve_error(compile_sources, &e))?;
+        .map_err(|e| preload_resolve_error(compile_sources, &e, None))?;
 
     for (fq_name, entry) in user_precollected.declaration_index {
         precollected.declaration_index.insert(fq_name, entry);
@@ -7654,6 +7703,7 @@ fn resolve_diagnostic_reason(
     Ok(match reason {
         R::NameResolution => D::NameResolution,
         R::Namespace => D::Namespace,
+        R::DeclarationCollision => D::DeclarationCollision,
         R::Visibility => D::Visibility,
         R::Import => D::Import,
         R::Capture => D::Capture,
@@ -7673,6 +7723,7 @@ fn resolve_diagnostic_reason(
 fn preload_resolve_error(
     compile_sources: &crate::CompileSources,
     error: &sigil::error::ResolveError,
+    prepared_script: Option<&PreparedScriptPreload>,
 ) -> ReplLoadError {
     let source_id = diagnostic_source_id(compile_sources, &error.span);
     let reason = match resolve_diagnostic_reason(&error.diagnostic.reason) {
@@ -7712,6 +7763,16 @@ fn preload_resolve_error(
         error.diagnostic.subject.clone(),
         &labels,
     );
+    let (source_id, spec) = match prepared_script {
+        Some(script) => crate::attach_resolve_include_diagnostic(
+            compile_sources,
+            error,
+            source_id,
+            spec,
+            &script.include_directives,
+        ),
+        None => (source_id, spec),
+    };
     ReplLoadError::Diagnostic {
         phase: "resolve".to_string(),
         sources: compile_sources.sources.clone(),
@@ -9108,7 +9169,9 @@ supervisor_init {
             .expect("resolver diagnostics should carry producer-owned structured facts");
         assert_eq!(
             structured.reason,
-            diagnostics::DiagnosticReason::Resolve(diagnostics::ResolveDiagnosticReason::Namespace)
+            diagnostics::DiagnosticReason::Resolve(
+                diagnostics::ResolveDiagnosticReason::DeclarationCollision
+            )
         );
         assert_eq!(structured.origin, diagnostics::DiagnosticOrigin::Resolve);
         assert_eq!(

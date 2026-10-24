@@ -43,6 +43,32 @@ module stageのparse workerをOSが起動できない場合は、`WorkerSpawnFai
 このbootstrap経路はstructured reasonとspanを保持しない。
 stage内の結果は入力順に扱い、起動済みworkerはjoinする。worker内部のpanicは元のpayloadを再送する。
 
+## include の拒否診断
+
+include 先はパスや本文の同一性にかかわらずユーザー定義として解析する。
+Spire は `@builtin` の禁止を `UserBuiltinDeclaration`、標準専用の
+`@FacetPathKind Type` 宣言の禁止を `UserStandardTypeDeclaration` として返す。
+impl 内の宣言も同じ source policy で検査する。コメント・文字列の語や、
+ユーザー定義に許可された `Type` の用法を文字列検索で拒否しない。
+モジュール外の関数やトップレベル式は既存の `SourcePolicy` と guidance で分類する。
+
+Sigil は導入済み宣言との衝突を `DeclarationCollision` として返し、シンボル名と
+衝突する双方の宣言位置を保持する。
+
+Rune と Xldr の script preload は、これらの構造化された原因と include 先の
+ソースの対応から診断を生成する。primary location と主キャプションは読み込み元の
+include 文全体とし、拒否された宣言、または衝突する双方の宣言を関連位置にする。
+原因の phase / reason は維持し、Human と JSON は同じ位置を使う。
+通常の構文エラー・型エラーは元の診断と位置を維持する。
+同じファイルを複数回 include した場合も source ID の再利用は維持する。
+衝突した宣言の stage / source occurrence から include 文を選び、ファイル名だけで
+最初または最後の include を選ばない。衝突元が include の範囲外なら通常の診断を維持する。
+
+- 禁止宣言: `Cannot include '{path}': {construct} is not allowed in user-defined source.`。
+  help で include はユーザー定義を読み込むことを説明する。
+- 衝突: `Cannot include '{path}': symbol '{symbol}' is already defined.`。
+  標準定義を含む既存の定義を利用する場合は include の削除を案内する。
+
 ## 型関係と呼び出しの診断（実装済み）
 
 - Scar の `assert_type_relation` は、失敗時に部分的な型代入と capability / obligation の変更を rollback する。成功した制約だけを後続へ渡す。両側の source fact は照合対象の型とともに保持する。

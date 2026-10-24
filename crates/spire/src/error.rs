@@ -13,6 +13,8 @@ pub enum ParseErrorReason {
     LiteralSyntax,
     PositionRule,
     SourcePolicy,
+    UserBuiltinDeclaration,
+    UserStandardTypeDeclaration,
     InterpolationSyntax,
     ReturnTypeArgumentArityMismatch,
     InvalidDoCarrierReturnTypeArgument,

@@ -241,6 +241,10 @@ fn map_reason(reason: ParseErrorReason) -> ParseDiagnosticReason {
         ParseErrorReason::LiteralSyntax => ParseDiagnosticReason::LiteralSyntax,
         ParseErrorReason::PositionRule => ParseDiagnosticReason::PositionRule,
         ParseErrorReason::SourcePolicy => ParseDiagnosticReason::SourcePolicy,
+        ParseErrorReason::UserBuiltinDeclaration => ParseDiagnosticReason::UserBuiltinDeclaration,
+        ParseErrorReason::UserStandardTypeDeclaration => {
+            ParseDiagnosticReason::UserStandardTypeDeclaration
+        }
         ParseErrorReason::InterpolationSyntax => ParseDiagnosticReason::InterpolationSyntax,
         ParseErrorReason::ReturnTypeArgumentArityMismatch => {
             ParseDiagnosticReason::ReturnTypeArgumentArityMismatch

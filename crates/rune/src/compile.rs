@@ -16,6 +16,7 @@ type SharedScriptCompilePrefix = Arc<xldr::CompilationPrefixSnapshot>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ScriptCompilePlan {
+    pub(crate) original_source: String,
     pub(crate) source_for_parse: String,
     pub(crate) selected_entry_name: Option<String>,
     pub(crate) normalized_entrypoint: Option<EntryPoint>,
@@ -163,6 +164,7 @@ fn map_resolve_reason(
     Ok(match reason {
         R::NameResolution => D::NameResolution,
         R::Namespace => D::Namespace,
+        R::DeclarationCollision => D::DeclarationCollision,
         R::Visibility => D::Visibility,
         R::Import => D::Import,
         R::Capture => D::Capture,
@@ -182,6 +184,7 @@ fn map_resolve_reason(
 fn resolve_spec_for_error(
     compile_sources: &xldr::CompileSources,
     error: &sigil::error::ResolveError,
+    compile_plan: &ScriptCompilePlan,
 ) -> (SourceId, &'static str, diagnostics::DiagnosticSpec) {
     let (source_id, span) = diagnostic_location_for_span(compile_sources, &error.span);
     let reason = match map_resolve_reason(&error.diagnostic.reason) {
@@ -217,6 +220,13 @@ fn resolve_spec_for_error(
         reason,
         error.diagnostic.subject.clone(),
         &labels,
+    );
+    let (source_id, spec) = xldr::attach_resolve_include_diagnostic(
+        compile_sources,
+        error,
+        source_id,
+        spec,
+        &compile_plan.include_directives,
     );
     (source_id, "resolve", spec)
 }
@@ -315,6 +325,7 @@ fn build_cached_script_compile_prefix(
     std_snapshot: &xldr::DefaultStdlibSnapshot,
     module_stages: &[Vec<sigil::StagedModuleAst>],
     sources: &SourceRegistry,
+    compile_plan: &ScriptCompilePlan,
 ) -> RuneResult<SharedScriptCompilePrefix> {
     let cache_key = xldr::test_semantic_prefix_cache_key(env.compile_unit_kind(), compile_sources)
         .map_err(|e| {
@@ -341,7 +352,8 @@ fn build_cached_script_compile_prefix(
 
     let rebuilt_declaration_index =
         sigil::precollect_declaration_index(module_stages).map_err(|e| {
-            let (source_id, phase, spec) = resolve_spec_for_error(compile_sources, &e);
+            let (source_id, phase, spec) =
+                resolve_spec_for_error(compile_sources, &e, compile_plan);
             RuneError::diagnostic(1, sources, source_id, phase, spec)
         })?;
     let mut cached_payload = xldr::load_cached_test_semantic_prefix(&cache_path, &cache_key);
@@ -371,7 +383,8 @@ fn build_cached_script_compile_prefix(
             std_snapshot.resolve_state(),
         )
         .map_err(|e| {
-            let (source_id, phase, spec) = resolve_spec_for_error(compile_sources, &e);
+            let (source_id, phase, spec) =
+                resolve_spec_for_error(compile_sources, &e, compile_plan);
             RuneError::diagnostic(1, sources, source_id, phase, spec)
         })?;
         let resume_state = resolved.resume_state;
@@ -532,6 +545,35 @@ pub(crate) fn compile_source_with_measurement(
     env: ExecutionEnv,
     compile_sources: &xldr::CompileSources,
     compile_plan: &ScriptCompilePlan,
+    measurement: Option<&mut CompileMeasurement>,
+) -> RuneResult<forge::bytecode::Bytecode> {
+    compile_source_with_measurement_inner(env, compile_sources, compile_plan, measurement).map_err(
+        |mut error| {
+            if let RuneError::Diagnostic { diagnostic, .. } = &mut error {
+                diagnostic.sources.update_source(
+                    compile_sources.user_source_id,
+                    compile_plan.original_source.clone(),
+                );
+                let (source_id, spec) = xldr::attach_include_diagnostic(
+                    &diagnostic.sources,
+                    compile_sources.user_source_id,
+                    diagnostic.source_id,
+                    diagnostic.spec.clone(),
+                    &compile_plan.include_directives,
+                    &compile_plan.include_modules,
+                );
+                diagnostic.source_id = source_id;
+                diagnostic.spec = spec;
+            }
+            error
+        },
+    )
+}
+
+fn compile_source_with_measurement_inner(
+    env: ExecutionEnv,
+    compile_sources: &xldr::CompileSources,
+    compile_plan: &ScriptCompilePlan,
     mut measurement: Option<&mut CompileMeasurement>,
 ) -> RuneResult<forge::bytecode::Bytecode> {
     let compile_unit_kind = env.compile_unit_kind();
@@ -609,6 +651,7 @@ pub(crate) fn compile_source_with_measurement(
             &std_snapshot,
             &module_stages,
             sources,
+            compile_plan,
         )?);
         let Some(prefix) = cached_prefix.as_ref() else {
             return Err(RuneError::usage("test prefix cache was not built"));
@@ -617,7 +660,8 @@ pub(crate) fn compile_source_with_measurement(
     } else {
         rebuilt_declaration_index =
             sigil::precollect_declaration_index(&module_stages).map_err(|e| {
-                let (source_id, phase, spec) = resolve_spec_for_error(compile_sources, &e);
+                let (source_id, phase, spec) =
+                    resolve_spec_for_error(compile_sources, &e, compile_plan);
                 RuneError::diagnostic(1, sources, source_id, phase, spec)
             })?;
         &rebuilt_declaration_index
@@ -642,7 +686,7 @@ pub(crate) fn compile_source_with_measurement(
         resume_state,
     )
     .map_err(|e| {
-        let (source_id, phase, spec) = resolve_spec_for_error(compile_sources, &e);
+        let (source_id, phase, spec) = resolve_spec_for_error(compile_sources, &e, compile_plan);
         RuneError::diagnostic(1, sources, source_id, phase, spec)
     })?;
     if let Some(measurement) = measurement.as_deref_mut() {
@@ -799,6 +843,7 @@ pub(crate) fn prepare_script_compile_plan(
     });
 
     Ok(ScriptCompilePlan {
+        original_source: source.to_string(),
         source_for_parse: prepared.source_for_parse,
         selected_entry_name,
         normalized_entrypoint,
