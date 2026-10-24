@@ -99,7 +99,7 @@ test("bounds with do") {
 | 値が指定した条件を満たす | `assert_satisfies(actual, message, predicate)` |
 | 小さい・以下・大きい・以上である | `assert_lt(lhs, rhs)` / `assert_lte(lhs, rhs)` / `assert_gt(lhs, rhs)` / `assert_gte(lhs, rhs)` |
 | Float の差が許容誤差以内である | `assert_approx(expected, actual, tolerance)` |
-| この分岐に到達したら失敗にする | `fail(detail)` |
+| この分岐に到達したら失敗にする | `fail_test(message)` |
 
 等価性の検査には同じ型の二値と `Eq`、大小の検査には同じ型の二値と `Compare` が必要です。
 大小の検査が失敗すると、左右の値と期待する関係を表示します。

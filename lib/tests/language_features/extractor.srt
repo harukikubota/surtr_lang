@@ -10,7 +10,7 @@ def assert_extractor_error(failure: Result<Int>) -> Result<()> {
       assert_eq("ExtractorContextError", observed_1_0)
       assert_eq("extractor context", observed_1_1)
     },
-    Ok(_) => fail("expected ExtractorContextError"),
+    Ok(_) => fail_test("expected ExtractorContextError"),
   }
 }
 
@@ -22,7 +22,7 @@ def assert_preserved_error(original: Result<Int>, converted: Result<Int>) -> Res
       assert_eq(Error::message(before), observed_5_1)
       assert_eq(Error::format(before), observed_5_2)
     },
-    _ => fail("expected the preserved error"),
+    _ => fail_test("expected the preserved error"),
   }
 }
 

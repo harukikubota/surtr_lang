@@ -348,14 +348,26 @@ fn test_command_accepts_parent_and_symlink_file_paths() {
 #[test]
 fn test_command_short_circuits_multiple_assertions_and_continues_next_it() {
     let temp = unique_temp_dir("surtr_test_statement_question_short_circuit");
-    for (body, kind) in [
+    for (body, kind, detail) in [
         (
             "assert_eq(1, 2)?\n    print(\"after-failure\")\n    assert_eq(3, 3)",
             "question",
+            "expected 1, got 2",
         ),
         (
             "do::<Result> {\n      assert_eq(1, 2)\n      print(\"after-failure\")\n      assert_eq(3, 3)\n    }",
             "do",
+            "expected 1, got 2",
+        ),
+        (
+            "fail_test(\"explicit failure\")?\n    print(\"after-failure\")\n    Ok(())",
+            "explicit question",
+            "explicit failure",
+        ),
+        (
+            "do::<Result> {\n      fail_test(\"explicit failure\")\n      print(\"after-failure\")\n      Ok(())\n    }",
+            "explicit do",
+            "explicit failure",
         ),
     ] {
         write_math_test(
@@ -384,7 +396,7 @@ test("Sequencing") {{
             stdout.contains("[FAIL] Sequencing > first failure"),
             "{kind}: {stdout}\n{stderr}"
         );
-        assert!(stdout.contains("expected 1, got 2"), "{kind}: {stdout}");
+        assert!(stdout.contains(detail), "{kind}: {stdout}");
         assert!(
             stdout.contains("[PASS] Sequencing > next it"),
             "{kind}: {stdout}\n{stderr}"
@@ -1712,8 +1724,19 @@ fn test_command_extended_assertions_return_expected_results() {
             ),
             (
                 "explicit failure",
-                "fail(\"Keep this detail\")",
+                "fail_test(\"Keep this detail\")",
                 Some("Keep this detail"),
+            ),
+            (
+                "explicit failure keeps message and empty payload",
+                r#"do {
+  assert_err_kind(TestExplicitFailure, fail_test("detail"))
+  assert_err_message_eq("", fail_test(""))
+  assert_err_message_eq("  日本語\n ", fail_test("  日本語\n "))
+  error =? expect_error(fail_test("detail"))
+  assert_error_matches(error, TestExplicitFailure(), Ok(()))
+}"#,
+                None,
             ),
         ],
     );
@@ -1747,15 +1770,15 @@ deferror CollectionError(items: List<Int>, choice: Option<Int>, duration: Durati
             ("enum child mismatch", "saved = assert_error_matches(CollectionError([], Option::Some(3), 2ms), CollectionError(_, Option::None, _), Ok(()))\nassert_err_kind(EnumVariantPatternMismatch, saved)", None),
             ("duration child mismatch", "saved = assert_error_matches(CollectionError([], Option::Some(3), 2ms), CollectionError(_, _, 3ms), Ok(()))\nassert_err_kind(DurationLiteralPatternMismatch, saved)", None),
             ("kind mismatch skips check", "saved = assert_error_matches(NoneError(), SavedError, { print(\"unexpected\"); Ok(()) })\nassert_err_kind(TestErrorPatternKindMismatch, saved)?\nassert_err_message_eq(\"expected error kind SavedError, got NoneError\", saved)?\nassert_stdout_eq([])", None),
-            ("block failure is stored", "saved = assert_error_matches(NoneError(), NoneError, { fail(\"inner failure\")?; print(\"unexpected\"); Ok(()) })\nassert_err_message_eq(\"inner failure\", saved)?\nassert_stdout_eq([])", None),
-            ("trailing failure is stored", "saved = assert_error_matches(NoneError(), NoneError) { fail(\"inner failure\")?; print(\"unexpected\"); Ok(()) }\nassert_err_message_eq(\"inner failure\", saved)?\nassert_stdout_eq([])", None),
+            ("block failure is stored", "saved = assert_error_matches(NoneError(), NoneError, { fail_test(\"inner failure\")?; print(\"unexpected\"); Ok(()) })\nassert_err_message_eq(\"inner failure\", saved)?\nassert_stdout_eq([])", None),
+            ("trailing failure is stored", "saved = assert_error_matches(NoneError(), NoneError) { fail_test(\"inner failure\")?; print(\"unexpected\"); Ok(()) }\nassert_err_message_eq(\"inner failure\", saved)?\nassert_stdout_eq([])", None),
             ("parenthesized SafeBind failure is stored", "saved = assert_error_matches(NoneError(), NoneError, { value =? Option<Int>::None; print(\"unexpected\"); Ok(()) })\nassert_err_kind(NoneError, saved)?\nassert_stdout_eq([])", None),
             ("trailing SafeBind failure is stored", "saved = assert_error_matches(NoneError(), NoneError) { value =? Option<Int>::None; print(\"unexpected\"); Ok(()) }\nassert_err_kind(NoneError, saved)?\nassert_stdout_eq([])", None),
             ("kind mismatch empty payload", "saved = assert_error_matches(NoneError(), SavedError, Ok(()))\nerr =? expect_error(saved)\nassert_error_matches(err, TestErrorPatternKindMismatch(), Ok(()))", None),
             ("expect success rejected", "error =? expect_error(Option::Some(7))\nOk(())", Some("expected an error, got Option::Some(7)")),
             ("one layer only", "nested: Result<Result<Int>> = Ok(Err(NoneError()))\nerror =? expect_error(nested)\nOk(())", Some("expected an error, got Ok(Err(NoneError")),
             ("explicit flatten", "nested: Result<Result<Int>> = Ok(Err(NoneError()))\nerr =? expect_error(Result::flatten(nested))\nassert_error_matches(err, NoneError, Ok(()))", None),
-            ("propagated check failure", "assert_error_matches(NoneError(), NoneError) { fail(\"propagated failure\") }?\nprint(\"unexpected\")\nOk(())", Some("propagated failure")),
+            ("propagated check failure", "assert_error_matches(NoneError(), NoneError) { fail_test(\"propagated failure\") }?\nprint(\"unexpected\")\nOk(())", Some("propagated failure")),
             ("following case runs", "assert_stdout_eq([])", None),
         ],
     );
@@ -1979,17 +2002,17 @@ fn test_command_validation_assertions_and_composition() {
             ),
             (
                 "bare propagation",
-                "do { assert(False, \"stopped\")\nfail(\"unreachable\") }",
+                "do { assert(False, \"stopped\")\nfail_test(\"unreachable\") }",
                 Some("stopped"),
             ),
             (
                 "question propagation",
-                "assert(False, \"stopped\")?\nfail(\"unreachable\")",
+                "assert(False, \"stopped\")?\nfail_test(\"unreachable\")",
                 Some("stopped"),
             ),
             (
                 "safe bind propagation",
-                "_ =? assert(False, \"stopped\")\nfail(\"unreachable\")",
+                "_ =? assert(False, \"stopped\")\nfail_test(\"unreachable\")",
                 Some("stopped"),
             ),
             (

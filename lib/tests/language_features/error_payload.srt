@@ -35,7 +35,7 @@ test("Error payload") {
           assert_eq(8, reader())
           assert_eq("payload", alias.message)
         },
-        _ => fail("payload kind lost"),
+        _ => fail_test("payload kind lost"),
       }
     }
   }
@@ -52,14 +52,14 @@ test("Error payload") {
           assert_eq(5, index)
           assert_eq(2, length)
         },
-        _ => fail("expected list index payload"),
+        _ => fail_test("expected list index payload"),
       }
       assert_err_kind(ZeroModuloError, Mod::safe_mod(7, 0))
       bits = Int::shl(1, 128)
       too_large <- bits
       match Int::shl(1, too_large) {
         Err(ShiftCountTooLarge(saved)) => assert_eq(too_large, saved),
-        _ => fail("expected original arbitrary-precision shift amount"),
+        _ => fail_test("expected original arbitrary-precision shift amount"),
       }
     }
   }
@@ -70,21 +70,21 @@ test("Error payload") {
           assert_eq("hello", value)
           assert_eq("hero", prefix)
         },
-        _ => fail("expected original prefix input"),
+        _ => fail_test("expected original prefix input"),
       }
       match String::split_once("hello", "x") {
         Err(StringSeparatorMissing(value, separator)) => do {
           assert_eq("hello", value)
           assert_eq("x", separator)
         },
-        _ => fail("expected original separator input"),
+        _ => fail_test("expected original separator input"),
       }
       match String::from_chars(["a", "bc"]) {
         Err(InvalidCharList(index, value)) => do {
           assert_eq(1, index)
           assert_eq("bc", value)
         },
-        _ => fail("expected invalid char payload"),
+        _ => fail_test("expected invalid char payload"),
       }
     }
   }
@@ -96,14 +96,14 @@ test("Error payload") {
           assert_eq("2", digit)
           assert_eq(2, index)
         },
-        _ => fail("expected integer parse payload"),
+        _ => fail_test("expected integer parse payload"),
       }
       match Duration::sub(10ms, 20ms) {
         Err(NegativeDurationDifference(lhs, rhs)) => do {
           assert_eq(10, lhs)
           assert_eq(20, rhs)
         },
-        _ => fail("expected duration operands"),
+        _ => fail_test("expected duration operands"),
       }
     }
   }
@@ -120,7 +120,7 @@ test("Error payload") {
           assert_eq("(?<value>a)?b", pattern)
           assert_eq("x", input)
         },
-        _ => fail("expected regex input payload"),
+        _ => fail_test("expected regex input payload"),
       }
     }
   }
@@ -131,9 +131,9 @@ test("Error payload") {
       match failed {
         Err(TestExpectedOk(error)) => match error {
           SavedPayload(number, _) => assert_eq(10, number),
-          _ => fail("assertion erased nested payload"),
+          _ => fail_test("assertion erased nested payload"),
         },
-        _ => fail("expected assertion Error payload"),
+        _ => fail_test("expected assertion Error payload"),
       }
       wrapped = Result::cause(Err(inner), NoneError())
       assert_cause_chain([NoneError, SavedPayload], wrapped)
@@ -154,7 +154,7 @@ test("Error payload") {
           result <- Task::await(saved_task)
           assert_eq(21, result)
         },
-        _ => fail("expected callable and task Payload"),
+        _ => fail_test("expected callable and task Payload"),
       }
     }
   }
@@ -173,7 +173,7 @@ test("Error payload") {
           answer <- HashMap::map_get(saved_map, "answer")
           assert_eq(42, answer)
         },
-        _ => fail("expected regex and map Payload"),
+        _ => fail_test("expected regex and map Payload"),
       }
     }
   }
@@ -191,7 +191,7 @@ test("Error payload") {
           (actual, _) <- Random::next_int_range(saved_rng, -100, 100)
           assert_eq(expected._0, actual)
         },
-        _ => fail("expected generator and random Payload"),
+        _ => fail_test("expected generator and random Payload"),
       }
     }
   }

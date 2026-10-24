@@ -62,7 +62,7 @@ test("ResultT") {
       mapped = Functor::fmap(value, {|item| item + 1})
       match ResultT::run(mapped) {
         Err(error) => assert_eq("preserved", Error::message(error)),
-        Ok(_) => fail("expected base failure"),
+        Ok(_) => fail_test("expected base failure"),
       }
     }
   }

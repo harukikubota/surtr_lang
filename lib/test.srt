@@ -469,10 +469,17 @@ defmod Test {
   }
 
   @doc """
-  Always return Err(TestExplicitFailure(detail)), preserving detail unchanged.
-  Example: `fail("not reached")` returns an assertion failure containing `not reached`.
+  Always return Err(TestExplicitFailure(message)), preserving message unchanged.
+  Propagate the Result to fail the current case. The Error has no saved Payload.
+
+  ```surtr
+  import Test;
+  test("fail_test") { it("checks the failure message") {
+    assert_err_message_eq("not reached", fail_test("not reached"))
+  } }
+  ```
   """
-  def fail(detail: String) -> Result<()> { Err(TestExplicitFailure(detail)) }
+  def fail_test(message: String) -> Result<()> { Err(TestExplicitFailure(message)) }
 
   @doc """
   Check that `result` is `Ok(actual)` and that `actual` equals `expected` according to `Eq`.
@@ -677,11 +684,11 @@ defmod Test {
 }
 
 @doc """
-An assertion failure whose message is the supplied `note`.
+An assertion failure whose message is the supplied `note`, with no saved Payload.
 """
-deferror TestExplicitFailure(note: String) {
+deferror TestExplicitFailure() {
   |note: String|
-  Self(message: note, note)
+  Self(message: note)
 }
 
 deferror TestConditionFalse(note: String) {
