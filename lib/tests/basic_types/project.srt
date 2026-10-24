@@ -8,7 +8,7 @@ test("Project") {
   describe("new") { it("preserves provided entries") {
                       do {
                         project = Project::new([Config::new("App")])
-                        cfg <- List::first(project.entries)
+                        cfg =? List::first(project.entries)
 
                         assert_eq(1, List::len(project.entries))
                         assert_eq("App", cfg.name)
@@ -17,7 +17,7 @@ test("Project") {
   describe("entrypoint") { it("appends a configured entry") {
                              do {
                                project = Project::entrypoint(Project::empty(), "Api", {|cfg| Config::entry_fun(cfg, "Api::main")})
-                               cfg <- List::first(project.entries)
+                               cfg =? List::first(project.entries)
 
                                assert_eq(1, List::len(project.entries))
                                assert_eq("Api", cfg.name)
@@ -27,7 +27,7 @@ test("Project") {
   describe("config") { it("starts the builder from an empty project") {
                          do {
                            project = Project::config({|initial| Project::new(List::append(initial.entries, [Config::new("App")]))})
-                           cfg <- List::first(project.entries)
+                           cfg =? List::first(project.entries)
 
                            assert_eq(1, List::len(project.entries))
                            assert_eq("App", cfg.name)

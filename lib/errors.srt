@@ -9,8 +9,9 @@ deferror ZeroModuloError() {
 
 @doc """
 Shared concrete error for "no value" situations.
-`NoneError` is the standard failure used by optional-style sugar such as `T?`.
-`T?` now lowers to `Option<T>`.
+`T?` lowers to `Option<T>`. A missing Option becomes `NoneError` when
+extracted with `=?`, `MonadExtractor::extract`, or `to::<Result>`.
+Use `Option::ok_or` to choose a different Error for absence.
 Use `Result<T>` with `Err(NoneError())` when "missing value" should participate in
 Result-style failure propagation. A function definition may document this contract
 with `Result<T, NoneError>` in its direct return position.
@@ -27,15 +28,14 @@ their own errors.
 deferror ZeroDivisionError { "division by zero" }
 
 @doc """
-Error for a head-tail List pattern applied to an empty List.
-List APIs have their own errors for empty input.
+Shared error for a head-tail List pattern or `uncons` applied to an empty List.
+List value queries such as `List::first` return `Option`; use `Option::ok_or`
+when an empty List should instead produce this Error.
 ## REPL
-xldr(1)> apply_pattern([], [_1: Int, .._])
-Err(EmptyHeadTailListPattern("head-tail list pattern requires a non-empty List"))
+xldr(1)> Result::is_err(apply_pattern([], [_1: Int, .._]))
+True
 """
-deferror EmptyHeadTailListPattern() {
-  Self(message: "head-tail list pattern requires a non-empty List")
-}
+deferror EmptyList { "empty list" }
 
 @doc """
 Shared concrete error for placeholder code paths that are intentionally
@@ -44,10 +44,6 @@ Use this with `todo()` when a function should type-check before the final
 implementation is ready.
 """
 deferror NotImplemented { "not implemented" }
-
-deferror UnconsEmptyList() {
-  Self(message: "cannot uncons empty list")
-}
 
 deferror UnconsEmptyString() {
   Self(message: "cannot uncons empty string")

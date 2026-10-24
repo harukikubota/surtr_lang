@@ -96,7 +96,7 @@ match "日本" {
 }
 ```
 
-式位置の `[head, ..tail]` は List 構築です。Pattern 位置の分解とは区別します。`Kernel::uncons(head, tail)` も先頭と残りを分解しますが、保持する失敗 Error まで同一ではありません。たとえば空 List に対する head-tail Pattern は `EmptyHeadTailListPattern`、直接の `uncons` は `UnconsEmptyList` を返します。空 String の `uncons` は `UnconsEmptyString` です。
+式位置の `[head, ..tail]` は List 構築です。Pattern 位置の分解とは区別します。空 List の head-tail Pattern と `Kernel::uncons(head, tail)` は、どちらも `EmptyList` を返します。構造的 Pattern の失敗位置は、空になった段の head Pattern です。たとえば `[h1, ..[h2, ..tail]]` に `[1]` を渡すと `h2` を指します。空 String の `uncons` は `UnconsEmptyString` です。
 
 ### HashMap
 

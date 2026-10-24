@@ -1,0 +1,1 @@
+first: (List<Int> -> Result<Int>) = &List::first

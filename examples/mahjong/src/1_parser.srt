@@ -138,7 +138,7 @@ defmod MahjongParser {
 
   def collect_numbers(chunk: String) -> Result<(List<Int>, String), ParseHandError> {
     chars = String::chars(chunk)
-    marker =? List::last(chars) |>= ensure(&_is_marker, ParseHandError("chunk must end with suit marker: " ++ chunk))
+    marker =? Option::ok_or(List::last(chars), ParseHandError("chunk must end with suit marker: " ++ chunk)) |>= ensure(&_is_marker, ParseHandError("chunk must end with suit marker: " ++ chunk))
 
     digit_chars = List::take(chars, List::len(chars) - 1)
     match digit_chars {

@@ -4,7 +4,7 @@
  
 | 欲しいもの | 使うもの | 1 件取り出すと |
 |---|---|---|
-| 終端のある有限列 | `Generator<Item>` | `Result<(Item, Generator<Item>), GeneratorExhausted>` |
+| 終端のある有限列 | `Generator<Item>` | `Option<(Item, Generator<Item>)>` |
 | 終端のない無限列 | `InfiniteGenerator<Item>` | `(Item, InfiniteGenerator<Item>)` |
  
 構築しただけでは値を生成せず、取り出したときに step が評価されます。
@@ -21,12 +21,12 @@ gen = Generator::unfold(1, {|n|
 print(inspect(Generator::to_list(gen)))  # [1, 2, 3]
 ```
  
-- `Generator::next(gen)` は `Ok((値, rest))` か、終端なら `Err(GeneratorExhausted())` を返します。step の終端検出に使う `Option` とは別の契約です。
+- `Generator::next(gen)` は `Option::Some((値, rest))` か、終端なら `Option::None` を返します。
 - `Generator::to_list(gen)` は終端まで生成して list を返します。
 ```surtr
 match Generator::next(Generator::range(10, 12)) {
-  Ok((value, rest)) => print(inspect(value)),  # 10
-  Err(_) => print("end"),
+  Option::Some((value, rest)) => print(inspect(value)),  # 10
+  Option::None => print("end"),
 }
 ```
  

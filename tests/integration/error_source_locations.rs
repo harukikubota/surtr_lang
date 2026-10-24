@@ -350,8 +350,27 @@ fn error_source_location_safebind_selects_the_failing_pattern_node() {
         (
             "empty: List<Int> = []\n  ",
             "[head, ..tail] =? empty",
-            "[head, ..tail]",
-            "EmptyHeadTailListPattern",
+            "head",
+            "EmptyList",
+        ),
+        (
+            "empty: List<Int> = []\n  ",
+            "uncons(head, tail) =? empty",
+            "uncons(head, tail)",
+            "EmptyList",
+        ),
+        ("", "[h1, ..[h2, ..tail]] =? [1]", "h2", "EmptyList"),
+        (
+            "empty: List<Int> = []\n  ",
+            "[h1, ..[h2, ..tail]] =? empty",
+            "h1",
+            "EmptyList",
+        ),
+        (
+            "label = \"猫\"\n  empty: List<Int> = []\n  ",
+            "[head, ..tail] =? empty",
+            "head",
+            "EmptyList",
         ),
         (
             "",
@@ -390,6 +409,8 @@ fn error_source_location_keeps_generation_site_across_result_and_extractor_propa
         ("def main() -> Result<Int> {\n  ext: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|value: Int|\n    11 =? value\n    MatchResult::Ok(value)\n  }\n  ext(found) =? Ok(2)\n  Ok(found)\n}\nmain()\n", "11", "IntLiteralPatternMismatch"),
         ("deferror Rejected { |message: String| message }\ndef main() -> Result<Int> {\n  ext: ExtractorClosure<(Int -> MatchResult<Int>)> = *{|value: Int| MatchResult::Err(Rejected(\"closure\"))}\n  ext(found) =? Ok(2)\n  Ok(found)\n}\nmain()\n", "Rejected(\"closure\")", "Rejected"),
         ("def main() -> Result<Int> {\n  _ =? apply_pattern((2, 3), (_, 11))\n  Ok(0)\n}\nmain()\n", "11", "IntLiteralPatternMismatch"),
+        ("def main() -> Result<Int> {\n  _ =? apply_pattern([1], [h1, ..[_1, ..tail]])\n  Ok(0)\n}\nmain()\n", "_1", "EmptyList"),
+        ("def main() -> Result<Int> {\n  _ =? apply_pattern([], [_1: Int, .._])\n  Ok(0)\n}\nmain()\n", "_1", "EmptyList"),
     ];
     for (source, origin, kind) in cases {
         assert_error_source_location(source, origin, kind);
@@ -561,6 +582,8 @@ fn error_source_location_hash_map_consumers_keep_key_origin() {
 fn error_source_location_lazy_standard_calls_keep_constructor_origin() {
     for source in [
         "require(False, NoneError())",
+        "Option::ok_or(Option<Int>::None, NoneError())",
+        "capture: (Option<Int> -> Result<Int>) = &Option::ok_or(&1, NoneError())\ncapture(Option<Int>::None)",
         "ensure(3, {|_| False}, NoneError())",
         "Result::map_err(Err(ZeroDivisionError()), NoneError())",
         "Result::or_else(Err(ZeroDivisionError()), Err(NoneError()))",
@@ -572,11 +595,18 @@ fn error_source_location_lazy_standard_calls_keep_constructor_origin() {
     }
     for source in [
         "require(False, {|| NoneError()})",
+        "Option::ok_or(Option<Int>::None, {|| NoneError()})",
         "require(False, ({|| NoneError()}))",
         "def make_error() -> Error { NoneError() }\nrequire(False, make_error())",
     ] {
         assert_error_source_location_with_bytecode(source, "NoneError()", "NoneError", true);
     }
+    assert_error_source_location_with_bytecode(
+        "Option::ok_or(Option<Int>::None, EmptyList())",
+        "EmptyList()",
+        "EmptyList",
+        true,
+    );
     for input in ["7", "code"] {
         let payload_source = format!("deferror Rejected(number: Int) {{ |value: Int| Self(message: to_string(value), number: value) }}\ncode = 7\nrequire(False, Rejected({input}))");
         assert_error_source_location_with_bytecode(
@@ -600,6 +630,7 @@ original = build_error()
 prior: Result<Int> = Err(ZeroDivisionError())
 ( original,
   require(False, original),
+  Option::ok_or(Option<Int>::None, original),
   ensure(3, {|_| False}, original),
   Result::map_err(prior, original),
   Result::or_else(prior, Err(original)),

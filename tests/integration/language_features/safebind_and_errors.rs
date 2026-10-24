@@ -66,10 +66,7 @@ fn safebind_list_pattern_plain_list_empty_propagates_empty_list() {
 print("after")"#,
     )
     .expect("Pipeline failed");
-    assert_eq!(
-        stderr,
-        vec!["Error: EmptyHeadTailListPattern: head-tail list pattern requires a non-empty List"]
-    );
+    assert_eq!(stderr, vec!["Error: EmptyList: empty list"]);
 }
 
 fn safebind_string_pattern_empty_propagates_pattern_mismatch() {
@@ -236,10 +233,7 @@ match ret {
 }"#,
     )
     .expect("program should run");
-    assert_eq!(
-        stderr,
-        vec!["Error: EmptyHeadTailListPattern: head-tail list pattern requires a non-empty List"]
-    );
+    assert_eq!(stderr, vec!["Error: EmptyList: empty list"]);
 }
 
 fn safebind_function_early_return_on_err() {
@@ -599,7 +593,7 @@ fn do_extractor_error_is_preserved_in_monad_fail() {
 }
 
 print(inspect(Identity::run(ResultT::run(result))))"#,
-        &["Err(UnconsEmptyList(\"cannot uncons empty list\"))"],
+        &["Err(EmptyList(\"empty list\"))"],
     );
 }
 

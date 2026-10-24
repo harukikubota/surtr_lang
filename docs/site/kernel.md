@@ -44,7 +44,7 @@ xldr(2)>
 - `List` では `(head, tail)`
 - `String` では `(head, tail)`
 
-pattern position の `[head, ..tail]` はこの extractor alias です。
+pattern position の `[head, ..tail]` も先頭と残りを分解します。空 List は構造的 Pattern と named `uncons` のどちらも `EmptyList`、空 String の `uncons` は `UnconsEmptyString` を返します。構造的 Pattern の空入力は、その段の head Pattern を失敗位置にします。
 List と String は適用時に別々の concrete 静的契約として検査されます。runtime primitive は共有しますが、裸の generic target、Union、runtime assertion を surface 型として公開しません。
 
 ## `inspect`

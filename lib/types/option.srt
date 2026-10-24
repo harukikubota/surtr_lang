@@ -66,6 +66,25 @@ impl Option {
   }
 
   @doc """
+  Convert Some to Ok, or return the supplied Error for None.
+  The Lazy error expression is not evaluated for Some and is evaluated once
+  for None. An existing Error retains its message, Payload, cause and location.
+  Use `=?` or `to::<Result>` when the default NoneError is appropriate.
+
+  ## REPL
+  xldr(1)> Option::ok_or(Option::Some(7), NoneError())
+  Ok(7)
+  xldr(2)> Result::is_err(Option::ok_or(Option<Int>::None, EmptyList()))
+  True
+  """
+  def ok_or(value: Option<$T>, err: Lazy<Error>) -> Result<$T> {
+    match value {
+      Option::Some(inner) => Ok(inner),
+      Option::None => Err(err()),
+    }
+  }
+
+  @doc """
   Apply a `Result`-returning mapper to an optional value while preserving both
   layers of control flow.
 

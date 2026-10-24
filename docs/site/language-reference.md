@@ -709,7 +709,7 @@ deferror ZeroModuloError { "modulo by zero" }
 現在の実装には次も含まれます。
 
 ```surtr
-deferror EmptyHeadTailListPattern { "head-tail list pattern requires a non-empty List" }
+deferror EmptyList { "empty list" }
 deferror ListIndexOutOfBounds(index: Int, length: Int) {
   |index: Int, length: Int|
   Self(message: "list index #{index} out of bounds for length #{length}", index, length)

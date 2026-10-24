@@ -493,41 +493,41 @@ impl Int {
     if(sign < 0, 0 - value, value)
   }
 
-  defp _digit_value(ch: String) -> Result<Int> {
+  defp _digit_value(ch: String) -> Option<Int> {
     match String::codepoints(ch, StringEncoding::Ascii) {
       Ok([cp]) => cond {
-        cp >= 48 && cp <= 57 => Ok(cp - 48),
-        cp >= 65 && cp <= 70 => Ok(cp - 55),
-        cp >= 97 && cp <= 102 => Ok(cp - 87),
-        True => Err(NoneError()),
+        cp >= 48 && cp <= 57 => Option::Some(cp - 48),
+        cp >= 65 && cp <= 70 => Option::Some(cp - 55),
+        cp >= 97 && cp <= 102 => Option::Some(cp - 87),
+        True => Option::None,
       },
-      _ => Err(NoneError()),
+      _ => Option::None,
     }
   }
 
   defp _parse_digit_for_base(base: IntBase, ch: String, index: Int) -> Result<Int> {
     radix = IntBase::radix(base)
     match _digit_value(ch) {
-      Ok(value) => if(
+      Option::Some(value) => if(
         value < radix,
         Ok(value),
         Err(IntParseInvalidDigit(base, ch, index)),
       ),
-      Err(_) => Err(IntParseInvalidDigit(base, ch, index)),
+      Option::None => Err(IntParseInvalidDigit(base, ch, index)),
     }
   }
 
   defp _parse_literal_digit_for_base(base: IntBase, ch: String, index: Int) -> Result<Int> {
     radix = IntBase::radix(base)
     match _digit_value(ch) {
-      Ok(value) => if(
+      Option::Some(value) => if(
         value < radix,
         Ok(value),
         Err(
           IntLiteralInvalidDigit(base, ch, index),
         ),
       ),
-      Err(_) => Err(
+      Option::None => Err(
         IntLiteralInvalidDigit(base, ch, index),
       ),
     }
@@ -633,12 +633,12 @@ impl Int {
         ["d", ..body] => _parse_literal_prefixed(body, IntBase::Dec, sign, start_index + 2),
         ["x", ..body] => _parse_literal_prefixed(body, IntBase::Hex, sign, start_index + 2),
         [prefix, .._] => match _digit_value(prefix) {
-          Ok(value) => if(
+          Option::Some(value) => if(
             value < 10,
             _parse_literal_digits_go(chars, IntBase::Dec, 0, start_index, sign),
             Err(IntLiteralUnknownPrefix("0" ++ prefix)),
           ),
-          Err(_) => Err(IntLiteralUnknownPrefix("0" ++ prefix)),
+          Option::None => Err(IntLiteralUnknownPrefix("0" ++ prefix)),
         },
       },
       _ => _parse_literal_digits_go(chars, IntBase::Dec, 0, start_index, sign),

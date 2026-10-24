@@ -212,7 +212,7 @@ where
   OptionT(inner: Ok(Option::Some(7)))
   """
   def lift::<OptionT<$M, $T>>(value: $M<$A>) -> OptionT<$M, $A> {
-    OptionT::new(Functor::fmap(value, {|item| Option::Some(item)}))
+    OptionT::new(Functor::fmap(value, &Option::Some))
   }
 }
 

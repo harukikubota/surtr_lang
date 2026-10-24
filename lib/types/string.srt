@@ -443,7 +443,7 @@ impl String {
   }
 
   defp _lines_non_empty(value: String) -> List<String> {
-    stripped = List::map(split(value, "\n"), {|line| _strip_trailing_cr(line) })
+    stripped = List::map(split(value, "\n"), &_strip_trailing_cr)
     if(ends_with(value, "\n"), _drop_last(stripped), stripped)
   }
 }

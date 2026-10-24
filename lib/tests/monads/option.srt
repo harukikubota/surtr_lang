@@ -3,7 +3,97 @@ import Test;
 def option_pure(value: Int) -> Option<Int> { Applicative::pure(value) }
 def option_step(value: Int) -> Option<Int> { if(value < 10, Option::Some(value + 1), Option::None) }
 
+deferror MissingOption(label: String) {
+  |label: String|
+  Self(message: label, label)
+}
+
+def option_error_probe(label: String) -> Error {
+  print(label)
+  MissingOption(label)
+}
+
+def option_ok_or_forward(value: Option<Int>, err: (-> Error)) -> Result<Int> {
+  Option::ok_or(value, err)
+}
+
+def option_first_in_result(values: List<Int>) -> Result<Int> {
+  do::<Result> {
+    value =? List::first(values)
+    print("continued")
+    Ok(value)
+  }
+}
+
 test("Option") {
+  describe("absence API failures") {
+    it("lets callers select EmptyList or a custom Error") {
+      do {
+        empty: List<Int> = []
+        assert_err_kind(EmptyList, Option::ok_or(List::first(empty), EmptyList()))
+        assert_err_message_eq("empty list", Option::ok_or(List::first(empty), EmptyList()))
+        assert_err_kind(MissingOption, Option::ok_or(List::first(empty), MissingOption("required")))
+      }
+    }
+
+    it("continues Result do for Some and short circuits None with NoneError") {
+      do {
+        assert_ok_eq(7, option_first_in_result([7]))
+        assert_err_kind(NoneError, option_first_in_result([]))
+        assert_stdout_eq(["continued"])
+      }
+    }
+  }
+
+  describe("ok_or") {
+    it("keeps Some without evaluating the error expression") {
+      do {
+        assert_ok_eq(7, Option::ok_or(Option::Some(7), option_error_probe("unexpected")))
+        assert_stdout_eq([])
+      }
+    }
+
+    it("evaluates the None error once and preserves its saved payload") {
+      do {
+        failed = Option::ok_or(Option<Int>::None, option_error_probe("missing"))
+        match failed {
+          Err(MissingOption(label)) => assert_eq("missing", label),
+          _ => fail_test("expected custom absence Error"),
+        }
+        assert_stdout_eq(["missing"])
+      }
+    }
+
+    it("preserves an existing Error message and cause") {
+      do {
+        source = MissingOption("saved")
+        wrapped: Result<Int> = Result::cause(Err(source), ZeroDivisionError())
+        match wrapped {
+          Err(error) => do {
+            converted = Option::ok_or(Option<Int>::None, error)
+            assert_cause_chain([ZeroDivisionError, MissingOption], converted)
+            match converted {
+              Err(saved) => assert_eq(Error::format(error), Error::format(saved)),
+              _ => fail_test("expected preserved Error"),
+            }
+          },
+          _ => fail_test("expected source Error"),
+        }
+      }
+    }
+
+    it("uses existing Lazy normalization for captures and forwarded thunks") {
+      do {
+        convert: (Option<Int>, (-> Error) -> Result<Int>) = &Option::ok_or(&1, &2)
+        assert_ok_eq(4, convert(Option::Some(4), {|| option_error_probe("unexpected capture")}))
+        assert_err_kind(MissingOption, convert(Option::None, {|| option_error_probe("capture")}))
+        assert_ok_eq(5, option_ok_or_forward(Option::Some(5), {|| option_error_probe("unexpected forward")}))
+        assert_err_kind(MissingOption, option_ok_or_forward(Option::None, {|| option_error_probe("forward")}))
+        assert_stdout_eq(["capture", "forward"])
+      }
+    }
+  }
+
   describe("is_some") {
     it("recognizes Some") {
       do {

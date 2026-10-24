@@ -50,7 +50,7 @@ test("Random") {
 
         assert_eq(10, List::len(values))
         assert_eq(values, replayed)
-        assert_ok_eq(first_again, List::first(values))
+        assert_some_eq(first_again, List::first(values))
       }
     }
 

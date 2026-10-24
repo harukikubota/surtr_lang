@@ -146,7 +146,7 @@ defmod Bootstrap {
   left-hand MatchBlock pattern. If it produces `Err(error)`, that value is
   propagated to the current failure target. Extractor `MatchResult::Err(error)`
   preserves the original error. Each literal, pin, or variant mismatch produces its specific Error; structural
-  patterns return their specific errors such as `EmptyHeadTailListPattern` or
+  patterns return their specific errors such as `EmptyList` or
   `ListPatternTooShort`. A MonadFail target preserves that error; a do-local
   Alternative target discards it and returns `empty`.
 

@@ -2434,7 +2434,7 @@ mod tests {
             ),
             ("ListPatternTooShort", vec![Int, Int]),
             ("ListPatternTooLong", vec![Int, Int]),
-            ("EmptyHeadTailListPattern", vec![]),
+            ("EmptyList", vec![]),
             ("PinnedValuePatternMismatch", vec![Str, Str, Str]),
             ("ResultVariantPatternMismatch", vec![Str, Str]),
             ("EnumVariantPatternMismatch", vec![Str, Str, Str]),
@@ -3524,6 +3524,97 @@ mod tests {
                 ..
             }
         )));
+    }
+
+    #[test]
+    fn empty_list_failure_uses_the_head_pattern_source() {
+        let mut gene = Codegen::new();
+        seed_error_definitions(&mut gene);
+        gene.safe_bind_failure_target = Some(SafeBindFailureTarget::TopLevel);
+        gene.state.next_slot = 1;
+        let list_ty = Ty::List(Box::new(Ty::Int));
+        let pattern = TypedPattern::Located(
+            span(1, 20),
+            Box::new(TypedPattern::ListCons(
+                list_ty.clone(),
+                Box::new(TypedPattern::Located(
+                    span(2, 6),
+                    Box::new(TypedPattern::Var(Ty::Int, resolved_id("head", None, 998))),
+                )),
+                Box::new(TypedPattern::Located(
+                    span(10, 14),
+                    Box::new(TypedPattern::Wildcard(list_ty)),
+                )),
+            )),
+        );
+        let fail = gene.fresh_label();
+        gene.emit_pattern_test_from_local_with_mode(
+            &pattern,
+            0,
+            fail,
+            &span(30, 32),
+            super::ExtractorFailurePolicy::Propagate,
+        )
+        .unwrap();
+        gene.patch_label(fail);
+        let (opcodes, _) = gene.finalize().unwrap();
+        assert!(
+            opcodes.iter().any(|opcode| matches!(
+                opcode,
+                Opcode::Call {
+                    fun_idx: 505,
+                    span_start: 2,
+                    span_end: 6,
+                    ..
+                }
+            )),
+            "empty List must fail at its head Pattern"
+        );
+    }
+
+    #[test]
+    fn empty_list_error_assertion_uses_and_requires_the_head_pattern_source() {
+        for located in [true, false] {
+            let mut gene = Codegen::new();
+            seed_error_definitions(&mut gene);
+            let head = TypedMatchPattern::Wildcard;
+            let head = if located {
+                TypedMatchPattern::Located(span(2, 6), Ty::Int, Box::new(head))
+            } else {
+                head
+            };
+            let pattern =
+                TypedMatchPattern::ListCons(Box::new(head), Box::new(TypedMatchPattern::Wildcard));
+            let end = gene.fresh_label();
+            let result = gene.emit_assert_match_failure(
+                &pattern,
+                &Ty::List(Box::new(Ty::Int)),
+                0,
+                &span(1, 20),
+                end,
+            );
+            if !located {
+                let error = result.expect_err("missing head source must fail code generation");
+                assert!(error.message.contains("head Pattern source location"));
+                assert_eq!(error.span, span(1, 20));
+                continue;
+            }
+            result.unwrap();
+            gene.patch_label(end);
+            let (opcodes, _) = gene.finalize().unwrap();
+            assert!(
+                opcodes.iter().any(|opcode| matches!(
+                    opcode,
+                    Opcode::Call {
+                        fun_idx: 505,
+                        span_start: 2,
+                        span_end: 6,
+                        ..
+                    }
+                )),
+                "Error assertion must preserve the head Pattern location"
+            );
+        }
     }
 
     #[test]
@@ -10786,7 +10877,7 @@ impl Codegen {
                 span,
             });
         }
-        self.emit_language_error_call("EmptyHeadTailListPattern", &[], &span)?;
+        self.emit_language_error_call("EmptyList", &[], &span)?;
         self.emit_pattern_failure_from_error_stack(
             span,
             Some(
@@ -10832,8 +10923,17 @@ impl Codegen {
             TypedPattern::ListNil(ty) if matches!(ty, Ty::Str) => {
                 self.emit_literal_pattern_mismatch_failure(pat, value_slot, span, destination)
             }
-            TypedPattern::ListNil(_) | TypedPattern::ListCons(_, _, _) => {
-                self.emit_empty_list_failure("List", span, destination)
+            TypedPattern::ListNil(_) => self.emit_empty_list_failure("List", span, destination),
+            TypedPattern::ListCons(_, head, _) => {
+                let TypedPattern::Located(head_span, _) = head.as_ref() else {
+                    return Err(CodegenError {
+                        message:
+                            "Preserving head-tail consumer requires head Pattern source location"
+                                .into(),
+                        span,
+                    });
+                };
+                self.emit_empty_list_failure("List", head_span.clone(), destination)
             }
             TypedPattern::IntLit(..)
             | TypedPattern::StrLit(..)
@@ -13112,8 +13212,16 @@ impl Codegen {
             TypedMatchPattern::Pin { id, ty, dispatch } => {
                 TypedPattern::Pin(ty.clone(), id.clone(), dispatch.clone())
             }
-            TypedMatchPattern::ListCons(..) => {
-                return self.emit_empty_list_failure("List", source.clone(), destination);
+            TypedMatchPattern::ListCons(head, _) => {
+                let TypedMatchPattern::Located(head_span, _, _) = head.as_ref() else {
+                    return Err(CodegenError {
+                        message:
+                            "Preserving head-tail consumer requires head Pattern source location"
+                                .into(),
+                        span: source.clone(),
+                    });
+                };
+                return self.emit_empty_list_failure("List", head_span.clone(), destination);
             }
             TypedMatchPattern::Constructor { tag, .. } => {
                 return self.emit_constructor_pattern_mismatch_failure(

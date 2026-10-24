@@ -137,7 +137,7 @@ defmod StyledDoc {
   "\u{1b}[1;36msur\u{1b}[0m"
   """
   def style(doc: StyledDocDoc, next: StyledDocStyle) -> StyledDocDoc {
-    StyledDocDoc(List::map(doc.lines, {|line| _style_line(line, next)}))
+    StyledDocDoc(List::map(doc.lines, &_style_line(&1, next)))
   }
 
   @doc """
@@ -279,7 +279,7 @@ defmod StyledDoc {
   }
 
   defp _style_line(line: StyledDocLine, next: StyledDocStyle) -> StyledDocLine {
-    StyledDocLine(List::map(line.segments, {|segment| _style_segment(segment, next)}))
+    StyledDocLine(List::map(line.segments, &_style_segment(&1, next)))
   }
 
   defp _style_with_fg(doc: StyledDocDoc, color: StyledDocColor) -> StyledDocDoc {

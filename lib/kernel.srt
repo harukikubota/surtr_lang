@@ -452,14 +452,14 @@ defmod Kernel {
   the String contract while sharing the same runtime primitive.
 
   In pattern position, `[head, ..tail]` expresses the same head/tail decomposition.
-  A structural List pattern has its own failure Error: empty head/tail input
-  gives `EmptyHeadTailListPattern`, whereas direct `uncons(head, tail)` gives
-  `UnconsEmptyList` or `UnconsEmptyString`.
+  Empty List input gives the shared `EmptyList` Error in both structural
+  head/tail patterns and direct `uncons(head, tail)`. Structural patterns use
+  the failing head pattern span; named `uncons` keeps its application span.
   Expression position keeps list construction semantics, so `["t", ..source]`
   is still a list expression.
 
   Empty input to `uncons` returns `MatchResult::Err` with
-  `UnconsEmptyList("cannot uncons empty list")` or
+  `EmptyList("empty list")` or
   `UnconsEmptyString("cannot uncons empty string")`.
   Branch consumers treat this as no match; `=?` preserves the Error.
 

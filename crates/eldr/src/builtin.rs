@@ -4719,7 +4719,7 @@ fn builtin_uncons(vm: &mut VM, args: Vec<Value>) -> Result<BuiltinOutcome, Runti
                     .ok_or_else(|| RuntimeError::new("non-empty list has no tail"))?;
                 Ok(Value::Tuple(vec![head, Value::List(tail)]))
             }
-            None => Err("UnconsEmptyList"),
+            None => Err("EmptyList"),
         },
         [Value::Str(value)] => {
             let mut chars = value.chars();
@@ -5247,7 +5247,7 @@ mod tests {
         };
         vm.install_test_error_constructor("ZeroDivisionError", vec![], "division by zero");
         vm.install_test_error_constructor("ZeroModuloError", vec![], "modulo by zero");
-        vm.install_test_error_constructor("UnconsEmptyList", vec![], "cannot uncons empty list");
+        vm.install_test_error_constructor("EmptyList", vec![], "empty list");
         vm.install_test_error_constructor(
             "UnconsEmptyString",
             vec![],
@@ -5980,7 +5980,7 @@ mod tests {
             Value::Str(String::new()),
         ] {
             let (kind, message) = if matches!(input, Value::List(_)) {
-                ("Global::UnconsEmptyList", "cannot uncons empty list")
+                ("Global::EmptyList", "empty list")
             } else {
                 ("Global::UnconsEmptyString", "cannot uncons empty string")
             };

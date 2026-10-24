@@ -84,8 +84,8 @@ test("Regex") {
         matches = Regex::find_all(re, "a12b3")
 
         assert_eq(2, List::len(matches))
-        first <- List::first(matches)
-        last <- List::last(matches)
+        first =? List::first(matches)
+        last =? List::last(matches)
         assert_eq("12", RegexMatch::text(first))
         assert_eq(1, RegexMatch::start(first))
         assert_eq(3, RegexMatch::end(first))

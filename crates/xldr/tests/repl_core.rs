@@ -733,8 +733,8 @@ fn core_eldr_restore_preserves_error_sources_when_new_chunks_are_added() {
         .expect("saved definition source must exist")
         .clone();
     let mut restored = ReplEngine::from_eldr(&bytes).expect("snapshot must restore");
-    let fresh = restored.handle_line("Err(EmptyHeadTailListPattern())");
-    assert_repl_error_origin(&fresh, 1, 5, "Err(EmptyHeadTailListPattern())");
+    let fresh = restored.handle_line("Err(EmptyList())");
+    assert_repl_error_origin(&fresh, 1, 5, "Err(EmptyList())");
     let saved = restored.handle_line(&format!(":save {}", second_path.display()));
     assert!(rendered_text(&saved).contains("saved to"));
     let updated =
@@ -747,7 +747,7 @@ fn core_eldr_restore_preserves_error_sources_when_new_chunks_are_added() {
     let fresh_source = updated
         .sources
         .iter()
-        .find(|source| source.text.as_deref() == Some("Err(EmptyHeadTailListPattern())\n"))
+        .find(|source| source.text.as_deref() == Some("Err(EmptyList())\n"))
         .expect("new input source must exist");
     assert_ne!(fresh_source.source_id, saved_source.source_id);
     assert_ne!(fresh_source.path, saved_source.path);

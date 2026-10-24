@@ -142,7 +142,7 @@ where
   $M: Monad
 {
   def lift::<ResultT<$M, $T, Error>>(value: $M<$A>) -> ResultT<$M, $A, Error> {
-    ResultT::new(Functor::fmap(value, {|item| Ok(item)}))
+    ResultT::new(Functor::fmap(value, &Ok))
   }
 }
 

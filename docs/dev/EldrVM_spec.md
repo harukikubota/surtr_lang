@@ -90,7 +90,7 @@ Extractor の返却は canonical `MatchResult::Ok` / `MatchResult::Err` の enum
 field 0 は variant discriminant、field 1 は payload とし、Err payload は runtime Error 値である。
 `GetTag` / `GetField` は canonical MatchResult の field 数・discriminant・Err payload を検査し、
 不正な表現を VM error にする。`Kernel::uncons` は通常 builtin として List / String を分解し、
-空 List の `UnconsEmptyList` / 空 String の `UnconsEmptyString` と元の source location を返す。Scar までに List と String の
+空 List の `EmptyList`（`empty list`）/ 空 String の `UnconsEmptyString` と元の source location を返す。Scar までに List と String の
 concrete 静的契約を選択済みとし、Eldr が generic target や Union の型判定を提供するものではない。
 同じ runtime primitive を共有しても consumer 側は型検査済み contract を受け取り、元 Error を保持または破棄する。
 
@@ -405,10 +405,10 @@ worker set は表 index と entry を共有し、変更対象 entry だけを独
 無限の producer は `Unfold { state, step }` を持つ。両方とも生成と List の取得を担当し、取得後の変換・選別・集計は List モジュールに任せる。
 
 - 有限の unfold step は `State -> Option<(Item, State)>`。`None` だけが正常終端で、item 自体の `Result` / `Option` はデータとして保つ。
-- private な有限 pull builtin `gen_step` は `Option<(Item, Generator<Item>)>` を返す。公開 `Generator::next` は標準定義でこれを `Ok((item, rest))` / `Err(GeneratorExhausted())` に変換する。step の終端 protocol と公開 API の戻り値は別の契約とする。
+- private な有限 pull builtin `gen_step` と公開 `Generator::next` は `Option<(Item, Generator<Item>)>` を返す。成功は `Some((item, rest))`、正常終端は `None` とする。
 - 無限の unfold step は `State -> (Item, State)`。`InfiniteGenerator::next` は `(Item, InfiniteGenerator<Item>)` を直接返す。
 - handle は不変で、構築や opaque 表示では step を呼ばない。進行は返された rest を使う。同じ handle を新しい呼出しで再利用すると、保存 state から再評価する。
-- take 系は `(List<Item>, rest)` を返す。非正 count は無評価で、要求件数の次を先読みしない。有限終端を実際に観測した rest は Terminal とし、公開 next は callback を呼ばず `Err(GeneratorExhausted())` を返す。
+- take 系は `(List<Item>, rest)` を返す。非正 count は無評価で、要求件数の次を先読みしない。有限終端を実際に観測した rest は Terminal とし、公開 next は callback を呼ばず `None` を返す。
 - 条件停止した item は List に含めず、その生成前の handle を rest とする。再利用ではその位置を再評価する。step の RuntimeError や不正 carrier を終端や途中までの成功 List に変換しない。
 - callback、条件判定、List への一件追加は共通の builtin continuation と VM 予算で進める。一回の取得の中断・再開で callback を重複実行しない。通常の切替えでは状態を移動し、checkpoint は独立した状態を保持する。
 - materializeはflat_mapと同じprivate `ListBuilder` と完成継続を使う。独占segmentは最大256要素のPacked chunk、共有segmentはConsを作り、結果はCons/Packedの組合せ、空はEmptyになる。完成途中の保存と再開でstepやpredicateを呼び直さず、take系のrestも維持する。巨大なcountの初期予約容量を制限しても、BigIntの要求件数と結果は切り詰めない。

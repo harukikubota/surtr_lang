@@ -199,6 +199,20 @@ test("Int") {
         assert_ok_eq(-255, parse_hex("-ff"))
       }
     }
+    it("accepts only ASCII hexadecimal digits and preserves rejected input") {
+      do {
+        assert_ok_eq(11259375, parse_hex("aBcDeF"))
+        match parse_hex("1Ｇ") {
+          Err(IntParseInvalidDigit(base, digit, index)) => do {
+            assert_eq("hexadecimal", IntBase::label(base))
+            assert_eq("Ｇ", digit)
+            assert_eq(1, index)
+          },
+          _ => fail_test("expected the original non-ASCII digit payload"),
+        }
+      }
+    }
+
     it("rejects prefixed input") {
       do {
         result = parse_hex("0xff")
@@ -290,6 +304,24 @@ test("Int") {
 
         assert_err_kind(IntLiteralUnknownPrefix, result)
         assert_err_contains("unknown integer base prefix: 0q", result)
+      }
+    }
+
+    it("preserves invalid digits and unknown prefix payloads") {
+      do {
+        match parse_literal("-0x1g") {
+          Err(IntLiteralInvalidDigit(base, digit, index)) => do {
+            assert_eq("hexadecimal", IntBase::label(base))
+            assert_eq("g", digit)
+            assert_eq(4, index)
+          },
+          _ => fail_test("expected the original literal digit payload"),
+        }
+        match parse_literal("0Ｇ") {
+          Err(IntLiteralUnknownPrefix(prefix)) => assert_eq("0Ｇ", prefix),
+          _ => fail_test("expected the original non-ASCII prefix payload"),
+        }
+        assert_ok_eq(12, parse_literal("012"))
       }
     }
 

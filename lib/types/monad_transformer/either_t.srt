@@ -289,7 +289,7 @@ where
   EitherT(inner: Identity(value: Either::Right(7)))
   """
   def lift::<EitherT<$L, $M, $T>>(value: $M<$A>) -> EitherT<$L, $M, $A> {
-    EitherT::new(Functor::fmap(value, {|item| Either::Right(item)}))
+    EitherT::new(Functor::fmap(value, &Either::Right))
   }
 }
 

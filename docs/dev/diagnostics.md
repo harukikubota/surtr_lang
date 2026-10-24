@@ -84,6 +84,8 @@ include 文全体とし、拒否された宣言、または衝突する双方の
 
 EnumError の所属・Other 不在・不正な Error 位置・外側項目の非網羅性・Trait / derive 禁止は、検査責務を持つフェーズで元の宣言 identity と入力 span を保持して診断する。Other を名前解決失敗や内部不整合の fallback として使わない。拒否は Ariadne の主ラベルで修正箇所と理由を示し、副ラベルで参照した集合型の宣言や所属条件を示す。案内は型定義から導出し、所属・変換・返却・網羅性の拒否テストで両ラベルの指す位置を確認する。
 
+構造的 head-tail Pattern の空 List は `EmptyList`（`empty list`）を返し、診断の主位置と Error の生成位置を、その段の head Pattern の span に揃える。`[h1, ..[h2, ..tail]]` に `[1]` を渡すと `h2`、外側が空なら `h1` を指す。named `uncons` の適用位置、固定長 Pattern の不一致と子 Pattern の失敗位置は維持する。`apply_pattern` で保持した Error も同じ位置を使う。
+
 ## 具象エラー定義の総称型
 
 Scar は具象エラー定義の保存 Payload とメッセージコンストラクタ引数にある型変数を、`GenericTypeInErrorDefinition` で拒否する。primary span は型変数の位置とし、container・tuple・関数型の内部も検査する。構造化された policy data は型変数名と宣言位置の区分（`payload` / `message_constructor_input`）を保持する。message は両宣言位置で総称型を使えないことを伝え、具体型の指定と呼び出し元での前処理を help に示す。未知の通常型名は既存診断を維持する。

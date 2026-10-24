@@ -35,6 +35,14 @@ impl Eq for EqByValue {
   }
 }
 
+impl Compare for EqByValue {
+  def compare(self: Self, rhs: Self) -> Ordering {
+    left_description = self.description
+    print("compare=#{left_description}:#{rhs.description}")
+    Compare::compare(self.value, rhs.value)
+  }
+}
+
 
 test("List") {
   describe("cons") {
@@ -71,15 +79,15 @@ test("List") {
   describe("first") {
     it("returns the first element") {
       do {
-        assert_ok_eq(1, List::first([1, 2, 3]))
+        assert_some_eq(1, List::first([1, 2, 3]))
       }
     }
 
-    it("returns ListFirstEmpty for empty input") {
+    it("returns None for empty input") {
       do {
         empty: List<Int> = []
 
-        assert_err_kind(ListFirstEmpty, List::first(empty))
+        assert_none(List::first(empty))
       }
     }
 
@@ -88,15 +96,15 @@ test("List") {
   describe("last") {
     it("returns the last element") {
       do {
-        assert_ok_eq(3, List::last([1, 2, 3]))
+        assert_some_eq(3, List::last([1, 2, 3]))
       }
     }
 
-    it("returns ListLastEmpty for empty input") {
+    it("returns None for empty input") {
       do {
         empty: List<Int> = []
 
-        assert_err_kind(ListLastEmpty, List::last(empty))
+        assert_none(List::last(empty))
       }
     }
 
@@ -311,16 +319,16 @@ test("List") {
       do {
         actual = List::find([1, 2, 3], {|x| print("visit=#{x}"); x > 1})
 
-        assert_ok_eq(2, actual)
+        assert_some_eq(2, actual)
         assert_stdout_eq(["visit=1", "visit=2"])
       }
     }
 
-    it("returns ListFindNoMatch when no callback succeeds") {
+    it("returns None when no callback succeeds") {
       do {
         actual = List::find([0, 1], {|x| x > 1})
 
-        assert_err_kind(ListFindNoMatch, actual)
+        assert_none(actual)
       }
     }
 
@@ -329,7 +337,7 @@ test("List") {
         empty: List<Int> = []
         actual = List::find(empty, {|x| print("unexpected"); x > 1})
 
-        assert_err_kind(ListFindNoMatch, actual)
+        assert_none(actual)
         assert_stdout_eq([])
       }
     }
@@ -341,16 +349,16 @@ test("List") {
       do {
         actual = List::find_map([1, 2, 3], {|x| print("visit=#{x}"); if(x > 1, Option::Some(x * 10), Option::None)})
 
-        assert_ok_eq(20, actual)
+        assert_some_eq(20, actual)
         assert_stdout_eq(["visit=1", "visit=2"])
       }
     }
 
-    it("returns ListFindMapNoValue when every callback returns None") {
+    it("returns None when every callback returns None") {
       do {
         actual = List::find_map([0, 1], {|x| print("visit=#{x}"); if(x > 1, Option::Some(x * 10), Option::None)})
 
-        assert_err_kind(ListFindMapNoValue, actual)
+        assert_none(actual)
         assert_stdout_eq(["visit=0", "visit=1"])
       }
     }
@@ -360,7 +368,7 @@ test("List") {
         empty: List<Int> = []
         actual = List::find_map(empty, {|x| print("unexpected"); if(x > 1, Option::Some(x * 10), Option::None)})
 
-        assert_err_kind(ListFindMapNoValue, actual)
+        assert_none(actual)
         assert_stdout_eq([])
       }
     }
@@ -550,15 +558,15 @@ test("List") {
   describe("min") {
     it("selects the bound") {
       do {
-        assert_ok_eq(1, List::min([3, 1, 4, 2]))
+        assert_some_eq(1, List::min([3, 1, 4, 2]))
       }
     }
 
-    it("rejects empty input") {
+    it("returns None for empty input") {
       do {
         empty: List<Int> = []
 
-        assert_err_kind(ListMinimumEmpty, List::min(empty))
+        assert_none(List::min(empty))
       }
     }
 
@@ -567,15 +575,15 @@ test("List") {
   describe("max") {
     it("selects the bound") {
       do {
-        assert_ok_eq(4, List::max([3, 1, 4, 2]))
+        assert_some_eq(4, List::max([3, 1, 4, 2]))
       }
     }
 
-    it("rejects empty input") {
+    it("returns None for empty input") {
       do {
         empty: List<Int> = []
 
-        assert_err_kind(ListMaximumEmpty, List::max(empty))
+        assert_none(List::max(empty))
       }
     }
 
@@ -584,7 +592,7 @@ test("List") {
   describe("min_max") {
     it("returns both bounds") {
       do {
-        (minimum, maximum) <- List::min_max([3, 1, 4, 2])
+        (minimum, maximum) =? List::min_max([3, 1, 4, 2])
 
         assert_eq(1, minimum)
         assert_eq(4, maximum)
@@ -593,7 +601,7 @@ test("List") {
 
     it("uses a singleton for both bounds") {
       do {
-        (minimum, maximum) <- List::min_max([7])
+        (minimum, maximum) =? List::min_max([7])
 
         assert_eq(7, minimum)
         assert_eq(7, maximum)
@@ -602,18 +610,43 @@ test("List") {
 
     it("handles duplicates") {
       do {
-        (minimum, maximum) <- List::min_max([2, 2, 1, 2])
+        (minimum, maximum) =? List::min_max([2, 2, 1, 2])
 
         assert_eq(1, minimum)
         assert_eq(2, maximum)
       }
     }
 
-    it("rejects empty input") {
+    it("keeps the first equal bounds and compares in input order") {
+      do {
+        values = [EqByValue(2, "first"), EqByValue(2, "second"), EqByValue(2, "third")]
+        (minimum, maximum) =? List::min_max(values)
+
+        assert_eq("first", minimum.description)
+        assert_eq("first", maximum.description)
+        assert_stdout_eq(["compare=second:first", "compare=second:first", "compare=third:first", "compare=third:first"])
+      }
+    }
+
+    it("does not compare empty or singleton input") {
+      do {
+        empty: List<EqByValue> = []
+        assert_none(List::min(empty))
+        assert_none(List::max(empty))
+        assert_none(List::min_max(empty))
+        (minimum, maximum) =? List::min_max([EqByValue(7, "only")])
+
+        assert_eq("only", minimum.description)
+        assert_eq("only", maximum.description)
+        assert_stdout_eq([])
+      }
+    }
+
+    it("returns None for empty input") {
       do {
         empty: List<Int> = []
 
-        assert_err_kind(ListMinMaxEmpty, List::min_max(empty))
+        assert_none(List::min_max(empty))
       }
     }
 
@@ -622,21 +655,22 @@ test("List") {
   describe("min_by") {
     it("uses the provided comparator") {
       do {
-        assert_ok_eq("a", List::min_by(["ab", "a", "abcd"], {|a, b| Compare::compare(String::len(a), String::len(b))}))
+        assert_some_eq("a", List::min_by(["ab", "a", "abcd"], {|a, b| Compare::compare(String::len(a), String::len(b))}))
       }
     }
 
     it("keeps the first equal item") {
       do {
-        assert_ok_eq("ab", List::min_by(["ab", "cd"], {|a, b| Compare::compare(String::len(a), String::len(b))}))
+        assert_some_eq("ab", List::min_by(["ab", "cd"], {|a, b| Compare::compare(String::len(a), String::len(b))}))
       }
     }
 
-    it("rejects empty input") {
+    it("returns None for empty input") {
       do {
         empty: List<Int> = []
 
-        assert_err_kind(ListMinimumEmpty, List::min_by(empty, &Compare::compare))
+        assert_none(List::min_by(empty, {|left, right| print("unexpected"); Compare::compare(left, right)}))
+        assert_stdout_eq([])
       }
     }
 
@@ -645,21 +679,22 @@ test("List") {
   describe("max_by") {
     it("uses the provided comparator") {
       do {
-        assert_ok_eq("abcd", List::max_by(["ab", "a", "abcd"], {|a, b| Compare::compare(String::len(a), String::len(b))}))
+        assert_some_eq("abcd", List::max_by(["ab", "a", "abcd"], {|a, b| Compare::compare(String::len(a), String::len(b))}))
       }
     }
 
     it("keeps the first equal item") {
       do {
-        assert_ok_eq("ab", List::max_by(["ab", "cd"], {|a, b| Compare::compare(String::len(a), String::len(b))}))
+        assert_some_eq("ab", List::max_by(["ab", "cd"], {|a, b| Compare::compare(String::len(a), String::len(b))}))
       }
     }
 
-    it("rejects empty input") {
+    it("returns None for empty input") {
       do {
         empty: List<Int> = []
 
-        assert_err_kind(ListMaximumEmpty, List::max_by(empty, &Compare::compare))
+        assert_none(List::max_by(empty, {|left, right| print("unexpected"); Compare::compare(left, right)}))
+        assert_stdout_eq([])
       }
     }
 

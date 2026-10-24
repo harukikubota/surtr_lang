@@ -1,0 +1,7 @@
+def first_result(values: List<Int>) -> Result<Int> {
+  do::<Result> {
+    value <- List::first(values)
+    Ok(value)
+  }
+}
+print(inspect(first_result([1])))

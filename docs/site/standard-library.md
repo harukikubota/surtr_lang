@@ -262,12 +262,12 @@ impl String {
 
 ```surtr
 List::cons(1, [])     # => [1]
-List::first([1, 2])   # => Ok(1)
+List::first([1, 2])   # => Option::Some(1)
 List::len([1, 2, 3])  # => 3
 ```
 
 - `List::cons` は先頭への prepend
-- `List::first` は `Result` で先頭要素を返す
+- `List::first` は `Option` で先頭要素を返し、空なら `None`
 - `List::len` は O(1) 契約を保つ core helper
 - `[]` は Nil 側の単位元として扱う
 - `List` は先頭からの逐次処理と pattern 分解を主用途にする

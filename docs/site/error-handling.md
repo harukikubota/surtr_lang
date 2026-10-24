@@ -288,29 +288,34 @@ wrap: (Int -> Result<Int>) = &Ok
 `err = Err(NoneError())` のような失敗値は成功型の多相性を保持します。
 具象 error constructor と `Err` は通常の capture を使えます。詳細は [constructor capture](./capture-operator.md#result-と-boolean) を参照してください。
 
-## `Result` が標準、`Option` は別コンテナ
+## 欠如は `Option`、失敗は `Result`
 
-Surtr では optional value も、まず `Result` で扱うのが基本です。  
-特に「値がない」を recoverable failure として扱うときは `Err(NoneError())` を使います。
-
-```surtr
-def first_or_error(xs: List<Int>) -> Result<Int> {
-  List::first(xs)
-}
-```
-
-この種の API は、利用者視点では `Option<T>` ではなく
-`Result<T, ListFirstEmpty>` を返す失敗 API として読むのが自然です。
+値がないことだけを表す取得 API は `Option` を返します。
 
 ```surtr
 match List::first([10, 20, 30]) {
-  Ok(value) => to_string(value),
-  Err(ListFirstEmpty) => "empty",
-  Err(err) => inspect(err),
+  Option::Some(value) => to_string(value),
+  Option::None => "empty",
 }
 ```
 
-`Option` 自体を値表現として使う場面はありますが、早期リターンや関数演算子の主軸は `Result` です。
+欠如をエラーにする場合は、`Option::ok_or` で返す Error を選べます。
+既存の Error を渡した場合も、その情報を保持します。
+
+```surtr
+def first_or_error(xs: List<Int>) -> Result<Int> {
+  Option::ok_or(List::first(xs), EmptyList())
+}
+```
+
+`=?` で直接取り出すこともできます。`None` は `NoneError` となり、現在の失敗先に返されます。
+
+```surtr
+def first_or_none_error(xs: List<Int>) -> Result<Int> {
+  value =? List::first(xs)
+  Ok(value)
+}
+```
 
 ## `match` で処理する
 
@@ -395,7 +400,7 @@ def require_head(target: Result<List<Int>>) -> Result<Int> {
 
 `require_head(Err(NoneError()))` は RHS の元 Error を返します。
 `require_head(Ok([]))` は RHS が成功した後、LHS の `uncons` による
-`UnconsEmptyList` を返します。
+`EmptyList` を返します。
 
 `Error` 自体は通常値なので、`value =? Ok(error)` は Error を束縛して続行します。
 SafeBind は成功値の中にある Error を失敗へ変えません。

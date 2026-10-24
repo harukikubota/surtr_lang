@@ -452,7 +452,9 @@ catch-all がない場合、Boolean / Result / enum は外側の variant、List 
 
 ## sequence 分解の失敗 Error
 
-`[head, ..tail]` と `Kernel::uncons(head, tail)` は同じ head / tail の分解を表すが、list の構造的 Pattern と named Extractor の実行経路は区別する。空 List の構造的 head-tail Pattern は `EmptyHeadTailListPattern`、固定長 List の長さ不一致は `ListPatternTooShort` / `ListPatternTooLong` を使う。直接 `uncons` を適用した空 List / String は `UnconsEmptyList` / `UnconsEmptyString` を保持する。分岐 consumer はこれらを不一致として扱い、保持 consumer は各経路の Error をそのまま返す。分解の説明で用いる alias は Error の同一性まで意味しない。
+`[head, ..tail]` と `Kernel::uncons(head, tail)` は同じ head / tail の分解を表す。構造的 Pattern と named Extractor の実行経路は区別するが、空 List の失敗には同じ canonical Error `EmptyList`（message: `empty list`、空 Payload）を使う。空 String の `uncons` は `UnconsEmptyString`、固定長 List の長さ不一致は `ListPatternTooShort` / `ListPatternTooLong` とその Payload を維持する。分岐 consumer は不一致を破棄し、保持 consumer は元 Error を返す。
+
+構造的 head-tail が空 List に到達したときは、その段の head Pattern の span を Error の生成位置と診断の主位置にする。`[h, ..tail]` なら `h`、`[h1, ..[h2, ..tail]]` に `[1]` を渡した場合は `h2`、外側から空なら `h1` を指す。head が複合 Pattern ならその既存 span を使う。直接の named `uncons` は既存の Extractor application の位置を使い、空入力以外の子 Pattern の失敗はその子の Error と位置を保持する。
 
 ## MatchResult 本文内の SafeBind
 

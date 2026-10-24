@@ -1,0 +1,1 @@
+step: (Generator<Int> -> Result<(Int, Generator<Int>)>) = &Generator::next
