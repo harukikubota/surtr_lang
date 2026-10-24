@@ -1,4 +1,11 @@
 use super::*;
+use diagnostics::TypeDiagnosticReason;
+
+pub(super) struct SafeBindWholeInputContext {
+    pub rhs_ty: Ty,
+    pub rhs_span: Span,
+    pub operator_span: Span,
+}
 
 /// The requirement at the Pattern boundary; no child Pattern participates.
 enum SafeBindInputRequirement {
@@ -9,6 +16,71 @@ enum SafeBindInputRequirement {
 }
 
 impl Checker {
+    pub(super) fn safebind_whole_input_error(
+        &mut self,
+        context: Option<&SafeBindWholeInputContext>,
+        expected: &Ty,
+        payload: &Ty,
+        error: TypeError,
+    ) -> TypeError {
+        let Some(context) = context else {
+            return error;
+        };
+        match self.with_type_relation_probe(&[expected, &context.rhs_ty], |checker| {
+            checker
+                .types_compatible(expected, &context.rhs_ty)
+                .map(|accepts| accepts.then(|| checker.resolve_ty(expected)))
+        }) {
+            Ok(None) => error,
+            Err(error) => error,
+            Ok(Some(expected)) => TypeError::from_structured(diagnostics::StructuredDiagnostic {
+                reason: TypeDiagnosticReason::SafeBindWholeInputAfterExtraction.into(),
+                origin: diagnostics::DiagnosticOrigin::Intrinsic,
+                data: diagnostics::DiagnosticData::SafeBindExtraction(
+                    diagnostics::SafeBindExtractionData {
+                        rhs_type: self.diagnostic_ty_name(&context.rhs_ty),
+                        payload_type: self.diagnostic_ty_name(payload),
+                        lhs_input: self.diagnostic_ty_name(&expected),
+                        extractor_capability: "satisfied".into(),
+                    },
+                ),
+                primary: self.type_fact(diagnostics::SourceRole::Pattern, &error.span, &expected),
+                related: vec![
+                    self.type_fact(
+                        diagnostics::SourceRole::Value,
+                        &context.rhs_span,
+                        &context.rhs_ty,
+                    ),
+                    diagnostics::SourceFact::untyped(
+                        diagnostics::SourceRole::Other,
+                        diagnostics::SourceId(0),
+                        context.operator_span.clone(),
+                    ),
+                ],
+                remediation: None,
+            }),
+        }
+    }
+
+    pub(super) fn safebind_constructor_input_error(
+        &mut self,
+        context: Option<&SafeBindWholeInputContext>,
+        constructor: &ResolvedId,
+        payload: &Ty,
+        error: TypeError,
+    ) -> TypeError {
+        if context.is_none() {
+            return error;
+        }
+        let Some(variant) = self.lookup_enum_variant_by_constructor_id(constructor.unique_id)
+        else {
+            return self
+                .typecheck_invariant_error("resolved enum pattern constructor", &constructor.span);
+        };
+        let variant = self.instantiate_enum_variant(&variant.clone());
+        self.safebind_whole_input_error(context, &variant.enum_ty, payload, error)
+    }
+
     /// Classify only the direct Pattern input. Children are checked once by the
     /// ordinary Pattern path, never speculatively against a different input.
     pub(super) fn safebind_missing_extraction_input(

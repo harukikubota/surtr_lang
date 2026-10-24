@@ -1828,9 +1828,7 @@ fn safebind_top_ok_pattern_requires_nested_result_rhs() {
 Ok(num) =? value"#,
     );
     let err = typecheck(resolved).expect_err("typecheck should fail");
-    assert!(err
-        .message
-        .contains("Constructor pattern requires an enum or Result RHS"));
+    assert_eq!(err.reason(), Some(diagnostics::TypeDiagnosticReason::SafeBindWholeInputAfterExtraction));
 }
 
 fn safebind_top_ok_pattern_accepts_nested_result_rhs() {

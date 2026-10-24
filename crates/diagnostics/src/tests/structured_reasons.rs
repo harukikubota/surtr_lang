@@ -167,6 +167,14 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
                 extractor_capability: "unsatisfied".into(),
             })
         }
+        SafeBindWholeInputAfterExtraction => {
+            DiagnosticData::SafeBindExtraction(SafeBindExtractionData {
+                rhs_type: "Result<Int>".into(),
+                payload_type: "Int".into(),
+                lhs_input: "Result<Int>".into(),
+                extractor_capability: "satisfied".into(),
+            })
+        }
         PatternTypeMismatch | ExtractorInputTypeMismatch => {
             DiagnosticData::Pattern(PatternDiagnosticData {
                 pattern_kind: PatternKind::Variable,
@@ -446,6 +454,7 @@ fn every_common_reason_has_a_typed_template_and_schema() {
         CondBranchTypeMismatch,
         SafeBindTotalPatternNonExtractingRhs,
         SafeBindMissingMonadExtractor,
+        SafeBindWholeInputAfterExtraction,
         PatternTypeMismatch,
         PatternShapeMismatch,
         PatternArityMismatch,
@@ -716,6 +725,81 @@ fn missing_extractor_diagnostic_limits_its_promise_to_the_input() {
         .as_deref()
         .unwrap()
         .contains("checked against the Pattern separately"));
+}
+
+#[test]
+fn whole_input_after_extraction_explains_types_and_preserves_structured_facts() {
+    let reason: TypeDiagnosticReason =
+        serde_json::from_str("\"SafeBindWholeInputAfterExtraction\"")
+            .expect("stable SafeBind whole-input reason");
+    let mut diagnostic = input(TypeDiagnosticReason::SafeBindMissingMonadExtractor);
+    diagnostic.reason = reason.into();
+    diagnostic.data = DiagnosticData::SafeBindExtraction(SafeBindExtractionData {
+        rhs_type: "Option<Int>".into(),
+        payload_type: "Int".into(),
+        lhs_input: "Option<Int>".into(),
+        extractor_capability: "satisfied".into(),
+    });
+    diagnostic.primary = SourceFact::typed(
+        SourceRole::Pattern,
+        SourceId(0),
+        Span { start: 0, end: 12 },
+        "Option<Int>",
+    );
+    diagnostic.related = vec![
+        SourceFact::typed(
+            SourceRole::Value,
+            SourceId(0),
+            Span { start: 19, end: 34 },
+            "Option<Int>",
+        ),
+        SourceFact::untyped(SourceRole::Other, SourceId(0), Span { start: 16, end: 18 }),
+    ];
+    let mut spec = structured_type_error_spec(&diagnostic);
+    assert!(
+        spec.message.contains("MonadExtractor::extract"),
+        "{}",
+        spec.message
+    );
+    assert!(spec.message.contains("Option<Int>"));
+    assert!(spec.message.contains("Int"));
+    assert!(spec.labels[0].message.contains("requires Option<Int>"));
+    assert!(spec.labels[0].message.contains("receives Int"));
+    assert_eq!(spec.labels[1].message, "Original RHS: Option<Int>");
+    assert_eq!(spec.labels[2].message, "SafeBind operator");
+    assert_eq!(
+        spec.help.as_deref(),
+        Some("Wrap the RHS in `Ok(...)` to match the original whole value.")
+    );
+    assert!(!spec.message.contains("Implement MonadExtractor"));
+    let mut sources = SourceRegistry::new();
+    let source_id = sources.register("main.srt", "Option::Some(x)  =? Option::Some(1)");
+    let human = render_error_by_id(&sources, source_id, &spec);
+    assert!(human.contains("MonadExtractor::extract"), "{human}");
+    assert!(human.contains("Ok(...)"), "{human}");
+    let before = serializable_report_by_id(&sources, source_id, "typecheck", &spec)
+        .errors
+        .remove(0);
+    assert_eq!(
+        before.reason.as_deref(),
+        Some("SafeBindWholeInputAfterExtraction")
+    );
+    assert_eq!(before.data["rhs_type"], "Option<Int>");
+    assert_eq!(before.data["payload_type"], "Int");
+    assert_eq!(before.data["lhs_input"], "Option<Int>");
+    assert_eq!(before.data["extractor_capability"], "satisfied");
+    assert!(before.related.iter().any(|fact| fact.role == "value"));
+    assert!(before.related.iter().any(|fact| fact.role == "other"));
+    spec.message = "arbitrary display text".into();
+    spec.labels
+        .iter_mut()
+        .for_each(|label| label.message = "arbitrary caption".into());
+    let after = serializable_report_by_id(&sources, source_id, "typecheck", &spec)
+        .errors
+        .remove(0);
+    assert_eq!(before.reason, after.reason);
+    assert_eq!(before.data, after.data);
+    assert_eq!(before.related, after.related);
 }
 
 #[test]

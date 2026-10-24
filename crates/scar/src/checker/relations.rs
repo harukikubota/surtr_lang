@@ -11,6 +11,7 @@ struct TypeRelationCheckpoint {
     tyvar_bounds: Vec<(u32, Option<Vec<String>>)>,
     process_marker_tyvars: Vec<(u32, bool)>,
     pending_trait_obligations: Vec<(u32, Option<Vec<PendingTraitObligation>>)>,
+    constructor_witness_traits: Vec<(u32, Option<String>)>,
 }
 
 impl Checker {
@@ -53,6 +54,10 @@ impl Checker {
                 .iter()
                 .map(|var| (*var, self.pending_trait_obligations.get(var).cloned()))
                 .collect(),
+            constructor_witness_traits: tracked
+                .iter()
+                .map(|var| (*var, self.constructor_witness_traits.get(var).cloned()))
+                .collect(),
         }
     }
 
@@ -94,6 +99,16 @@ impl Checker {
                 }
             }
         }
+        for (var, value) in checkpoint.constructor_witness_traits {
+            match value {
+                Some(value) => {
+                    self.constructor_witness_traits.insert(var, value);
+                }
+                None => {
+                    self.constructor_witness_traits.remove(&var);
+                }
+            }
+        }
     }
 
     pub(super) fn with_type_relation_probe<T>(
@@ -105,6 +120,30 @@ impl Checker {
         let result = probe(self);
         if let Some(checkpoint) = checkpoint {
             self.rollback_type_relation(checkpoint);
+        }
+        result
+    }
+
+    /// Retain inference from a compatible input, but do not let a failed
+    /// comparison constrain subsequent arguments that share its variables.
+    pub(super) fn types_compatible_commit_on_success(
+        &mut self,
+        expected: &Ty,
+        actual: &Ty,
+    ) -> Result<bool, TypeError> {
+        let resolved_expected = self.resolve_ty(expected);
+        let resolved_actual = self.resolve_ty(actual);
+        let checkpoint = self.type_relation_checkpoint_for(&[
+            expected,
+            actual,
+            &resolved_expected,
+            &resolved_actual,
+        ]);
+        let result = self.types_compatible(expected, actual);
+        if !matches!(result, Ok(true)) {
+            if let Some(checkpoint) = checkpoint {
+                self.rollback_type_relation(checkpoint);
+            }
         }
         result
     }
@@ -979,6 +1018,43 @@ impl Checker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_relation_restores_inferred_constructor_witness_metadata() {
+        let mut checker = Checker::with_persistent_state(
+            crate::test_support::session_from_cached_std_prelude().state,
+            TypecheckContext::default(),
+        );
+        let constructor = checker.env.fresh_tyvar();
+        let expected = Ty::Struct(
+            "OptionT".into(),
+            NominalType::new(vec![constructor, Ty::Int], Vec::new()),
+        );
+        let actual = Ty::Struct(
+            "OptionT".into(),
+            NominalType::new(
+                vec![
+                    Ty::Struct(
+                        "Identity".into(),
+                        NominalType::new(vec![Ty::Hole], Vec::new()),
+                    ),
+                    Ty::Str,
+                ],
+                Vec::new(),
+            ),
+        );
+        let witnesses = checker.constructor_witness_traits.clone();
+        assert!(!checker
+            .types_compatible_commit_on_success(&expected, &actual)
+            .unwrap());
+        assert!(checker.constructor_witness_traits == witnesses);
+        assert!(!checker
+            .with_type_relation_probe(&[&expected, &actual], |checker| {
+                checker.types_compatible(&expected, &actual)
+            })
+            .unwrap());
+        assert!(checker.constructor_witness_traits == witnesses);
+    }
 
     #[test]
     fn nested_relation_probes_restore_each_boundary_on_success_and_failure() {

@@ -877,8 +877,13 @@ impl Checker {
         carrier_relation: Option<&ExpectedTypeRelation>,
     ) -> Result<TypedNode, TypeError> {
         let inherited_substitutions = self.substitutions.clone();
-        let mut checked =
-            self.check_safebind_input(statement_span, pattern, rhs, unit_success_only)?;
+        let mut checked = self.check_safebind_input(
+            statement_span,
+            operator_span,
+            pattern,
+            rhs,
+            unit_success_only,
+        )?;
         checked.typed_pattern = self.resolve_typed_pattern(checked.typed_pattern);
         checked.pattern_ty = self.resolve_ty(&checked.pattern_ty);
         checked.typed_rhs = self.finalize_safebind_node(checked.typed_rhs)?;
@@ -1414,6 +1419,7 @@ impl Checker {
     fn check_safebind_input(
         &mut self,
         span: &Span,
+        operator_span: &Span,
         pat: &ResolvedPattern,
         rhs: &Resolved,
         unit_success_only: bool,
@@ -1436,6 +1442,7 @@ impl Checker {
             ));
         }
         let rhs_ty = self.resolve_ty(&typed_rhs.ty);
+        let original_rhs_span = typed_rhs.span.clone();
         let extraction_key = self.canonical_monad_extractor_key(span)?;
         let extraction_proof = self.prove_trait_capability(&extraction_key, &rhs_ty)?;
         let extracts = match extraction_proof {
@@ -1543,7 +1550,14 @@ impl Checker {
                 (true, _) => unreachable!("extract return contract checked above"),
             };
 
-        let (typed_pat, pat_ty) = self.check_pattern(pat, &ok_ty, span)?;
+        let whole_input =
+            extracts.then(|| super::super::safebind_input::SafeBindWholeInputContext {
+                rhs_ty: rhs_ty.clone(),
+                rhs_span: original_rhs_span,
+                operator_span: operator_span.clone(),
+            });
+        let (typed_pat, pat_ty) =
+            self.check_pattern_with_whole_input(pat, &ok_ty, span, whole_input.as_ref())?;
         let pattern_can_nomatch = !Self::is_total_bind_pattern(pat);
         if pattern_can_nomatch {
             propagated_err_tys.push(Ty::Error);
@@ -1591,7 +1605,8 @@ impl Checker {
         rhs: &Resolved,
         unit_success_only: bool,
     ) -> Result<TypedNode, TypeError> {
-        let mut checked = self.check_safebind_input(span, pat, rhs, unit_success_only)?;
+        let mut checked =
+            self.check_safebind_input(span, operator_span, pat, rhs, unit_success_only)?;
         let failure_target = if matches!(
             self.callable_context,
             CallableContext::Extractor | CallableContext::ExtractorClosure

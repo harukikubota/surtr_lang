@@ -71,7 +71,7 @@ SafeBind は RHS の型・宣言済み能力が canonical MonadExtractor を満�
 
 MonadExtractor 未実装が確定した型は元の値全体を入力とし、全体に適合する partial Pattern を受理する。全体を受け取る total Pattern は拒否して `=` を案内する。未注釈 total 束縛に対する Monad の mapped payload、および全体とは不整合で直下 payload に対応する LHS 入力要求は、分解入口不足の診断に使う。診断のために元 RHS と payload で Pattern 全体を二度検査しない。
 
-外側の入力関係が成立した後の子、構造・引数数・事前引数、pin の Eq、禁止位置の診断を分解入口不足へ置き換えない。対応型を一段分解した後の型不一致も通常の Pattern 診断とする。入力診断の優先関係・source facts は [diagnostics](diagnostics.md)、評価・文末 `?`・failure target は [do intrinsic](Do_intrinsic_spec.md) に従う。
+外側の入力関係が成立した後の子、構造・引数数・事前引数、pin の Eq、禁止位置の診断を分解入口不足へ置き換えない。対応型を一段分解した後の型不一致は通常の Pattern 診断を基本とする。ただし、最外側の enum constructor / named Extractor / ExtractorClosure の直接入力が成功型には合わず元 RHS 型には合う場合は、`SafeBindWholeInputAfterExtraction` で一段分解と `Ok(...)` による全体照合を説明する。位置 wrapper、Deferred、解決済み ExtractorApplication、型注釈なし alias は入口を変えない。子 Pattern へこの専用診断を適用せず、元 RHS 全体で再検査しない。入力診断の優先関係・source facts は [diagnostics](diagnostics.md)、評価・文末 `?`・failure target は [do intrinsic](Do_intrinsic_spec.md) に従う。
 
 文末 `?` は Pattern 照合を伴わず、成功値が canonical Unit に至るまで各層の MonadExtractor::extract を一度ずつ呼ぶ。異なる実装型が入れ子の場合も同じ規則を使い、各層の能力と有限段で Unit に至ることを静的に確認する。各層の Err は同じ現在の失敗先へ渡し、内側の分解と後続を実行しない。この規則を通常の SafeBind の成功値や子 Pattern へ適用しない。
 

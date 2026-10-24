@@ -1,6 +1,7 @@
 use crate::{
     simple_error, Color, DiagnosticData, DiagnosticLabel, DiagnosticOrigin, DiagnosticSpec,
-    PolicyData, SourceFact, SourceId, StructuredDiagnostic, TypeDiagnosticReason, TypePolicy,
+    PolicyData, SourceFact, SourceId, SourceRole, StructuredDiagnostic, TypeDiagnosticReason,
+    TypePolicy,
 };
 use spire::ast::Span;
 
@@ -86,12 +87,35 @@ pub fn structured_type_error_spec(input: &StructuredDiagnostic) -> DiagnosticSpe
         DiagnosticData::SafeBindRelation(_) => {
             spec.help = Some("Use `=` for a total binding of the whole value.".into());
         }
-        DiagnosticData::SafeBindExtraction(value) => {
-            if let Some(primary) = spec.labels.first_mut() {
-                primary.message = format!("{} does not implement MonadExtractor", value.rhs_type);
+        DiagnosticData::SafeBindExtraction(value) => match input.reason.type_reason() {
+            Some(TypeDiagnosticReason::SafeBindMissingMonadExtractor) => {
+                if let Some(primary) = spec.labels.first_mut() {
+                    primary.message =
+                        format!("{} does not implement MonadExtractor", value.rhs_type);
+                }
+                spec.help = Some("Implement MonadExtractor to provide the RHS decomposition entry point; the resulting payload is checked against the Pattern separately.".into());
             }
-            spec.help = Some("Implement MonadExtractor to provide the RHS decomposition entry point; the resulting payload is checked against the Pattern separately.".into());
-        }
+            Some(TypeDiagnosticReason::SafeBindWholeInputAfterExtraction) => {
+                if let Some(primary) = spec.labels.first_mut() {
+                    primary.message = format!(
+                        "Pattern requires {}, but receives {} after extraction",
+                        value.lhs_input, value.payload_type
+                    );
+                }
+                for (label, fact) in spec.labels.iter_mut().skip(1).zip(&input.related) {
+                    match fact.role {
+                        SourceRole::Value => {
+                            label.message = format!("Original RHS: {}", value.rhs_type);
+                        }
+                        SourceRole::Other => label.message = "SafeBind operator".into(),
+                        _ => {}
+                    }
+                }
+                spec.help =
+                    Some("Wrap the RHS in `Ok(...)` to match the original whole value.".into());
+            }
+            _ => {}
+        },
         _ => {}
     }
     if input.reason.type_reason() == Some(TypeDiagnosticReason::NonUnitStatement) {
@@ -204,6 +228,14 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
             if let DiagnosticData::SafeBindExtraction(value) = &input.data {
                 return format!(
                     "Implement MonadExtractor to decompose the {} RHS; the Pattern requires {} at its input, and its mapped payload is {}.",
+                    value.rhs_type, value.lhs_input, value.payload_type
+                );
+            }
+        }
+        TypeDiagnosticReason::SafeBindWholeInputAfterExtraction => {
+            if let DiagnosticData::SafeBindExtraction(value) = &input.data {
+                return format!(
+                    "SafeBind uses MonadExtractor::extract to decompose the {} RHS once; the Pattern requires {}, but receives {}.",
                     value.rhs_type, value.lhs_input, value.payload_type
                 );
             }

@@ -1,3 +1,4 @@
+use super::safebind_input::SafeBindWholeInputContext;
 use super::*;
 use diagnostics::{PatternKind, TypeDiagnosticReason};
 
@@ -1146,8 +1147,18 @@ impl Checker {
         rhs_ty: &Ty,
         span: &Span,
     ) -> Result<(TypedPattern, Ty), TypeError> {
+        self.check_pattern_with_whole_input(pat, rhs_ty, span, None)
+    }
+
+    pub(super) fn check_pattern_with_whole_input(
+        &mut self,
+        pat: &ResolvedPattern,
+        rhs_ty: &Ty,
+        span: &Span,
+        whole_input: Option<&SafeBindWholeInputContext>,
+    ) -> Result<(TypedPattern, Ty), TypeError> {
         let source_span = Self::resolved_pattern_span(pat)?;
-        let (pattern, ty) = self.check_pattern_inner(pat.unlocated(), rhs_ty, span)?;
+        let (pattern, ty) = self.check_pattern_inner(pat.unlocated(), rhs_ty, span, whole_input)?;
         let pattern = match pattern {
             TypedPattern::Located(_, inner) => *inner,
             other => other,
@@ -1160,6 +1171,7 @@ impl Checker {
         pat: &ResolvedPattern,
         rhs_ty: &Ty,
         span: &Span,
+        whole_input: Option<&SafeBindWholeInputContext>,
     ) -> Result<(TypedPattern, Ty), TypeError> {
         self.ensure_no_match_result_value(rhs_ty, span)?;
         if let ResolvedPattern::Pin(id) = pat {
@@ -1169,7 +1181,9 @@ impl Checker {
             }
         }
         match pat {
-            ResolvedPattern::Located(_, inner) => self.check_pattern_inner(inner, rhs_ty, span),
+            ResolvedPattern::Located(_, inner) => {
+                self.check_pattern_inner(inner, rhs_ty, span, whole_input)
+            }
             ResolvedPattern::Projection { id, .. } => Err(self.projection_shape_error(
                 "the apply_pattern consumer",
                 "a projection outside apply_pattern",
@@ -1180,7 +1194,8 @@ impl Checker {
                 bindings,
                 allow_bindings,
             } => {
-                let result = self.check_pattern(pattern, rhs_ty, span)?;
+                let result =
+                    self.check_pattern_with_whole_input(pattern, rhs_ty, span, whole_input)?;
                 let mut selected = HashSet::new();
                 Self::typed_pattern_bindings(&result.0, &mut selected)?;
                 self.finalize_pattern_bindings(bindings, &selected, *allow_bindings)?;
@@ -1188,7 +1203,7 @@ impl Checker {
             }
             ResolvedPattern::ExtractorApplication { head, args } => {
                 let selected = self.select_extractor_application(head, args)?;
-                self.check_pattern(&selected, rhs_ty, span)
+                self.check_pattern_with_whole_input(&selected, rhs_ty, span, whole_input)
             }
 
             ResolvedPattern::Var(id) => {
@@ -1277,7 +1292,12 @@ impl Checker {
                 ))
             }
             ResolvedPattern::As(inner, alias, alias_ty) => {
-                let (typed_inner, inner_ty) = self.check_pattern(inner, rhs_ty, span)?;
+                let (typed_inner, inner_ty) = self.check_pattern_with_whole_input(
+                    inner,
+                    rhs_ty,
+                    span,
+                    whole_input.filter(|_| alias_ty.is_none()),
+                )?;
                 let alias_bind_ty = if let Some(ast_ty) = alias_ty {
                     let expected =
                         self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
@@ -1550,7 +1570,7 @@ impl Checker {
                         variant.special_variant,
                         Some(sindr::names::SpecialEnumVariantLowering::Boolean(_))
                     ) {
-                        return Err(self.pattern_error(
+                        let error = self.pattern_error(
                             TypeDiagnosticReason::PatternShapeMismatch,
                             PatternKind::Constructor,
                             Some(ctor_id.name.clone()),
@@ -1560,6 +1580,12 @@ impl Checker {
                             None,
                             Vec::new(),
                             &ctor_id.span,
+                        );
+                        return Err(self.safebind_constructor_input_error(
+                            whole_input,
+                            ctor_id,
+                            &rhs_ty,
+                            error,
                         ));
                     }
                     if !inners.is_empty() {
@@ -1602,7 +1628,7 @@ impl Checker {
                             (1, err_ty.as_ref().clone())
                         }
                         _ => {
-                            return Err(self.pattern_error(
+                            let error = self.pattern_error(
                                 TypeDiagnosticReason::PatternShapeMismatch,
                                 PatternKind::Constructor,
                                 Some(ctor_id.name.clone()),
@@ -1612,7 +1638,13 @@ impl Checker {
                                 None,
                                 Vec::new(),
                                 &ctor_id.span,
-                            ))
+                            );
+                            return Err(self.safebind_constructor_input_error(
+                                whole_input,
+                                ctor_id,
+                                &rhs_ty,
+                                error,
+                            ));
                         }
                     };
                     if inners.len() != 1 {
@@ -1641,7 +1673,7 @@ impl Checker {
                     ));
                 }
                 let Ty::Enum(expected_enum_name, _) = &rhs_ty else {
-                    return Err(self.pattern_error(
+                    let error = self.pattern_error(
                         TypeDiagnosticReason::ConstructorPatternRequiresEnumOrResultRhs,
                         PatternKind::Constructor,
                         Some(ctor_id.name.clone()),
@@ -1651,6 +1683,12 @@ impl Checker {
                         None,
                         Vec::new(),
                         &ctor_id.span,
+                    );
+                    return Err(self.safebind_constructor_input_error(
+                        whole_input,
+                        ctor_id,
+                        &rhs_ty,
+                        error,
                     ));
                 };
                 let variant = self
@@ -1664,7 +1702,7 @@ impl Checker {
                     .clone();
                 let variant = self.instantiate_enum_variant(&variant);
                 if &variant.enum_name != expected_enum_name {
-                    return Err(self.pattern_error(
+                    let error = self.pattern_error(
                         TypeDiagnosticReason::PatternShapeMismatch,
                         PatternKind::Constructor,
                         Some(ctor_id.name.clone()),
@@ -1674,10 +1712,16 @@ impl Checker {
                         None,
                         Vec::new(),
                         &ctor_id.span,
+                    );
+                    return Err(self.safebind_constructor_input_error(
+                        whole_input,
+                        ctor_id,
+                        &rhs_ty,
+                        error,
                     ));
                 }
                 if !self.types_compatible(&variant.enum_ty, &rhs_ty)? {
-                    return Err(self.pattern_error(
+                    let error = self.pattern_error(
                         TypeDiagnosticReason::PatternTypeMismatch,
                         PatternKind::Constructor,
                         Some(ctor_id.name.clone()),
@@ -1687,6 +1731,12 @@ impl Checker {
                         None,
                         Vec::new(),
                         &ctor_id.span,
+                    );
+                    return Err(self.safebind_constructor_input_error(
+                        whole_input,
+                        ctor_id,
+                        &rhs_ty,
+                        error,
                     ));
                 }
                 if inners.len() != variant.payload.len() {
@@ -1728,7 +1778,7 @@ impl Checker {
                         pre_args,
                         &extractor_id.span,
                     )?;
-                if !self.types_compatible(&input_ty, &rhs_ty)? {
+                if !self.types_compatible_commit_on_success(&input_ty, &rhs_ty)? {
                     let mut error = self.pattern_error(
                         TypeDiagnosticReason::ExtractorInputTypeMismatch,
                         PatternKind::Extractor,
@@ -1749,7 +1799,12 @@ impl Checker {
                             self.diagnostic_ty_name(&rhs_ty)
                         ));
                     }
-                    return Err(error);
+                    return Err(self.safebind_whole_input_error(
+                        whole_input,
+                        &input_ty,
+                        &rhs_ty,
+                        error,
+                    ));
                 }
                 if items.len() != seq_tys.len() && !(items.is_empty() && seq_tys == [Ty::Unit]) {
                     let success_types = seq_tys

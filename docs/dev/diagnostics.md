@@ -138,7 +138,7 @@ placeholderの競合では、その正規化で確定した要求型をまとめ
 | TypeCtorTrait | `MissingTypeConstructorConstraint`, `TypeConstructorFamilyMismatch`, `TypePayloadMismatch`, `MissingTypeConstructorCapability` |
 | Trait method contract | `TraitMethodTypeListMismatch`, `TraitMethodTypeListArityMismatch`, `TraitMethodConstraintMismatch` |
 | branch | `IfBranchTypeMismatch`, `MatchArmTypeMismatch`, `CondBranchTypeMismatch` |
-| SafeBind input | `SafeBindTotalPatternNonExtractingRhs`, `SafeBindMissingMonadExtractor` |
+| SafeBind input | `SafeBindTotalPatternNonExtractingRhs`, `SafeBindMissingMonadExtractor`, `SafeBindWholeInputAfterExtraction` |
 | pattern / Extractor | `PatternTypeMismatch`, `PatternShapeMismatch`, `PatternArityMismatch`, `NonTotalBindingPattern`, `NestedResultErrorPattern`, `MatchGuardTypeMismatch`, `ConstructorPatternRequiresEnumOrResultRhs`, `ExtractorInputTypeMismatch`, `ExtractorArityMismatch`, `NonExhaustiveMatch` |
 | policy | `TestScriptErrorPropagation`, `TestScriptReturnType`, `SafeBindErrorTypeMismatch`, `SafeBindRequiresMonadFailTarget`, Facet / Process / source / compile policy reason、`NominalDeclarationConstraintViolation`, `TraitImplementationForbidden`, `TraitHelperCaptureNeedsExpectedType`, `ReservedIntrinsicMarkerUsage` |
 | producer contract | `TypecheckInvariantViolation` |
@@ -191,6 +191,7 @@ SafeBind は canonical MonadExtractor による分解と、その後の通常 Pa
 
 - `SafeBindTotalPatternNonExtractingRhs` は、分解しない値全体に対する total 束縛の誤用を表し、`SafeBindRelation` を使って `=` を案内する。
 - `SafeBindMissingMonadExtractor` は、具象 Monad の分解入口不足を表し、`SafeBindExtraction` を使う。本文・caption に元 RHS 型、Monad の mapped payload 型、LHS の直接の入力要求または形、MonadExtractor の能力判定を示す。help は「RHS を分解したいなら MonadExtractor を実装する」という意味にし、実装すれば Pattern 全体が成功するとは断定しない。
+- `SafeBindWholeInputAfterExtraction` は、分解後の成功型には合わず、分解前の RHS 型には合う最外側の enum constructor / named Extractor / ExtractorClosure の直接入力不一致を表す。`SafeBindExtraction` に元 RHS 型、実際の成功型、要求入力型、`satisfied` の能力判定を保持し、help で RHS を `Ok(...)` で包む全体照合を案内する。primary は不一致の直接 constructor / Extractor application の既存 span、related は元 RHS と `=?`（role は `Other`）にする。Result の Ok / Err は同じ本文・help を使い、他の MonadExtractor 実装型も同じ条件で扱う。
 
 `payload_type` は Monad の constructor slot mapping から求め、末尾の型引数や capture parameter から推測しない。未注釈の変数・wildcard・total alias でも mapped payload から診断用の LHS 型を導出する。`lhs_input` は直接の入力型または構造の要求とし、元 RHS 型や payload 型と混同しない。
 
@@ -211,6 +212,8 @@ SafeBind は canonical MonadExtractor による分解と、その後の通常 Pa
 外側の直接入力関係が成立した後の子 Pattern、Extractor の head 解決・事前引数・引数数・成功 payload、Record の未知・不足・重複 field、Tuple の arity、HashMap key、pin の Eq、OR / projection / Error Pattern の利用位置、Facet の禁止は通常診断を維持する。この保持規則は、元の値全体に直接適合する入力、または実際に分解した後の入力に対して生成される通常診断に適用する。未実装型の mapped payload に Pattern 全体を仮適用し、これらのエラーを先取りする義務はない。分解入口不足の診断は、実装後にこれらの別エラーが残る可能性を含む。
 
 rigid generic の宣言 bound 不足は `MissingGenericBound` とし、分解を要求する場合に `$F: MonadExtractor` を案内する。`$F: Monad` だけで分解を許可せず、具象化時にも能力を強化しない。分解を要求しない全体入力の partial Pattern には一律に bound を追加しない。Deferred、推論未確定、候補の制約不成立・曖昧さ、canonical 宣言・メソッド契約の不正を具象型の未実装 reason へ畳み込まない。
+
+専用診断の文脈は位置 wrapper、Deferred、解決済み ExtractorApplication、型注釈なし alias だけを透過し、子 Pattern には渡さない。通常 checker が直接入力不一致を生成した箇所でだけ分類し、既存の検査順を変えない。元 RHS への適合確認は直接の型関係だけを非破壊で調べ、Pattern 全体や事前引数を別入力で再実行しない。分解後の入力が適合する場合の子・引数数の不一致や、元 RHS も不適合な入力は通常診断を維持する。
 
 producer は直接の RHS 入力不一致と子の不一致を明示的に区別する。表示文・reason の文字列照合・span の包含関係で分類を復元しない。元 RHS と payload で `check_pattern` を二度実行する経路や、診断専用に partial Pattern 全体を別入力で検査するチェッカを追加しない。通常 Pattern 検査を保ち、直接入力要求と constructor slot の対応から入口だけを判定する。
 

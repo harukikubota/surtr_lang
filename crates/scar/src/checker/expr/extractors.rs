@@ -226,7 +226,7 @@ impl Checker {
                 span.clone(),
             ));
         }
-        self.types_compatible(input, observed_ty)?;
+        self.types_compatible_commit_on_success(input, observed_ty)?;
         let pre_args = pre_args
             .iter()
             .cloned()

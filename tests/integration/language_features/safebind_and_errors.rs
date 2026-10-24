@@ -190,7 +190,7 @@ fn safebind_top_ok_pattern_requires_nested_result() {
     assert_compile_error(
         r#"value: Result<Int> = Ok(5)
 Ok(num) =? value"#,
-        "Constructor pattern requires an enum or Result RHS",
+        "SafeBind uses MonadExtractor::extract",
     );
 }
 
