@@ -79,9 +79,13 @@ aggregate であり、Eldr の runtime append policy とは別責務である。
 - `Kernel` source は `defmod Kernel` 配下の cross-cutting builtin と共通 Extractor を登録する。関数型 alias は `function.srt`、Facet 固有 Error は `facet.srt`、List の要素アクセス Error は `types/list.srt` に置く
 - 各 type file の top-level では対応する canonical builtin type head を登録する
 - `errors.srt` は Main / Default として登録し、通常実行とテスト実行の両方で一度だけ読み込む。標準登録表の `module_path` は省略可能とし、`errors.srt` と `types/special_types.srt` のような定義バンドルは `None` とする。stage 情報・parser 入力・キャッシュキー・診断にも名前の有無を保持し、空文字や仮のモジュール名で補完しない
-- module stage の import 可視性は「前 stage + 同一 stage」とする。同一 stage 内の標準定義ソース / 通常 module は file 読み込み順に依存せず明示 import / auto import でき、later stage 参照は compile error とする
+- 宣言の可視性は「前 stage + 同一 stage」とする。明示 import / auto import、qualified call、型注釈、constructor、trait / impl、暗黙 dispatch と制約証明に同じ境界を適用する。同一 stage 内ではファイル順・宣言順に依存せず解決し、後 stage の宣言は型環境へ登録しない。
+- 型名は canonical な namespace を保って参照する。既定 root の `Global::` 表記は正規化するが、未知の `N::Type` を別 namespace や root の `Type` へ置き換えない。
+- Sigil の公開 IR は stage ごとの宣言列と process metadata を保持する。Scar は stage 順に schema・署名・const・impl を確定してから本体を検査する。単一の宣言列を受け取る API の入力全体は一つの stage とする。prefix から再開する suffix にも元の stage 境界を残す。
+- builtin 完備性は stage 列の処理完了後、型付き結果または checkpoint の公開前に検査する。inventory の構造検査と compile unit 単位の process 起動構成は、宣言の可視性とは別に扱う。native 署名の照合に使う nominal identity は専用 metadata から構築し、後 stage の型を通常の型環境へ先行登録しない。
+- 前 stage で検査済みの generic 関数を後 stage の可視な型・impl で具体化できる。前 stage の具体呼び出しを後 stage の impl で救済しない。
 - loader は追加標準定義ソースも `./lib/**/*.srt` から収集し、`lib/tests/**` と built-in 標準定義ソースと重複するものはデフォルト入力から除外する。symlinkは実体pathで探索範囲とtests除外を照合し、root外のソースを含めない。同じ実体は一度だけ収集し、祖先linkによる再訪は行わない
-- 通常スクリプト用の標準ソース登録はvariantごとにプロセス内で一度収集する。各入口はその登録を複製し、include stageと入口を追加する。prefix内のSourceIdとstage順序を保ち、同じファイル名の本文・source kind・module pathが異なる登録は読み込みエラーとする。同じソースの再登録でもstage内のmodule重複を隠さない
+- 通常スクリプト用の標準ソース登録はvariantごとにプロセス内で一度収集する。各入口はその登録を複製し、include 先をまとめた単一 stage と入口を追加する。include がなければ追加 stage は作らない。各 source occurrence `(stage_index, source_index)` と include 文の対応を収集時に保持し、繰り返し指定の診断にも使う。prefix内のSourceIdとstage順序を保ち、同じファイル名の本文・source kind・module pathが異なる登録は読み込みエラーとする。同じソースの再登録でもstage内のmodule重複を隠さない
 - definition source の primary module path は parse 後 AST と namespace lowering 結果から導出し、loader / Xldr は token 走査で `defmod` head を推定しない
 - qualified `defmod A::B` と `namespace A { defmod B { ... } }` は同じ canonical module path `A::B` として扱う
 - 通常 module source 同士の同一 canonical module path は常に compile error とする。`impl` owner module は既存通常 module への拡張としてのみ同一 path を許可し、`normal A -> impl A -> normal A` のような通常 module 再定義は拒否する

@@ -307,6 +307,8 @@ Error の宣言・構築・生成責務・情報保持・生成位置は [Error 
 
 コンストラクタ末尾の `MakeError` は、計算済みの String message と Payload を宣言スキーマに従って stack から取り出し、生成元位置を付けた `RichError` を作る。外部コンストラクタを再呼出しする命令ではない。`IsErrorKind` は canonical kind を照合し、`GetErrorPayload` は identity・Payload 長・field index・保存値の型を検証して読み取る。命令・metadata の不整合は RuntimeError とし、空 Payload や推測した値で救済しない。
 
+Scar の nominal 型参照は canonical name・kind と型引数だけを保持し、field schema は `TypedProgram.nominal_definitions` を正本とする。Forge は Payload schema の生成時にこのレジストリを使う。Facet の型表示は Scar が検査した有限 path の各 segment の結果型を受け取り、constructor mapping や trait 選択を再実行しない。未確定 schema を空 field で代用しない。
+
 入力と保存 Payload の runtime 値を検査済みスキーマへ照合する。長さ・型・順序、nominal identity と型引数、Enum の tag と variant fields の不整合は RuntimeError とする。generic な再帰型のスキーマは有限の定義テンプレートと参照で保持し、具体的な型引数を無限展開しない。増分 chunk も prefix を含む検査済み定義を使い、既存 bytecode の値や表示名から型を復元しない。
 
 `cause` は runtime 管理の線形 chain とする。コンストラクタ実行へ生成元の source ID / span を渡し、`location` と既存の cause / diagnostic / stack trace を共通の生成処理で統合する。`stack_trace` は呼出し経路用であり、先頭 frame で `location` を上書きしない。型・局所具象情報・readonly の静的制約は Scar の検査結果に従う。

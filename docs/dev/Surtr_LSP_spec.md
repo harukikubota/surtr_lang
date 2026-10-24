@@ -358,13 +358,13 @@ definition の選択を正本にする。
 script entry が選択された場合、resolver は script 先頭の include block を既存 loader と
 同じ規則で読む。include 先は script file からの相対 path として解決し、
 `SourceKind::DefinitionSource` として扱う。include 先 file を token sniffing で
-`SourceKind::Script` に切り替えない。
+`SourceKind::Script` に切り替えない。開いている entry と include 先の本文は未保存の編集を優先し、残りは host から読む。include 先を編集中でも、選択済み entry を起点とする同じ stage を検査する。所属 entry の推測や再帰的 include は行わない。 include の参照先と開いている文書は host の source identity で照合し、完全一致を優先する。それ以外の一致が複数ある場合は曖昧な alias として拒否する。仮想 host は字句的な相対 path を正規化でき、filesystem host は実在する prefix の symlink と `..` を解決する。未保存 file 自体の存在は要求せず、解決できない `..` を省いて別の既存 file を読むこともない。
 
 script context の compile unit は次の順を持つ。
 
 ```text
 StdlibStageSet
-  -> include graph 由来 ModuleStage
+  -> include 先全件をまとめた単一 ModuleStage（0 件なら省略）
   -> script entry SourceKind::Script
 ```
 

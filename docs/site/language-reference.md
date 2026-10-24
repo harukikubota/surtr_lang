@@ -38,8 +38,10 @@ private const PROFILE_NAME = User.profile -> Profile.name
 
 - file top-level にだけ宣言でき、visibility の既定は `public`
 - 名前は `[A-Z][A-Z0-9_]*`。先頭・末尾 `_` と `__` は使えない
-- public const は compile unit 全体、private const は宣言 file だけから参照できる
+- public const は同一・前のコンパイルステージ、private const は宣言 file だけから参照できる
 - 値は primitive literal、Facet path、別の Facet const、またはそれらの `->` 合成に限定する
+- 同一ステージの Facet const は宣言順に関係なく参照できる。自己・相互循環はエラーになる
+- primitive literal の const を別の const の値として参照することはできない
 - const Facet の bracket segment は literal `Int` / `String`、または両端が literal `Int` の range だけを受け付ける
 
 ### ソース位置リフレクション
@@ -735,6 +737,8 @@ Surtr では「module の外に生の関数がぶら下がる」モデルを取�
 
 標準定義は `Bootstrap` stage、test extension を必要に応じて含む shared standard stage、ユーザ拡張の順でロードされます。
 完全なモジュール inventory と順序は compiler source の `STDLIB_MODULE_SPECS` が管理します。
+宣言は前のステージと同じステージから参照できます。同じステージ内のファイル順・宣言順は参照の可否に影響しません。型注釈、constructor、trait 制約や暗黙の impl 選択でも、後のステージの宣言は使えません。
+通常のブロック内の束縛と実行文は、記述した順に扱います。
 
 ### auto import
 
@@ -785,7 +789,7 @@ Surtr では「module の外に生の関数がぶら下がる」モデルを取�
 - script source でのみ使える loader directive
 - `include "./path/to/module.srt"` の形だけを受け付ける
 - source file 先頭に連続して置かなければならない
-- `include` 先の file は definition source として読み込まれ、`surtr repl --script` preload でも同じ規則を使う
+- `include` 先の file は definition source として読み込まれ、全件を同一のコンパイルステージにまとめる。列挙順にかかわらず互いの宣言を参照でき、スクリプト本体はその後のステージになる。`surtr repl --script` preload でも同じ規則を使う
 - block 内や式位置では使えない
 
 ### builtin type の置き場所

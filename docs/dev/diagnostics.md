@@ -419,3 +419,7 @@ Scar は解決・正規化した署名の返り型が canonical Boolean でな�
 トップレベルの `?` / `=?` は `TestScriptErrorPropagation` とし、演算子を primary にする。
 本文が独自の失敗返却先を持つ関数・closure・`do` の通常の検査には、このトップレベルの拒否を適用しない。
 Human / JSON は同じ reason と source fact から診断し、ケース本文や MonadFail を実装する戻り値を持つ関数・closure への移動を案内する。
+
+### const 宣言の依存解決
+
+const の許可式違反は `ConstValueForbidden`、非 literal の bracket は `ConstDynamicBracket`、依存循環は `CyclicConst` とする。`ConstDeclaration` data に宣言名・参照先名・実際の循環の宣言名列を保持する。循環の primary は輪を閉じる参照位置、related は輪に含まれる宣言と参照位置とし、輪へ到達するだけの前置宣言を含めない。式の許可形を依存走査より先に検査し、禁止された呼び出し内の参照を循環と誤診しない。
