@@ -1,0 +1,2 @@
+plain: (-> Result<Int>) = {|| Err(Failure())}
+factory: (-> Result<Int, OpenFailures>) = plain

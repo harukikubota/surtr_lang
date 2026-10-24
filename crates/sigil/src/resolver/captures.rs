@@ -280,7 +280,9 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                 }
             }
         }
-        Resolved::ConstructorCall(_, _, args) | Resolved::EnumConstructorCall(_, _, _, args) => {
+        Resolved::ConstructorCall(_, _, args)
+        | Resolved::EnumConstructorCall(_, _, _, args)
+        | Resolved::EnumErrorConstructorCall(_, _, _, args) => {
             for arg in args {
                 match arg {
                     ResolvedRecordLitArg::Positional(expr) => {
@@ -376,6 +378,7 @@ fn collect_pattern_captures(
             free.reference(id, bound);
         }
         ResolvedPattern::Constructor(_, inners)
+        | ResolvedPattern::EnumErrorOther(_, _, inners)
         | ResolvedPattern::Tuple(inners)
         | ResolvedPattern::Or(inners) => {
             for inner in inners {
@@ -427,7 +430,7 @@ fn collect_bind_pattern_bindings(pat: &ResolvedPattern, bound: &mut HashSet<u32>
         ResolvedPattern::Var(id) | ResolvedPattern::Annotated(id, _) => {
             bound.insert(id.unique_id);
         }
-        ResolvedPattern::Constructor(_, inners) => {
+        ResolvedPattern::Constructor(_, inners) | ResolvedPattern::EnumErrorOther(_, _, inners) => {
             for inner in inners {
                 collect_bind_pattern_bindings(inner, bound);
             }

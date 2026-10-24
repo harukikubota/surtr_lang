@@ -1,0 +1,40 @@
+selected: ExtractionClosed = ExtractionSaved(7)
+original: Error = selected
+explicit = MonadExtractor::extract(ExtractionChecks::source(selected))
+print(ExtractionChecks::describe("explicit", explicit, original))
+relayed = ExtractionChecks::relay(ExtractionChecks::source(selected))
+print(ExtractionChecks::describe("relay", relayed, original))
+
+nested: Result<Result<Int, ExtractionClosed>, ExtractionClosed> = Ok(Err(selected))
+extracted = MonadExtractor::extract(nested)
+inner: Result<Int, ExtractionClosed> =? extracted
+print(ExtractionChecks::describe("retained", ExtractionChecks::retain(inner), original))
+print(ExtractionChecks::describe("one", ExtractionChecks::one_layer(nested), original))
+saved = MonadExtractor::extract_error(ExtractionChecks::source(selected))
+print(match saved {
+  Ok(ExtractionSaved(code) @ error) => "extracted-error:#{code}:#{Error::message(error)}:#{Error::same_kind(original, error)}",
+  _ => "extracted-error:wrong",
+})
+outer_success = MonadExtractor::extract_error(nested)
+print(match outer_success { Err(error) => "one-layer-error:#{Error::is_kind(error, ErrorExtractionFailed)}", Ok(_) => "one-layer-error:wrong" })
+
+nested_failure: Result<Result<Unit, ExtractionClosed>, ExtractionClosed> = Ok(Err(selected))
+print(ExtractionChecks::describe("nested", ExtractionChecks::nested(nested_failure), original))
+nested_success: Result<Result<Unit, ExtractionClosed>, ExtractionClosed> = Ok(Ok(()))
+print(ExtractionChecks::describe("nested", ExtractionChecks::nested(nested_success), original))
+
+partial_input: Result<Int, ExtractionOpen> = Ok(2)
+partial = ExtractionChecks::partial(partial_input)
+print(match partial {
+  Err(Other(IntLiteralPatternMismatch(expected, actual))) => "partial:#{expected}:#{actual}",
+  _ => "partial:wrong",
+})
+
+dedicated_error: ExtractionDedicated = ExtractionSaved(7)
+custom_original: Error = dedicated_error
+custom = MonadExtractor::extract(ExtractionChecks::dedicated_source(dedicated_error))
+print(ExtractionChecks::describe("custom", custom, custom_original))
+custom_relay = ExtractionChecks::dedicated(ExtractionChecks::dedicated_source(dedicated_error))
+print(ExtractionChecks::describe("custom-relay", custom_relay, custom_original))
+custom_generic = ExtractionChecks::generic(ExtractionChecks::dedicated_source(dedicated_error))
+print(ExtractionChecks::describe("custom-generic", custom_generic, custom_original))

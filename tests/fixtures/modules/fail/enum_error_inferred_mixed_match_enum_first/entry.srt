@@ -1,0 +1,3 @@
+plain = Failure(1)
+named = OpenFailures::Failure(2)
+inferred = match True { True => named, False => plain }

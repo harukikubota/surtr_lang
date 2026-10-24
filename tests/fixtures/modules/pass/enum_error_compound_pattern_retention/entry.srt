@@ -1,0 +1,8 @@
+first: ClosedFailures = FirstFailure()
+second: ClosedFailures = SecondFailure()
+print(to_string(match if(True, first, second) { FirstFailure => 1, SecondFailure => 2 }))
+print(to_string(match match True { True => first, False => second } { FirstFailure => 1, SecondFailure => 2 }))
+pair: (Result<Int, ClosedFailures>, Int) = (Err(FirstFailure()), 7)
+print(to_string(match pair { (Ok(_), _) => 0, (Err(error), number) => match error { FirstFailure => number, SecondFailure => 2 }, _ => 0 }))
+print(to_string(if_let(Factory::result(), Err(error), match error { FirstFailure => 1, SecondFailure => 2 }, 0)))
+if_let_then(Factory::result(), Err(error), print(to_string(match error { FirstFailure => 1, SecondFailure => 2 })))

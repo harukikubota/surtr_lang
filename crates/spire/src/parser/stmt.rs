@@ -32,6 +32,7 @@ impl Parser<'_> {
                     | Token::Defstruct
                     | Token::Defrecord
                     | Token::Deferror
+                    | Token::Defenumerror
                     | Token::Defenum
                     | Token::Defextractor
                     | Token::Type
@@ -63,7 +64,7 @@ impl Parser<'_> {
             Token::Defstruct => self.parse_struct_def()?,
             Token::Defrecord => self.parse_record_def()?,
             Token::Deferror => self.parse_deferror_def()?,
-            Token::Defenum => self.parse_enum_def()?,
+            Token::Defenumerror | Token::Defenum => self.parse_enum_def()?,
             Token::Defextractor => self.parse_extractor_def()?,
             Token::Type => self.parse_type_alias()?,
             _ => {

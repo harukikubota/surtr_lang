@@ -1,0 +1,3 @@
+deferror FirstFailure(value: Int) { |input: Int| Self(message: "first", value: input) }
+deferror SecondFailure { "second" }
+defenumerror Failures { FirstFailure, SecondFailure, Other(Error) }

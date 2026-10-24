@@ -9,6 +9,7 @@ pub(super) struct CallableSummary<'a> {
     pub(super) bound_tyvars: Vec<u32>,
     pub(super) direct_pattern_tyvars: Vec<u32>,
     pub(super) requires_concrete: bool,
+    pub(super) transport_constructors: Vec<u32>,
     pub(super) calls: Vec<CallableEdge<'a>>,
 }
 
@@ -55,14 +56,30 @@ impl Checker {
                     return Err(self.typecheck_invariant_error(
                         "specializable definition metadata must name a callable definition",
                         &definition.span,
-                    ))
+                    ));
                 }
             }
             let signature = variables.into_iter().collect::<HashSet<_>>();
-            let collected = RefCell::new((Vec::new(), Vec::new(), Vec::new(), false));
+            let collected = RefCell::new((Vec::new(), Vec::new(), Vec::new(), false, Vec::new()));
             if let Some(error) = self.find_typed_node(definition, &|checker, node| {
                 let mut collected = collected.borrow_mut();
-                let (direct, calls, pending_variables, pending) = &mut *collected;
+                let (direct, calls, pending_variables, pending, transport_constructors) =
+                    &mut *collected;
+                if let TypedInner::ErrorCoerce { value, .. } = &node.node {
+                    let mut variables = Vec::new();
+                    Self::collect_ty_vars(&node.ty, &mut variables);
+                    Self::collect_ty_vars(&value.ty, &mut variables);
+                    for variable in variables {
+                        let constructor =
+                            checker.constructor_witness_traits.contains_key(&variable)
+                                || checker.tyvar_bound_names(variable).iter().any(|bound| {
+                                    checker.declaration_constructor_trait_key(bound).is_some()
+                                });
+                        if constructor && !transport_constructors.contains(&variable) {
+                            transport_constructors.push(variable);
+                        }
+                    }
+                }
                 if let TypedInner::AssertErrorMatches(_, _, Some(ty)) = &node.node {
                     let ty = checker.resolve_ty(ty);
                     if let Err(error) = checker.ensure_assert_error_direct_type(&ty, &node.span) {
@@ -130,8 +147,13 @@ impl Checker {
             }) {
                 return Err(error);
             }
-            let (mut direct_pattern_tyvars, calls, pending_variables, requires_concrete) =
-                collected.into_inner();
+            let (
+                mut direct_pattern_tyvars,
+                calls,
+                pending_variables,
+                requires_concrete,
+                transport_constructors,
+            ) = collected.into_inner();
             direct_pattern_tyvars.sort_unstable();
             let bound_tyvars = self.collect_bound_tyvars_for_def(
                 definition,
@@ -146,6 +168,7 @@ impl Checker {
                     bound_tyvars,
                     direct_pattern_tyvars,
                     requires_concrete,
+                    transport_constructors,
                     calls,
                 },
             );
@@ -272,6 +295,27 @@ impl Checker {
                 work.visit_edge();
                 let mut forwarded = requirements[caller].clone();
                 forwarded.requires_concrete |= required.requires_concrete;
+                for variable in &required.concrete_tyvars {
+                    let (_, mapped) = edge
+                        .substitution
+                        .iter()
+                        .find(|(slot, _)| slot == variable)
+                        .ok_or_else(|| {
+                            self.typecheck_invariant_error(
+                                "Missing call substitution for Error-position specialization",
+                                edge.span,
+                            )
+                        })?;
+                    let mut variables = Vec::new();
+                    Self::collect_ty_vars(&self.resolve_ty(mapped), &mut variables);
+                    for variable in variables {
+                        if summaries[caller].signature.contains(&variable)
+                            && !forwarded.concrete_tyvars.contains(&variable)
+                        {
+                            forwarded.concrete_tyvars.push(variable);
+                        }
+                    }
+                }
                 for variable in &required.tyvars {
                     let Some((_, input)) =
                         edge.substitution.iter().find(|(slot, _)| slot == variable)
@@ -292,7 +336,9 @@ impl Checker {
                     }
                 }
                 forwarded.tyvars.sort_unstable();
-                if forwarded.tyvars != requirements[caller].tyvars
+                forwarded.concrete_tyvars.sort_unstable();
+                if forwarded.concrete_tyvars != requirements[caller].concrete_tyvars
+                    || forwarded.tyvars != requirements[caller].tyvars
                     || forwarded.requires_concrete != requirements[caller].requires_concrete
                 {
                     requirements.insert(*caller, forwarded);

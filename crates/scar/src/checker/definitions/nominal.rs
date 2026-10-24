@@ -191,10 +191,8 @@ impl Checker {
                         field.span.clone(),
                     ));
                 }
-                let ty = self.resolve_error_definition_ty(
-                    &field.ty,
-                    ErrorDefinitionTypePosition::Payload,
-                )?;
+                let ty = self
+                    .resolve_error_definition_ty(&field.ty, ErrorDefinitionTypePosition::Payload)?;
                 self.ensure_no_match_result_value(&ty, &field.span)?;
                 if self.ty_contains_facet(&ty) {
                     return Err(TypeError::new(
@@ -352,6 +350,8 @@ impl Checker {
         let saved_substitutions = self.substitutions.clone();
         let saved_bounds = self.tyvar_bounds.clone();
         let saved_process_markers = self.process_marker_tyvars.clone();
+        let saved_error_slots = self.error_slot_tyvars.clone();
+        let saved_failure_error_slots = self.failure_error_slot_tyvars.clone();
         let saved_obligations = self.pending_trait_obligations.clone();
         let saved_capabilities = self.active_capabilities.clone();
         let saved_facet_bindings = self.facet_bindings.clone();
@@ -393,6 +393,8 @@ impl Checker {
             self.substitutions = saved_substitutions;
             self.tyvar_bounds = saved_bounds;
             self.process_marker_tyvars = saved_process_markers;
+            self.error_slot_tyvars = saved_error_slots;
+            self.failure_error_slot_tyvars = saved_failure_error_slots;
         }
         self.env.pop_var_scope();
         self.error_definition_uid = saved_error_uid;

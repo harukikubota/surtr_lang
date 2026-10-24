@@ -1,0 +1,3 @@
+phase: typecheck
+contains: Return type mismatch
+contains: ClosedFailures

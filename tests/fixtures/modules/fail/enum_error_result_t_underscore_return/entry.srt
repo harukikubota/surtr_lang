@@ -1,0 +1,2 @@
+def rejected() -> ResultT<Identity, Int, _> { ResultT::new(Identity::new(Ok(1))) }
+rejected()

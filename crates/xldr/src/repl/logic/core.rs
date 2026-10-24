@@ -1598,8 +1598,27 @@ impl ReplEngine {
         })
     }
 
+    fn completion_runtime_signature(&self, signature: &str) -> String {
+        surtr_analysis::query::format_completion_signature_with_error_classifier(
+            signature,
+            |name| {
+                self.qualified_declaration(name)
+                    .is_some_and(|declaration| declaration.kind == sigil::DeclarationKind::Deferror)
+            },
+        )
+    }
+
     fn build_completion_context(&self) -> ReplCompletionContext {
-        let semantic_index = self.semantic_index();
+        // Normalize only this input-support snapshot. Declaration queries keep
+        // the original signature and documentation metadata on the engine.
+        let mut semantic_infos = self.symbol_semantic_infos();
+        for symbol in &mut semantic_infos {
+            if let Some(detail) = &mut symbol.detail {
+                *detail = self.completion_runtime_signature(detail);
+            }
+        }
+        let semantic_index =
+            surtr_analysis::SemanticIndex::from_symbol_semantic_infos(semantic_infos);
         let mut callable_signatures = BTreeMap::new();
 
         for symbol in semantic_index.symbols() {
@@ -1620,6 +1639,7 @@ impl ReplEngine {
             let Some((qualified_name, signature)) = signature_entry else {
                 continue;
             };
+            let signature = self.completion_runtime_signature(&signature);
             if bare_trait_method_decl.is_some() {
                 callable_signatures.insert(symbol.label.clone(), (qualified_name, signature));
             } else {
@@ -1650,7 +1670,7 @@ impl ReplEngine {
                 &mut callable_signatures,
                 &label,
                 qualified_name.to_string(),
-                signature.clone(),
+                self.completion_runtime_signature(signature),
             );
         }
 
@@ -1666,7 +1686,7 @@ impl ReplEngine {
                     &mut callable_signatures,
                     &binding.name,
                     binding.name.clone(),
-                    signature,
+                    self.completion_runtime_signature(&signature),
                 );
             }
         }
@@ -2715,11 +2735,11 @@ impl ReplEngine {
     fn facet_help_ty_display(ty: &AstTy) -> String {
         match ty {
             AstTy::Generic(_, name, args)
-                if name == "Result"
+                if matches!(name.as_str(), "Result" | "Global::Result")
                     && args.len() == 2
                     && matches!(
                         args.get(1),
-                        Some(AstTy::Named(_, error)) if error == "Error"
+                        Some(AstTy::Named(_, error)) if matches!(error.as_str(), "Error" | "Global::Error")
                     ) =>
             {
                 format!("Result<{}>", Self::facet_help_ty_display(&args[0]))
@@ -3062,7 +3082,9 @@ impl ReplEngine {
                     sigil::DeclarationKind::Record
                     | sigil::DeclarationKind::Deferror
                     | sigil::DeclarationKind::Enum => {
-                        return Self::plain(vec![format!("`{symbol}` is a pattern query. Use `:doc {owner}` for type documentation.")]);
+                        return Self::plain(vec![format!(
+                            "`{symbol}` is a pattern query. Use `:doc {owner}` for type documentation."
+                        )]);
                     }
                     _ => {}
                 }
@@ -5144,8 +5166,31 @@ impl ReplEngine {
                     Self::ty_to_string_with_params(payload, names)
                 )
             }
-            Ty::Result(ok, _) => format!("Result<{}>", Self::ty_to_string_with_params(ok, names)),
-            Ty::Struct(name, _) | Ty::Record(name, _) => crate::surface_path_name(name).to_string(),
+            Ty::Result(ok, error) => {
+                let ok = Self::ty_to_string_with_params(ok, names);
+                if matches!(error.as_ref(), Ty::Error) {
+                    format!("Result<{ok}>")
+                } else {
+                    format!(
+                        "Result<{ok}, {}>",
+                        Self::ty_to_string_with_params(error, names)
+                    )
+                }
+            }
+            Ty::Struct(name, nominal) | Ty::Record(name, nominal) => {
+                let name = crate::surface_path_name(name);
+                if nominal.arguments.is_empty() {
+                    name.to_string()
+                } else {
+                    let args = nominal
+                        .arguments
+                        .iter()
+                        .map(|argument| Self::ty_to_string_with_params(argument, names))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{name}<{args}>")
+                }
+            }
             Ty::Enum(name, args) => {
                 let name = crate::surface_path_name(name);
                 if args.is_empty() {

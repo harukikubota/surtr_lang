@@ -184,6 +184,32 @@ impl Checker {
         })
     }
 
+    /// A named constructor parameter retains the strongest declared witness
+    /// along a known inheritance chain. Other registrations keep their
+    /// existing order semantics; declaration bounds remain the full contract.
+    pub(in crate::checker) fn register_constructor_witness_trait(
+        &mut self,
+        variable: u32,
+        trait_key: String,
+    ) {
+        let keep_existing =
+            self.constructor_witness_traits
+                .get(&variable)
+                .is_some_and(|existing| {
+                    self.traits
+                        .get(existing)
+                        .is_some_and(|info| !info.constructor_slots.is_empty())
+                        && self
+                            .traits
+                            .get(&trait_key)
+                            .is_some_and(|info| !info.constructor_slots.is_empty())
+                        && self.trait_bound_entails(existing, &trait_key, &mut HashSet::new())
+                });
+        if !keep_existing {
+            self.constructor_witness_traits.insert(variable, trait_key);
+        }
+    }
+
     fn apply_where_trait_bound(
         &mut self,
         subject: &Ty,
@@ -204,7 +230,7 @@ impl Checker {
             Ty::Var(var) => {
                 self.register_tyvar_bound(var, &trait_key);
                 if constructor_trait {
-                    self.constructor_witness_traits.insert(var, trait_key);
+                    self.register_constructor_witness_trait(var, trait_key);
                 }
                 Ok(())
             }
@@ -1935,6 +1961,7 @@ impl Checker {
             self.trait_impls.insert(
                 impl_key.clone(),
                 Arc::new(TraitImplInfo {
+                    standard_definition: self.enforce_builtin_type_contracts,
                     declaration_key: TraitImplDeclarationKey {
                         pattern: impl_key.clone(),
                         declaration_id: *declaration_id,

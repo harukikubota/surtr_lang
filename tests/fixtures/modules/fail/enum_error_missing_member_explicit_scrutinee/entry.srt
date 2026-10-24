@@ -1,0 +1,1 @@
+print(to_string(match Failures::FirstFailure() { FirstFailure => 1, Other(_) => 2 }))

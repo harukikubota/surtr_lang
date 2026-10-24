@@ -268,6 +268,7 @@ impl Checker {
                 }
             }
             ResolvedPattern::Constructor(_, items)
+            | ResolvedPattern::EnumErrorOther(_, _, items)
             | ResolvedPattern::Tuple(items)
             | ResolvedPattern::Or(items) => {
                 for item in items {
@@ -434,6 +435,7 @@ impl Checker {
                 }
             }
             Resolved::ConstructorCall(_, _, args)
+            | Resolved::EnumErrorConstructorCall(_, _, _, args)
             | Resolved::EnumConstructorCall(_, _, _, args) => {
                 for arg in args {
                     match arg {

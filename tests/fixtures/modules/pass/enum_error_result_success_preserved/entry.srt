@@ -1,0 +1,3 @@
+source: Result<ClosedFailures> = Ok(ClosedFailures::Failure())
+converted: Result<ClosedFailures, OpenFailures> = source
+print(match converted { Ok(error) => Error::message(error), Err(_) => "wrong" })

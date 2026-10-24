@@ -383,6 +383,13 @@ impl Checker {
                     })
                     .collect(),
             ),
+            TypedInner::ErrorCoerce {
+                value,
+                concrete_kind,
+            } => TypedInner::ErrorCoerce {
+                value: self.resolve_typed_node(*value),
+                concrete_kind,
+            },
             TypedInner::EagerBoundary(inner) => {
                 TypedInner::EagerBoundary(self.resolve_typed_node(*inner))
             }
@@ -789,6 +796,13 @@ impl Checker {
             TypedMatchPattern::StrLit(value) => TypedMatchPattern::StrLit(value),
             TypedMatchPattern::DurationLit(value) => TypedMatchPattern::DurationLit(value),
             TypedMatchPattern::ErrorKind(value) => TypedMatchPattern::ErrorKind(value),
+            TypedMatchPattern::ErrorOther {
+                excluded_kinds,
+                inner,
+            } => TypedMatchPattern::ErrorOther {
+                excluded_kinds,
+                inner: Box::new(self.resolve_typed_match_pattern(*inner)),
+            },
             TypedMatchPattern::Or(items) => TypedMatchPattern::Or(
                 items
                     .into_iter()

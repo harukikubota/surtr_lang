@@ -123,6 +123,7 @@ pub fn user_type_symbol_identity_info(owner: &OwnerRef) -> Option<SymbolIdentity
             SymbolCapabilities::new(true, true, true, Some(FacetRootKind::TypeRoot))
                 .with_constructor_capture(ConstructorCapturePolicy::Ordinary)
         }
+        OwnerKind::EnumError => SymbolCapabilities::new(true, true, true, None),
         OwnerKind::Error => SymbolCapabilities::new(true, false, false, None)
             .with_constructor_capture(ConstructorCapturePolicy::Ordinary),
         OwnerKind::Trait => SymbolCapabilities::trait_owner(),
@@ -146,6 +147,7 @@ pub fn declaration_symbol_identity_info(
             | DeclarationKind::Struct
             | DeclarationKind::Record
             | DeclarationKind::Deferror
+            | DeclarationKind::EnumError
             | DeclarationKind::Enum
             | DeclarationKind::Trait
             | DeclarationKind::Const
@@ -161,6 +163,7 @@ pub fn declaration_symbol_identity_info(
             | DeclarationKind::Struct
             | DeclarationKind::Record
             | DeclarationKind::Deferror
+            | DeclarationKind::EnumError
             | DeclarationKind::Enum
             | DeclarationKind::EnumVariant
     )
@@ -913,7 +916,9 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
                 }
             }
         }
-        Resolved::ConstructorCall(_, id, args) | Resolved::EnumConstructorCall(_, id, _, args) => {
+        Resolved::ConstructorCall(_, id, args)
+        | Resolved::EnumConstructorCall(_, id, _, args)
+        | Resolved::EnumErrorConstructorCall(_, _, id, args) => {
             rebase_resolved_id(id, base, offset);
             for arg in args {
                 rebase_record_arg(arg, base, offset);
@@ -1079,6 +1084,14 @@ fn rebase_pattern(pattern: &mut ResolvedPattern, base: u32, offset: u32) {
             rebase_resolved_id(id, base, offset);
             for arg in pre_args {
                 rebase_resolved_node(arg, base, offset);
+            }
+            for inner in inners {
+                rebase_pattern(inner, base, offset);
+            }
+        }
+        ResolvedPattern::EnumErrorOther(_, candidates, inners) => {
+            for id in candidates {
+                rebase_resolved_id(id, base, offset);
             }
             for inner in inners {
                 rebase_pattern(inner, base, offset);

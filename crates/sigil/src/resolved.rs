@@ -7,6 +7,7 @@ use std::ops::Deref;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedDeclAttrs {
+    pub enum_error: bool,
     pub doc: Option<String>,
     pub builtin: bool,
     pub derives: Vec<String>,
@@ -21,6 +22,7 @@ pub struct ResolvedDeclAttrs {
 impl Default for ResolvedDeclAttrs {
     fn default() -> Self {
         Self {
+            enum_error: false,
             doc: None,
             builtin: false,
             derives: Vec::new(),
@@ -269,6 +271,9 @@ pub enum Resolved {
     /// Enum constructor whose owner type arguments were supplied explicitly.
     EnumConstructorCall(Span, ResolvedId, Vec<AstTy>, Vec<ResolvedRecordLitArg>),
 
+    /// Explicit EnumError owner and independently resolved concrete constructor.
+    EnumErrorConstructorCall(Span, ResolvedId, ResolvedId, Vec<ResolvedRecordLitArg>),
+
     /// Struct definition (passed through for Scar)
     StructDef(
         Span,
@@ -479,6 +484,8 @@ pub enum ResolvedPattern {
     BoolLit(Span, bool),
     DurationLit(Span, SurtrInt),
     Constructor(ResolvedId, Vec<ResolvedPattern>),
+    /// Unqualified Other item selected from the inspected EnumError in Scar.
+    EnumErrorOther(Span, Vec<ResolvedId>, Vec<ResolvedPattern>),
     /// Ordered lookups with expression keys resolved before pattern bindings.
     HashMap(Span, Vec<(Resolved, ResolvedPattern)>),
     /// Compiler-owned structural Record pattern. Named fields are normalized by Scar.
@@ -560,6 +567,8 @@ pub struct ResolvedClosureParam {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedEnumVariant {
+    /// Canonical concrete Error identity. `None` denotes Other for EnumError.
+    pub error_identity: Option<String>,
     pub id: ResolvedId,
     pub payload: Vec<AstTy>,
     pub discriminant: Option<SurtrInt>,

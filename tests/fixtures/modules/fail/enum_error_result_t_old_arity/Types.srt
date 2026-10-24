@@ -1,0 +1,1 @@
+defmod Placeholder { def value() -> Int { 1 } }

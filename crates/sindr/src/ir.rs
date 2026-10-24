@@ -1172,7 +1172,13 @@ pub enum ErrorValueSchema {
     TypeParameter(u32),
     List(Box<ErrorValueSchema>),
     Tuple(Vec<ErrorValueSchema>),
-    Result(Box<ErrorValueSchema>),
+    Result(Box<ErrorValueSchema>, Box<ErrorValueSchema>),
+    /// Nominal EnumError membership; runtime storage is the unchanged original Error.
+    EnumError {
+        name: String,
+        kinds: Vec<String>,
+        has_other: bool,
+    },
     MatchResult(Box<ErrorValueSchema>),
     Pid(Box<ErrorValueSchema>),
     ProcessMarker(String),
@@ -1217,7 +1223,9 @@ impl ErrorValueSchema {
             Self::TypeParameter(index) => arguments.get(*index as usize)?.clone(),
             Self::List(item) => Self::List(Box::new(convert(item)?)),
             Self::Tuple(items) => Self::Tuple(items.iter().map(convert).collect::<Option<_>>()?),
-            Self::Result(item) => Self::Result(Box::new(convert(item)?)),
+            Self::Result(ok, error) => {
+                Self::Result(Box::new(convert(ok)?), Box::new(convert(error)?))
+            }
             Self::MatchResult(item) => Self::MatchResult(Box::new(convert(item)?)),
             Self::HashMap(item) => Self::HashMap(Box::new(convert(item)?)),
             Self::Pid(marker) => Self::Pid(Box::new(convert(marker)?)),
@@ -1293,12 +1301,18 @@ impl ErrorValueSchema {
                         .zip(values)
                         .all(|(t, v)| t.accepts_inner(v, registry, ancestors, bindings))
             }
-            (Self::Result(ok), Value::Tagged { tag: 0, fields }) => {
+            (Self::Result(ok, _), Value::Tagged { tag: 0, fields }) => {
                 fields.len() == 1 && ok.accepts_inner(&fields[0], registry, ancestors, bindings)
             }
-            (Self::Result(_), Value::Tagged { tag: 1, fields }) => {
-                fields.len() == 1 && matches!(fields[0], Value::Error(_))
+            (Self::Result(_, error), Value::Tagged { tag: 1, fields }) => {
+                fields.len() == 1 && error.accepts_inner(&fields[0], registry, ancestors, bindings)
             }
+            (
+                Self::EnumError {
+                    kinds, has_other, ..
+                },
+                Value::Error(error),
+            ) => *has_other || kinds.contains(&error.kind),
             (Self::MatchResult(ok), Value::Tagged { tag, fields }) => {
                 let Some(entry) = registry.lookup(*tag) else {
                     return false;
@@ -2304,6 +2318,77 @@ fn checked_payload_len(len: usize) -> Result<u32, BytecodeFormatError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn enum_error_schema_matches_canonical_kind_and_result_error_position() {
+        use super::ErrorValueSchema as S;
+        use crate::runtime::{Location, RichError, TypeRegistry, Value};
+        let registry = TypeRegistry::new();
+        let closed = S::EnumError {
+            name: "Global::ClosedErrors".into(),
+            kinds: vec!["ConcNS::SavedError".into()],
+            has_other: false,
+        };
+        let open = S::EnumError {
+            name: "Global::OpenErrors".into(),
+            kinds: vec!["ConcNS::SavedError".into()],
+            has_other: true,
+        };
+        let error = |kind: &str| {
+            Value::Error(Box::new(RichError::new(
+                kind,
+                "ConcNS::SavedError",
+                Location {
+                    file: "schema.srt".into(),
+                    func: "test".into(),
+                    line: 1,
+                    column: 1,
+                    span_start: 0,
+                    span_end: 1,
+                },
+                None,
+            )))
+        };
+        assert!(closed.accepts(&error("ConcNS::SavedError"), &registry));
+        assert!(!closed.accepts(&error("Global::SavedError"), &registry));
+        assert!(open.accepts(&error("Global::SavedError"), &registry));
+        assert!(!open.accepts(&Value::Str("ConcNS::SavedError".into()), &registry));
+        let result = S::Result(Box::new(S::Int), Box::new(closed));
+        assert!(result.accepts(
+            &Value::Tagged {
+                tag: 0,
+                fields: vec![Value::Int(42.into())]
+            },
+            &registry
+        ));
+        assert!(result.accepts(
+            &Value::Tagged {
+                tag: 1,
+                fields: vec![error("ConcNS::SavedError")]
+            },
+            &registry
+        ));
+        assert!(!result.accepts(
+            &Value::Tagged {
+                tag: 1,
+                fields: vec![error("Global::SavedError")]
+            },
+            &registry
+        ));
+        assert!(!result.accepts(
+            &Value::Tagged {
+                tag: 1,
+                fields: vec![error("ConcNS::SavedError"), Value::Unit]
+            },
+            &registry
+        ));
+        let empty = S::EnumError {
+            name: "Global::EmptyErrors".into(),
+            kinds: vec![],
+            has_other: false,
+        };
+        assert!(!empty.accepts(&error("ConcNS::SavedError"), &registry));
+    }
+
     #[test]
     fn error_runtime_schema_checks_nominal_fields_and_generic_arguments() {
         use super::{ErrorValueSchema as S, ErrorVariantSchema};

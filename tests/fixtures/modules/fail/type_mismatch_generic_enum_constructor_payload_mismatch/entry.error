@@ -1,2 +1,2 @@
 phase: typecheck
-contains: expected StepSignal<Int>, got StepSignal<String>
+contains: Argument type mismatch: expected Int, got String

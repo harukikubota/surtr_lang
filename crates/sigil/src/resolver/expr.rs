@@ -2465,6 +2465,25 @@ impl Resolver {
     ) -> Result<Resolved, ResolveError> {
         let resolved = self.resolve_declaration_var_like(span.clone(), name, compiler_generated)?;
         if let Resolved::Var(_, id) = &resolved {
+            if self.declaration_uid_kinds.get(&id.unique_id) == Some(&DeclarationKind::EnumError)
+                || (self.declaration_uid_kinds.get(&id.unique_id)
+                    == Some(&DeclarationKind::EnumVariant)
+                    && id
+                        .symbol_info
+                        .as_ref()
+                        .is_some_and(|info| info.identity == TypeIdentity::EnumError))
+            {
+                return Err(ResolveError {
+                    message: "EnumError values require an explicit concrete Error constructor call"
+                        .into(),
+                    span,
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::NameResolution,
+                        subject: Some(id.name.clone()),
+                    },
+                    related_labels: Vec::new(),
+                });
+            }
             if self.declaration_uid_kinds.get(&id.unique_id) == Some(&DeclarationKind::Deferror) {
                 if id.qualified_name.is_none() {
                     return Err(ResolveError {
@@ -3765,8 +3784,15 @@ impl Resolver {
                 self.scope.define_with_id(&name, uid);
                 define_global_surface_alias(&mut self.scope, &name, uid);
                 let qualified_name = self.qualify_current_declaration_name(&name);
-                let symbol_info =
-                    self.symbol_info_for_declaration(&name, &DeclarationKind::Enum, None);
+                let symbol_info = self.symbol_info_for_declaration(
+                    &name,
+                    &if attrs.enum_error {
+                        DeclarationKind::EnumError
+                    } else {
+                        DeclarationKind::Enum
+                    },
+                    None,
+                );
                 let rid = ResolvedId {
                     name: name.clone(),
                     qualified_name: Some(qualified_name),
@@ -3781,7 +3807,29 @@ impl Resolver {
                     .collect::<Result<Vec<_>, ResolveError>>()?;
 
                 let mut resolved_variants = Vec::new();
+                let mut concrete_members = HashSet::new();
                 for variant in variants {
+                    let error_identity = if attrs.enum_error && variant.name != "Other" {
+                        let concrete =
+                            self.resolve_enum_error_concrete_id(&variant.span, &variant.name)?;
+                        let identity = concrete
+                            .qualified_name
+                            .expect("resolved concrete Error must carry its canonical identity");
+                        if !concrete_members.insert(identity.clone()) {
+                            return Err(ResolveError {
+                                message: format!("Duplicate EnumError member: {identity}"),
+                                span: variant.span.clone(),
+                                diagnostic: crate::error::ResolveErrorDiagnostic {
+                                    reason: crate::error::ResolveErrorReason::NameResolution,
+                                    subject: Some(identity),
+                                },
+                                related_labels: Vec::new(),
+                            });
+                        }
+                        Some(identity)
+                    } else {
+                        None
+                    };
                     let ctor_name = format!("{}::{}", name, variant.name);
                     let ctor_uid = self
                         .take_predeclared_id(&ctor_name)
@@ -3796,6 +3844,7 @@ impl Resolver {
                         Some(&name),
                     );
                     resolved_variants.push(ResolvedEnumVariant {
+                        error_identity,
                         id: ResolvedId {
                             name: ctor_name,
                             qualified_name: Some(qualified_ctor_name),
@@ -4592,6 +4641,37 @@ impl Resolver {
     fn resolve_callable_node(&mut self, node: Ast) -> Result<Resolved, ResolveError> {
         match node {
             Ast::Capture(span, target, args) => {
+                let capture_path = match target.as_ref() {
+                    Ast::Path(_, path) => Some(path.segments.clone()),
+                    Ast::EnumConstructorCall(_, owner, _, variant, _) => {
+                        Some(vec![owner.clone(), variant.clone()])
+                    }
+                    _ => None,
+                };
+                if let Some(segments) = capture_path {
+                    if segments
+                        .last()
+                        .and_then(|member| member.chars().next())
+                        .is_some_and(char::is_uppercase)
+                        && (1..segments.len()).any(|split| {
+                            self.owner_registry
+                                .get(&segments[..split].join("::"))
+                                .is_some_and(|owner| owner.kind == OwnerKind::EnumError)
+                        })
+                    {
+                        return Err(ResolveError {
+                            message: "EnumError explicit owner constructor capture is forbidden"
+                                .into(),
+                            span,
+                            diagnostic: crate::error::ResolveErrorDiagnostic {
+                                reason:
+                                    crate::error::ResolveErrorReason::ConstructorCaptureForbidden,
+                                subject: Some(segments.join("::")),
+                            },
+                            related_labels: Vec::new(),
+                        });
+                    }
+                }
                 let lazy_capture = self.lazy_capture_source(&target, &args)?;
                 if matches!(target.as_ref(), Ast::PatternConsumerCall(..)) {
                     let max_index = self.validate_capture_placeholders(
@@ -4798,6 +4878,93 @@ impl Resolver {
             }
 
             Ast::ConstructorCall(span, type_name, args) => {
+                let segments = type_name.split("::").collect::<Vec<_>>();
+                let explicit_owners = (1..segments.len())
+                    .filter(|split| *split <= 2 && segments.len() - split <= 2)
+                    .filter_map(|split| {
+                        let owner_name = segments[..split].join("::");
+                        self.owner_registry
+                            .get(&owner_name)
+                            .filter(|owner| {
+                                owner.kind == OwnerKind::EnumError
+                                    && self.scope.lookup(&owner_name).is_some()
+                            })
+                            .map(|_| (owner_name, segments[split..].join("::")))
+                    })
+                    .collect::<Vec<_>>();
+                if explicit_owners.len() > 1 {
+                    let candidates = explicit_owners
+                        .iter()
+                        .map(|(owner, concrete)| {
+                            let owner = if owner.contains("::") {
+                                owner.clone()
+                            } else {
+                                format!("Global::{owner}")
+                            };
+                            let concrete = if concrete.contains("::") {
+                                concrete.clone()
+                            } else {
+                                format!("Global::{concrete}")
+                            };
+                            format!("owner {owner} / concrete {concrete}")
+                        })
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    return Err(ResolveError {
+                        message: format!("Ambiguous EnumError owner in {type_name}: {candidates}"),
+                        span: span.clone(),
+                        diagnostic: crate::error::ResolveErrorDiagnostic {
+                            reason: crate::error::ResolveErrorReason::NameResolution,
+                            subject: Some(type_name),
+                        },
+                        related_labels: Vec::new(),
+                    });
+                }
+                if let Some((owner_name, concrete_name)) = explicit_owners.into_iter().next() {
+                    if concrete_name == "Other" {
+                        return Err(ResolveError {
+                            message: "EnumError Other cannot be constructed manually".to_string(),
+                            span: span.clone(),
+                            diagnostic: crate::error::ResolveErrorDiagnostic {
+                                reason: crate::error::ResolveErrorReason::NameResolution,
+                                subject: Some(type_name),
+                            },
+                            related_labels: Vec::new(),
+                        });
+                    }
+                    let owner_uid = self.scope.lookup(&owner_name).ok_or_else(|| ResolveError {
+                        message: format!("Undefined EnumError type: {owner_name}"),
+                        span: span.clone(),
+                        diagnostic: crate::error::ResolveErrorDiagnostic {
+                            reason: crate::error::ResolveErrorReason::NameResolution,
+                            subject: Some(owner_name.clone()),
+                        },
+                        related_labels: Vec::new(),
+                    })?;
+                    let owner = ResolvedId {
+                        name: owner_name.clone(),
+                        qualified_name: self.declaration_fq_name_for_uid(owner_uid),
+                        unique_id: owner_uid,
+                        compiler_generated: false,
+                        symbol_info: self.symbol_info_for_uid(&owner_name, owner_uid),
+                        span: span.clone(),
+                    };
+                    let concrete = self.resolve_enum_error_concrete_id(&span, &concrete_name)?;
+                    let args = args
+                        .into_iter()
+                        .map(|arg| match arg {
+                            RecordLitArg::Positional(expr) => {
+                                Ok(ResolvedRecordLitArg::Positional(self.resolve_node(expr)?))
+                            }
+                            RecordLitArg::Named(name, expr) => {
+                                Ok(ResolvedRecordLitArg::Named(name, self.resolve_node(expr)?))
+                            }
+                        })
+                        .collect::<Result<Vec<_>, ResolveError>>()?;
+                    return Ok(Resolved::EnumErrorConstructorCall(
+                        span, owner, concrete, args,
+                    ));
+                }
                 let type_name = sindr::names::special_enum_variant_surface_meta(&type_name)
                     .map(|meta| meta.qualified_name.to_string())
                     .unwrap_or(type_name);
@@ -4860,6 +5027,19 @@ impl Resolver {
                         },
                         related_labels: Vec::new(),
                     })?;
+                if self.declaration_uid_kinds.get(&uid) == Some(&DeclarationKind::EnumError) {
+                    return Err(ResolveError {
+                        message:
+                            "EnumError values require an explicit concrete Error constructor call"
+                                .into(),
+                        span: span.clone(),
+                        diagnostic: crate::error::ResolveErrorDiagnostic {
+                            reason: crate::error::ResolveErrorReason::NameResolution,
+                            subject: Some(normalized_name),
+                        },
+                        related_labels: Vec::new(),
+                    });
+                }
                 let symbol_info = self.symbol_info_for_uid(&normalized_name, uid);
                 let rid = ResolvedId {
                     name: normalized_name,
@@ -5015,6 +5195,50 @@ impl Resolver {
 
             _ => unreachable!("resolve_node dispatched a non-callable node"),
         }
+    }
+
+    fn resolve_enum_error_concrete_id(
+        &self,
+        span: &Span,
+        name: &str,
+    ) -> Result<ResolvedId, ResolveError> {
+        let normalized = if name.contains("::") {
+            name.to_string()
+        } else {
+            format!("Global::{name}")
+        };
+        let error = || ResolveError {
+            message: format!("EnumError member {name} is not a visible declared concrete Error"),
+            span: span.clone(),
+            diagnostic: crate::error::ResolveErrorDiagnostic {
+                reason: crate::error::ResolveErrorReason::NameResolution,
+                subject: Some(name.to_string()),
+            },
+            related_labels: Vec::new(),
+        };
+        let uid = self.scope.lookup(&normalized).ok_or_else(error)?;
+        if self.declaration_uid_kinds.get(&uid) != Some(&DeclarationKind::Deferror) {
+            return Err(error());
+        }
+        let qualified_name = self
+            .declaration_fq_name_for_uid(uid)
+            .ok_or_else(|| ResolveError {
+                message: "Concrete Error declaration has no canonical identity".into(),
+                span: span.clone(),
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::CompilerInvariant,
+                    subject: Some(name.to_string()),
+                },
+                related_labels: Vec::new(),
+            })?;
+        Ok(ResolvedId {
+            name: normalized.clone(),
+            qualified_name: Some(qualified_name),
+            unique_id: uid,
+            compiler_generated: false,
+            symbol_info: self.symbol_info_for_uid(&normalized, uid),
+            span: span.clone(),
+        })
     }
 
     pub(super) fn resolve_value_parameters(

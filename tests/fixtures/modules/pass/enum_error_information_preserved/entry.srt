@@ -1,0 +1,7 @@
+original = SavedFailure(7)
+with_cause = Result::cause(Err(original), OutsideFailure())
+classified: Result<Int, OpenFailures> = with_cause
+widened: Result<Int> = classified
+print(match widened { Ok(_) => "wrong", Err(error) => Error::format(error) })
+selected: OpenFailures = original
+print(match selected { SavedFailure(value) @ saved => "#{value}:#{saved.value}", Other(_) => "wrong" })

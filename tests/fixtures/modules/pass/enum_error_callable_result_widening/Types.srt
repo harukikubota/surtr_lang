@@ -1,0 +1,22 @@
+deferror SavedFailure(value: Int) {
+  |input: Int| Self(message: "saved", value: input)
+}
+defenumerror ClosedFailures { SavedFailure }
+defmod Factory {
+  def error() -> ClosedFailures {
+    print("error")
+    SavedFailure(7)
+  }
+  def result(value: Int) -> Result<Int, ClosedFailures> {
+    print("result")
+    Err(SavedFailure(value))
+  }
+  def make_callback() -> (Int -> Result<Int, ClosedFailures>) {
+    print("capture")
+    &Factory::result
+  }
+  def return_saved(error: ClosedFailures, value: Int) -> Result<Int, ClosedFailures> {
+    print("callback")
+    Err(error)
+  }
+}

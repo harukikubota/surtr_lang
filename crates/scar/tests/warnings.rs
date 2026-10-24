@@ -175,6 +175,7 @@ fn unused_struct_and_enum_type_parameters_warn() {
             id("Choice", 11),
             vec![type_param("$B", 28)],
             vec![ResolvedEnumVariant {
+                error_identity: None,
                 id: id("Choice::One", 12),
                 payload: Vec::new(),
                 discriminant: None,
@@ -206,6 +207,7 @@ fn type_parameters_used_in_real_type_positions_do_not_warn() {
         id("Maybe", 20),
         vec![type_param("$A", 4)],
         vec![ResolvedEnumVariant {
+            error_identity: None,
             id: id("Maybe::Some", 21),
             payload: vec![named_ty("$A", 18)],
             discriminant: None,

@@ -72,6 +72,7 @@ fn children(node: &mut TypedNode, visitor: &mut dyn FnMut(&mut TypedNode)) {
         }
         TypedInner::Bind(_, rhs)
         | TypedInner::ApplyPattern { value: rhs, .. }
+        | TypedInner::ErrorCoerce { value: rhs, .. }
         | TypedInner::Semi(rhs)
         | TypedInner::FieldAccess(rhs, _)
         | TypedInner::EagerBoundary(rhs) => visitor(rhs),

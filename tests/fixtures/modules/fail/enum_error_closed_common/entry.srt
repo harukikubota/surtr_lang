@@ -1,0 +1,2 @@
+plain = AlphaFailure(1)
+rejected: ClosedFailures = plain

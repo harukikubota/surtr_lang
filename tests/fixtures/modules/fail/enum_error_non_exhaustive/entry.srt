@@ -1,0 +1,2 @@
+value: OpenFailures = AlphaFailure(1)
+print(to_string(match value { Other(_) => 0 }))

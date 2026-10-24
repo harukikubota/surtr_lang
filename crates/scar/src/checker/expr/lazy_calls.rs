@@ -534,6 +534,31 @@ impl Checker {
                     return Err(error);
                 }
             }
+        } else if let Some(expected) =
+            expected.filter(|expected| self.type_contains_error_position(expected))
+        {
+            match arg {
+                Resolved::Closure(span, params, captures, body)
+                | Resolved::CaptureClosure(span, params, captures, body)
+                    if params.is_empty()
+                        && self.function_parts(&self.resolve_ty(expected)).is_none() =>
+                {
+                    self.check_closure(
+                        span,
+                        params,
+                        captures,
+                        body,
+                        Some(&Ty::Func(vec![], Box::new(expected.clone()))),
+                        None,
+                    )?
+                }
+                Resolved::Closure(..) | Resolved::CaptureClosure(..)
+                    if self.function_parts(&self.resolve_ty(expected)).is_none() =>
+                {
+                    self.check_node(arg)?
+                }
+                _ => self.check_node_with_expected(arg, Some(expected))?,
+            }
         } else {
             self.check_node(arg)?
         };
@@ -546,6 +571,7 @@ impl Checker {
                     | Resolved::LazyApp(..)
                     | Resolved::ConstructorCall(..)
                     | Resolved::EnumConstructorCall(..)
+                    | Resolved::EnumErrorConstructorCall(..)
                     | Resolved::If(..)
                     | Resolved::IfLet(..)
                     | Resolved::AssertErrorMatches(..)
@@ -672,10 +698,13 @@ impl Checker {
         }
         // The ordinary branch relation below checks the resulting values;
         // at most one shell is added, so deeper mismatches remain errors.
-        Ok((
-            self.consume_lazy_input(left, wrap_left, span),
-            self.consume_lazy_input(right, wrap_right, span),
-        ))
+        let mut left = self.consume_lazy_input(left, wrap_left, span);
+        let mut right = self.consume_lazy_input(right, wrap_right, span);
+        if let Some(expected) = expected {
+            self.coerce_error_value_receiver(&mut left, expected, None)?;
+            self.coerce_error_value_receiver(&mut right, expected, None)?;
+        }
+        Ok((left, right))
     }
 
     /// Keep all requirements known at this normalization step available to diagnostics,
@@ -742,6 +771,8 @@ impl Checker {
         call_span: &Span,
     ) -> Result<TypedNode, TypeError> {
         let input = self.check_lazy_input(arg, Some(expected), call_span)?;
-        self.normalize_lazy_single(input, expected, call_span)
+        let mut value = self.normalize_lazy_single(input, expected, call_span)?;
+        self.coerce_error_value_receiver(&mut value, expected, None)?;
+        Ok(value)
     }
 }

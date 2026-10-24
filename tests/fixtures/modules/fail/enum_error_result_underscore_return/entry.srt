@@ -1,0 +1,2 @@
+def rejected() -> Result<Int, _> { Ok(1) }
+rejected()

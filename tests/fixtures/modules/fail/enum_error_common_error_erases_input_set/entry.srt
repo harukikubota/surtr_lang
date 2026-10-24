@@ -1,0 +1,3 @@
+selected: Result<Int, ClosedFailures> = Err(Failure())
+common: Result<Int> = selected
+rejected: Result<Int, ClosedFailures> = common

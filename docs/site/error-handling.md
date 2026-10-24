@@ -66,6 +66,33 @@ saved: Result<Error> = Ok(error)
 
 `error.kind` と `error.message` は、それぞれ `Error::kind(error)` と `Error::message(error)` と同じ文字列を返します。`Error.kind` と `Error.message` は読み取り専用の Facet path です。他の型の Error field を経由する `Failure.error.message` も読み取り専用で、`set`・`over`・bulk update は使えません。cause や location などの内部 field は公開しません。
 
+## 名前付きの Error 集合
+
+`defenumerror` は、既存の具象 Error を名前付きの集合へまとめます。Payload は元の `deferror` に保存し、集合側には名前だけを列挙します。`Other(Error)` を付けると、列挙外の Error も保持できます。ライブラリの集合を利用者の Error で拡張できるようにするか、閉集合の網羅性を求めるかは、集合の定義側が選びます。
+
+```surtr
+defenumerror Failures { NoneError, Other(Error) }
+selected: Failures = NoneError()
+explicit = Failures::NoneError()
+result: Result<Int, Failures> = Err(NoneError())
+```
+
+型注釈や明示 owner のない `NoneError()` は共通 Error です。直接生成や照合済みの具象束縛は、列挙に所属すれば Other のない集合にも格納できます。共通 Error の変数、共通 Error を返す関数結果、別集合の値を受け取るには、変換先に Other が必要です。集合から共通 Error へはいつでも元 Error を取り出せます。
+
+```surtr
+plain = NoneError()
+classified: Failures = plain
+widened: Error = selected
+print(match selected {
+  NoneError => "missing",
+  Other(error) => Error::message(error),
+})
+```
+
+match は列挙済みの項目と Other をそれぞれ検査します。Other だけで列挙項目を覆うことはできません。Other の中身は共通 Error なので、種類や Payload を読むにはさらに Error Pattern で照合します。Error モジュールには集合の値も直接渡せます。
+
+`Result<T, Failures>` はその集合を Error 位置に保存します。共通 Error は `Result<T>` と書きます。省略した Error 位置は内部で導出し、`Result<T, _>` という明示表記は入力・戻り値・保存型のいずれでも拒否します。通常の標準 helper は集合を入力に受け取る地点で共通 Error として扱い、共通 Error を返すため、helper の結果を集合として受け取る場合も Other が必要です。集合への格納や変換は元 Error の情報を保持し、cause を追加しません。集合自身への Trait impl / derive は禁止しますが、固有関数は定義できます。
+
 ## Error の定義・生成・分解
 
 ### 定義する

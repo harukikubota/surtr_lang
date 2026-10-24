@@ -23,14 +23,17 @@ use crate::error::TypeError;
 use crate::typed::*;
 use crate::types::{NominalType, Ty};
 
+mod assert_error_matches;
 mod captures;
 mod carriers;
 mod definitions;
+mod error_slots;
+mod error_transport;
+mod error_transport_variance;
 mod expr;
 mod handler_captures;
 mod lazy_diagnostics;
 mod matching;
-mod assert_error_matches;
 use lazy_diagnostics::{ActiveLazyCapture, LazyCaptureDiagnostic};
 mod inference;
 mod patterns;
@@ -165,6 +168,7 @@ struct TraitImplMethodInfo {
 #[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct TraitImplInfo {
+    standard_definition: bool,
     declaration_key: TraitImplDeclarationKey,
     head_type_list: ImplHeadTypeList,
     impl_constraints: CanonicalConstraintSet,
@@ -514,6 +518,11 @@ enum ConstructorCapabilityProvenance {
     /// representation still carries value-derived provenance for projections.
     ConstrainedTemplate {
         capabilities: BTreeSet<String>,
+        source: Box<(ConstructorCapabilityProvenance, Ty)>,
+    },
+    /// A checked Error-slot transport. The surrounding Source type is the
+    /// target; projections retain the original value views until they change.
+    ErrorTransport {
         source: Box<(ConstructorCapabilityProvenance, Ty)>,
     },
     /// Every source must justify the requested capability at the use site.

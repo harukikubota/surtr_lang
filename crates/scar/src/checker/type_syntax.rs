@@ -934,7 +934,7 @@ impl Checker {
                                     }
                                     return Err(TypeError::new("Concrete Error types are only valid for an already narrowed local binding", span.clone()));
                                 },
-                                crate::env::TypeKind::Enum => {
+                                crate::env::TypeKind::Enum | crate::env::TypeKind::EnumError => {
                                     if let Some(ty) =
                                         Self::builtin_special_enum_ty(&def.name, &[])
                                     {
@@ -1173,23 +1173,9 @@ impl Checker {
                     let ok =
                         self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
                     let err = if args.len() == 2 {
-                        if context != TypeSyntaxContext::FunctionReturn {
-                            return Err(TypeError {
-                                structured: None,
-                                message:
-                                    "Result<T, E> is only allowed in function return signatures."
-                                        .into(),
-                                span: span.clone(),
-                                hint: Some(
-                                    "Use Result<T> in local code."
-                                        .into(),
-                                ),
-                            });
-                        }
-                        self.resolve_ast_ty_in_context(&args[1], TypeSyntaxContext::ErrorMarker)?
-                    } else {
-                        Ty::Error
-                    };
+                        self.resolve_result_error_slot(&args[1], context, None)?
+                    } else { Ty::Error };
+                    self.require_error_slot(&err, span)?;
                     Ok(Ty::Result(Box::new(ok), Box::new(err)))
                 }
                 _ => {
@@ -1228,7 +1214,11 @@ impl Checker {
                             .and_then(|bound| self.declaration_constructor_trait_key(bound));
                         let marker_slot = def.type_param_vars.get(index)
                             .is_some_and(|var| self.process_marker_tyvars.contains(var));
-                        let resolved = if marker_slot {
+                        let resolved = if index == 2 && Self::canonical_user_type_name(&def.name) == "Global::ResultT" {
+                            let error = self.resolve_result_error_slot(argument, TypeSyntaxContext::General, None)?;
+                            self.require_error_slot(&error, Self::ast_ty_span(argument))?;
+                            error
+                        } else if marker_slot {
                             self.pid_marker_from_ast(argument)?
                         } else if let Some(trait_key) = constructor_trait.filter(|_| {
                             !matches!(argument, AstTy::Named(_, variable) if variable.starts_with('$'))
@@ -1251,7 +1241,7 @@ impl Checker {
                             NominalType::new(
                                 resolved_args.clone()),
                         )),
-                        crate::env::TypeKind::Enum => {
+                        crate::env::TypeKind::Enum | crate::env::TypeKind::EnumError => {
                             if let Some(ty) =
                                 Self::builtin_special_enum_ty(&def.name, &resolved_args)
                             {
@@ -1408,12 +1398,27 @@ impl Checker {
                 self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)
             }
             AstTy::Generic(span, name, arguments) => {
+                let error_index = match Self::surface_name(name) {
+                    "Result" => Some(1),
+                    "ResultT" => Some(2),
+                    _ => None,
+                }
+                .filter(|index| *index < arguments.len());
+                if let Some(index) = error_index {
+                    Self::reject_error_slot_hole(&arguments[index])?;
+                }
                 let resolved_arguments = arguments
                     .iter()
                     .map(|argument| {
                         self.resolve_type_constructor_return_type_argument_part(argument)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
+                if let Some(index) = error_index {
+                    self.require_error_slot(
+                        &resolved_arguments[index],
+                        Self::ast_ty_span(&arguments[index]),
+                    )?;
+                }
                 match Self::surface_name(name) {
                     "List" => {
                         let [inner] = resolved_arguments.as_slice() else {
@@ -1499,13 +1504,15 @@ impl Checker {
                                 definition.name.clone(),
                                 NominalType::new(resolved_arguments.clone()),
                             )),
-                            crate::env::TypeKind::Enum => Ok(Self::builtin_special_enum_ty(
-                                &definition.name,
-                                &resolved_arguments,
-                            )
-                            .unwrap_or_else(|| {
-                                Ty::Enum(definition.name.clone(), resolved_arguments)
-                            })),
+                            crate::env::TypeKind::Enum | crate::env::TypeKind::EnumError => {
+                                Ok(Self::builtin_special_enum_ty(
+                                    &definition.name,
+                                    &resolved_arguments,
+                                )
+                                .unwrap_or_else(|| {
+                                    Ty::Enum(definition.name.clone(), resolved_arguments)
+                                }))
+                            }
                             crate::env::TypeKind::ConcreteError => Err(TypeError::new(
                                 format!("Error type {name} is not a carrier"),
                                 span.clone(),
@@ -1599,8 +1606,10 @@ impl Checker {
             crate::env::TypeKind::Record => {
                 Ty::Record(def.name.clone(), NominalType::new(args.clone()))
             }
-            crate::env::TypeKind::Enum => Self::builtin_special_enum_ty(&def.name, &args)
-                .unwrap_or_else(|| Ty::Enum(def.name.clone(), args)),
+            crate::env::TypeKind::Enum | crate::env::TypeKind::EnumError => {
+                Self::builtin_special_enum_ty(&def.name, &args)
+                    .unwrap_or_else(|| Ty::Enum(def.name.clone(), args))
+            }
             crate::env::TypeKind::ConcreteError => {
                 return Err(TypeError {
                     structured: None,
@@ -1644,7 +1653,7 @@ impl Checker {
             };
             self.register_tyvar_bound(variable, bound);
             if let Some(trait_key) = self.declaration_constructor_trait_key(bound) {
-                self.constructor_witness_traits.insert(variable, trait_key);
+                self.register_constructor_witness_trait(variable, trait_key);
             }
         }
         self.validate_nominal_type_arguments(definition, arguments, span, true)
@@ -1701,7 +1710,7 @@ impl Checker {
                 if let Some(bound) = &param.bound {
                     self.register_tyvar_bound(var, bound);
                     if let Some(trait_key) = self.declaration_constructor_trait_key(bound) {
-                        self.constructor_witness_traits.insert(var, trait_key);
+                        self.register_constructor_witness_trait(var, trait_key);
                     }
                 }
             }
@@ -1874,7 +1883,7 @@ impl Checker {
                 let Ty::Var(witness_var) = witness else {
                     unreachable!("fresh constructor witness")
                 };
-                self.constructor_witness_traits.insert(witness_var, trait_key);
+                self.register_constructor_witness_trait(witness_var, trait_key);
                 Ok(Ty::SelfApp(vec![Ty::Hole, Ty::Var(witness_var)]))
             }
             AstTy::Generic(span, name, arguments) => {
@@ -1902,7 +1911,7 @@ impl Checker {
                 let Ty::Var(witness_var) = witness else {
                     unreachable!("fresh constructor witness")
                 };
-                self.constructor_witness_traits.insert(witness_var, trait_key);
+                self.register_constructor_witness_trait(witness_var, trait_key);
                 let mut application = vec![Ty::Hole, Ty::Var(witness_var)];
                 for argument in arguments {
                     application.push(self.resolve_signature_like_ast_ty_in_context(
@@ -1992,8 +2001,7 @@ impl Checker {
                         let Ty::Var(witness_var) = witness else {
                             unreachable!("fresh constructor witness must be a type variable")
                         };
-                        self.constructor_witness_traits
-                            .insert(witness_var, trait_key);
+                        self.register_constructor_witness_trait(witness_var, trait_key);
                         return Ok(Ty::SelfApp(vec![Ty::Hole, Ty::Var(witness_var)]));
                     }
                 }
@@ -2034,8 +2042,7 @@ impl Checker {
                         let Ty::Var(witness_var) = witness else {
                             unreachable!("fresh constructor witness must be a type variable")
                         };
-                        self.constructor_witness_traits
-                            .insert(witness_var, trait_key);
+                        self.register_constructor_witness_trait(witness_var, trait_key);
                         let mut application = vec![Ty::Hole, Ty::Var(witness_var)];
                         for arg in args {
                             application.push(self.resolve_signature_like_ast_ty_in_context(
@@ -2070,16 +2077,6 @@ impl Checker {
                 }
             }
             AstTy::Named(_, name) if name.starts_with('$') => {
-                if context == TypeSyntaxContext::ErrorMarker {
-                    return Err(TypeError {
-                        structured: None,
-                        message:
-                            "The error marker E in Result<T, E> must be a deferror-defined type."
-                                .into(),
-                        span: Self::ast_ty_span(ast_ty).clone(),
-                        hint: None,
-                    });
-                }
                 if let Some(existing) = tyvars.get(name) {
                     return Ok(existing.clone());
                 }
@@ -2406,25 +2403,9 @@ impl Checker {
                         mode,
                     )?;
                     let err = if args.len() == 2 {
-                        if context != TypeSyntaxContext::FunctionReturn {
-                            return Err(TypeError {
-                                structured: None,
-                                message:
-                                    "Result<T, E> is only allowed in function return signatures."
-                                        .into(),
-                                span: span.clone(),
-                                hint: Some("Use Result<T> in local code.".into()),
-                            });
-                        }
-                        self.resolve_signature_like_ast_ty_in_context(
-                            &args[1],
-                            TypeSyntaxContext::ErrorMarker,
-                            tyvars,
-                            mode,
-                        )?
-                    } else {
-                        Ty::Error
-                    };
+                        self.resolve_result_error_slot(&args[1], context, Some((tyvars, mode)))?
+                    } else { Ty::Error };
+                    self.require_error_slot(&err, span)?;
                     Ok(Ty::Result(Box::new(ok), Box::new(err)))
                 }
                 _ if mode.allows_user_generic_fallback() => {
@@ -2467,7 +2448,11 @@ impl Checker {
                             .and_then(|bound| self.declaration_constructor_trait_key(bound));
                         let marker_slot = def.type_param_vars.get(index)
                             .is_some_and(|var| self.process_marker_tyvars.contains(var));
-                        let resolved = if marker_slot {
+                        let resolved = if index == 2 && Self::canonical_user_type_name(&def.name) == "Global::ResultT" {
+                            let error = self.resolve_result_error_slot(argument, TypeSyntaxContext::General, Some((tyvars, mode)))?;
+                            self.require_error_slot(&error, Self::ast_ty_span(argument))?;
+                            error
+                        } else if marker_slot {
                             let marker = match argument {
                                 AstTy::Named(_, name) if name.starts_with('$') =>
                                     self.resolve_signature_like_ast_ty_in_context(
@@ -2506,7 +2491,7 @@ impl Checker {
                             NominalType::new(
                                 resolved_args.clone()),
                         )),
-                        crate::env::TypeKind::Enum => {
+                        crate::env::TypeKind::Enum | crate::env::TypeKind::EnumError => {
                             if let Some(ty) =
                                 Self::builtin_special_enum_ty(&def.name, &resolved_args)
                             {
@@ -2570,53 +2555,83 @@ impl Checker {
         }
     }
 
+    fn reject_error_slot_hole(ast_ty: &AstTy) -> Result<(), TypeError> {
+        if matches!(ast_ty, AstTy::Named(_, name) if Self::surface_name(name) == "_") {
+            return Err(TypeError::new(
+                "Error position cannot be `_`; use Error, EnumError, or a named type variable.",
+                Self::ast_ty_span(ast_ty).clone(),
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) fn resolve_error_marker_type(&self, ast_ty: &AstTy) -> Result<Ty, TypeError> {
+        Self::reject_error_slot_hole(ast_ty)?;
         let span = Self::ast_ty_span(ast_ty).clone();
         let AstTy::Named(_, name) = ast_ty else {
-            return Err(TypeError {
-                structured: None,
-                message: "The error marker E in Result<T, E> must be a deferror-defined type."
-                    .into(),
+            return Err(TypeError::new(
+                "Result Error position requires Error or EnumError",
                 span,
-                hint: None,
-            });
+            ));
         };
-
         if Self::surface_name(name) == "Error" {
             return Ok(Ty::Error);
         }
 
-        let def = self.env.lookup_type_def(name).ok_or_else(|| TypeError {
-            structured: None,
-            message: "The error marker E in Result<T, E> must be a deferror-defined type.".into(),
-            span: span.clone(),
-            hint: None,
-        });
+        let def = self.env.lookup_type_def(name).ok_or_else(|| {
+            TypeError::new(
+                "Result Error position requires Error or EnumError",
+                span.clone(),
+            )
+        })?;
+        if def.kind == crate::env::TypeKind::EnumError {
+            return Ok(Ty::Enum(def.name.clone(), Vec::new()));
+        }
+        Err(TypeError::new(
+            "Result Error position requires Error or EnumError",
+            span,
+        ))
+    }
 
-        if let Ok(def) = def {
-            if def.kind != crate::env::TypeKind::ConcreteError {
-                return Err(TypeError {
-                    structured: None,
-                    message: "The error marker E in Result<T, E> must be a deferror-defined type."
-                        .into(),
-                    span,
-                    hint: None,
-                });
+    pub(super) fn enum_error_name(&self, ty: &Ty) -> Option<String> {
+        match self.resolve_ty(ty) {
+            Ty::Enum(name, args)
+                if args.is_empty() && self.env.enum_error_members.contains_key(&name) =>
+            {
+                Some(name)
             }
-            return Ok(Ty::Error);
+            _ => None,
         }
+    }
 
-        if !self.env.is_declared_error_type_name(name) {
-            return Err(TypeError {
-                structured: None,
-                message: "The error marker E in Result<T, E> must be a deferror-defined type."
-                    .into(),
-                span,
-                hint: None,
-            });
+    pub(super) fn is_error_value_ty(&self, ty: &Ty) -> bool {
+        matches!(self.resolve_ty(ty), Ty::Error) || self.enum_error_name(ty).is_some()
+    }
+
+    fn resolve_result_error_slot(
+        &mut self,
+        ast_ty: &AstTy,
+        context: TypeSyntaxContext,
+        tyvars: Option<(&mut HashMap<String, Ty>, SignatureTyMode<'_>)>,
+    ) -> Result<Ty, TypeError> {
+        Self::reject_error_slot_hole(ast_ty)?;
+        // Concrete names in a definition's direct return remain documentation metadata.
+        if context == TypeSyntaxContext::FunctionReturn {
+            if let AstTy::Named(_, name) = ast_ty {
+                if self.env.is_declared_error_type_name(name) {
+                    return Ok(Ty::Error);
+                }
+            }
         }
-
-        Ok(Ty::Error)
+        if let Some((tyvars, mode)) = tyvars {
+            return self.resolve_signature_like_ast_ty_in_context(
+                ast_ty,
+                TypeSyntaxContext::ErrorMarker,
+                tyvars,
+                mode,
+            );
+        }
+        self.resolve_error_marker_type(ast_ty)
     }
 }
 

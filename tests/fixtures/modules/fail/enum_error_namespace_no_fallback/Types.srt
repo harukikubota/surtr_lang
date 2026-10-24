@@ -1,0 +1,2 @@
+namespace Concrete { deferror Failure { "namespaced" } }
+defenumerror Failures { Concrete::Failure, Other(Error) }

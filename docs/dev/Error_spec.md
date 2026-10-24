@@ -16,6 +16,51 @@ Error は不透明な通常値として引数、戻り値、型注釈、field、
 
 抽象 `Error` の直接構築、`&Error`、Error 自体への Trait impl / derive は許可しない。Error 自体に `Eq` や `Show` は提供しない。`Result<T>` の `Err` 同士の Eq は先頭の宣言 kind だけを比較し、message・Payload・cause・位置・診断情報は比較しない。
 
+## EnumError と Result の Error 位置
+
+`defenumerror` は、宣言済みの具象 Error を列挙する名義型である。同じ項目を持つ別の集合も別型とする。共通 `Error` の開いた集合と区別し、呼出し連鎖の発生し得る Error 集合は推論しない。EnumError の扱いは関数スコープで決まる。呼出し先から集合を連鎖的に伝える経路は前提としない。
+
+```surtr
+defenumerror Failures {
+  NoneError,
+  Other(Error)
+}
+selected: Failures = NoneError()
+named = Failures::NoneError()
+```
+
+同じ declaration stage では、集合型を参照する field・署名と集合宣言の記述順に依存しない。分類情報は field の型解決前に登録する。
+
+各項目は canonical な `deferror` identity を参照する。具象 Error の保存 Payload を再宣言しない。Payload を持てる項目は任意の `Other(Error)` だけとし、未宣言名、具象 Error 以外の参照、identity の重複、その他の Payload、idx 指定を拒否する。`Other` の手動構築は許可しない。集合自身への Trait impl と Trait を生成する derive は禁止する。固有関数の `impl Failures` は許可する。Other は定義側が集合の閉じ具合を選ぶ設計パラメータである。Other のない集合は閉集合として網羅性を保証し、Other のある集合は利用者が追加した Error も保持できる。検査強度が共通 Error に近づくことは定義側の選択として許容する。
+
+集合と具象 Error の名前空間は独立に解決する。省略した名前空間はそれぞれ Global とする。`Selected::Failures::Concrete::Failure()` が明示構築の正規形であり、`Failures::Failure()` から登録済みの別名前空間を探索しない。Other を理由に未宣言・不可視の名前を受理しない。
+
+| 入力 | EnumError への格納 |
+|---|---|
+| 直接の具象 Error 生成、照合済みの局所具象束縛 | 列挙済みの項目へ格納。列挙外なら Other が必要 |
+| 共通 Error、異なる EnumError | 変換先に Other が必要。元 Error の canonical kind により分類 |
+| 同じ EnumError | 通常の型一致。Other は不要 |
+
+EnumError から共通 Error へは元 Error を取り出して昇格する。構築先は受け取り側の期待型または明示 owner が決める。明示 owner は期待型で上書きしない。入れ子の container・field・Result にも Error 位置まで期待型を渡す。共通 Error へ消去済みの変数や関数結果から生成元を復元しない。集合の部分集合関係を理由に変換を許可しない。
+
+構築、分類、運搬、分解では、元 Error の kind・message・保存 Payload・location・cause・diagnostic・stack trace を保持する。具象コンストラクタは一度だけ呼び、集合への格納で Error を再構築したり cause を追加したりしない。
+
+`Result<T>` は `Result<T, Error>` に相当する。引数、変数、field、関数型、入れ子の Error 位置にも Error または EnumError を指定できる。具象 Error 名は関数定義の直接の戻り値でのみ説明用 metadata として記述でき、実際に返す kind を制限しない。EnumError を指定した戻り値は実型として検査し、呼出し側へも集合型を渡す。型変数の Error 位置も具体化時に Error / EnumError を検査する。
+
+`Result<T>` は `Either<Error, T>` に相当する。省略した Error 位置は内部で共通 Error を導出し、`Result<T, Error>` として扱う。この導出は内部規則であり、ソースに `Result<T, _>` は書けない。変数、field、引数、戻り値、関数型、入れ子、call-site ReturnTypeArgument のいずれでも Error 位置の明示 `_` を拒否する。入力に集合を持つ Result は共通 Error へのキャストを適用して受理する。`Result<T, Errors>` は明示された EnumError を保持する。通常の標準 helper は `Result<T>` を受け取り、`Result<U>` の共通 Error を返す。入力の集合型を返却シグネチャへ自動継承しない。
+
+利用者が定義した Trait impl の呼出しは、その実装のシグネチャに従う。Trait 名だけを理由に利用者実装の集合型を消去しない。受け取り側に集合を指定した場合は通常の変換規則を適用する。Result 全体の変換は成功型と外枠を保ち、Err の Error 位置だけを変換する。
+
+EnumError の match は外側の列挙項目と Other の網羅性を検査する。Other は列挙済み項目を覆わない。列挙項目の具象 Error Pattern に成功した alias は、元 Error の局所具象束縛となる。Other からの取り出しは共通 Error であり、子 Pattern による絞り込みは既存の Error Pattern 規則に従う。
+
+値を関数・クロージャ・field・container に渡す地点と返却地点では、受け取り側の期待型に対して上記のキャストルールを適用する。EnumError の期待型があれば、消去前の具象 identity の所属または Other の存在を検査して集合型として渡す。Error の期待型または期待型の指定がない場合は共通 Error として扱う。標準定義の `Result<T>` は常に共通 Error と解釈する。各 branch・クロージャの返却もこの規則に従う。共通 Error を返す関数・クロージャのシグネチャを期待型で読み替えない。Error モジュールの操作と Result の Err の Eq は Error / EnumError の両方を受理し、元 Error の canonical kind を使う。
+
+`ResultT<M, T, E>` は `M<Result<T, E>>` を保存する。保存型の E と標準関数の返却契約は区別し、`new` / `run` も共通 Error の契約を使う。明示した EnumError は field と、その型を指定する利用者関数のシグネチャで保持する。本機能は未リリースであり、旧二引数の互換経路や未確定 E を Error に補う経路は設けない。`ResultT<M, T, _>` は拒否し、共通 Error を使う場合も `ResultT<M, T, Error>` と明示する。Error 位置の型変数は具体化時に Error / EnumError を検査する。`MonadFail::fail(error: Error)` は E が Error なら直接保持、Other を持つ EnumError なら分類して保持し、Other のない EnumError ならコンパイルエラーとする。SafeBind と partial `<-` も同じ条件を使う。ResultT の失敗は内側 Result に保持し、base の失敗へ移さない。
+
+Error の操作は他の層で抽象化し、Error 自体への Trait 実装は提供しない。具象 Error は Payload を持てるが、共通 Error はその Payload を直接操作する型ではなく、局所的な具象型へ実装を増やさない。具象 Error への impl も禁止する。
+
+`impl Ty` は特定の型 Ty の `defmod Ty` として扱い、型ごとに一度だけ定義できる。重複はエラーとし、標準定義が `impl Error` を提供しているため、利用者の `impl Error` は重複エラーになる。この一度限りの規則と Trait impl 禁止は別の契約である。
+
 ## 2. 宣言と内部構築
 
 ```surtr
@@ -33,7 +78,7 @@ deferror FixedValue() { Self(message: "fixed value") }
 
 Payload 名は既存のフィールド名規則に従い、追加で `kind` と `message` を禁止する。重複名も拒否する。`message` は共通情報であり、保存 Payload には含めない。Facet と MatchResult を通常値として運搬する能力は追加しない。保存 Payload と入力に Facet を含む型を使う定義や、直接の MatchResult 運搬は既存の拒否規則に従う。
 
-外部 `NegativeValue(input)` とその constructor capture は入力署名を使い、生成値の型は常に共通 `Error` である。生成直後の値に局所具象型は付けない。
+外部 `NegativeValue(input)` とその constructor capture は入力署名を使い、型注釈も明示 owner もない生成値の型は共通 `Error` である。EnumError の期待型または明示 owner がある場合は、以下の所属規則で集合へ格納する。生成直後の値に局所具象型は付けない。
 
 本体内の `Self(...)` と、当該宣言 identity へ解決した宣言名 App は内部構築である。`Self` を同じ identity に正規化し、名前の綴りから判定しない。内部構築は外部コンストラクタの再帰呼出しではない。
 
@@ -96,7 +141,7 @@ def read_number(error: Error) -> Int {
 
 局所の `alias = e` は具象情報を引き継ぐ。具象型注釈は導出済み束縛との一致検査に限る。共通 Error への具象注釈によるキャストと、具象束縛への `alias: Error = e` は拒否する。通常の引数・戻り値・field・入れ子の型位置へ具象名を公開しない。関数定義の直接の戻り値にある既存 `Result<T, E>` の補助 metadata はドキュメント用に維持する。指定したエラー名の存在と記述位置は検査するが、実際に返す kind の静的制限・網羅検査は行わず、指定と異なる kind を返すことだけでは拒否しない。成功型と引数型は通常どおり検査する。
 
-成功 branch の結果、通常引数・戻り値、container・tuple・field へ渡る型は共通 Error になる。取り出した値へ具象情報を復元しない。分岐間の型一致はこの結果型で検査する。静的な情報消去で runtime の kind・message・Payload は変えない。
+EnumError の期待型がない場合、成功 branch の結果、通常引数・戻り値、container・tuple・field へ渡る型は共通 Error になる。取り出した値へ具象情報を復元しない。分岐間の型一致はこの結果型で検査する。静的な情報消去で runtime の kind・message・Payload は変えない。
 
 成功スコープで作った通常の closure はレキシカルな束縛と具象情報を捕捉する。同名再束縛は新しい束縛であり、旧束縛を捕捉した closure に影響しない。closure が Error 自体を返せば戻り値は共通 Error、保存フィールドを返せば通常のフィールド型になる。
 
@@ -142,7 +187,7 @@ ParseError、ResolveError、TypeError、CodegenError と VM 内部不整合は�
 
 ErrorKind は変数・引数・戻り値・Tuple・List・field・closure で運搬できる。公開 field、constructor、Eq / Show、利用者 Trait impl、String や Error からの変換、ErrorKind からの動的 Error 構築は提供しない。`inspect` は `ErrorKind(canonical qualified name)` と表示し、container 内も同じ規則に従う。`Error::is_kind(error, kind)` は canonical identity の一致を Boolean で返し、局所具象情報を付けない。Pattern head、型位置、readonly Facet root、`&NoneError` の constructor capture はそれぞれの既存規則を維持する。
 
-`MonadRecover: MonadFail` は保持した Error による回復を表す。`recover(self: Self, handler: (Error -> Self)) -> Self` は失敗時だけ handler 本体を呼び、成功値と handler の再失敗をそのまま返す。`recover_kind` は recover、is_kind、fail の合成であり、不一致時は元 Error を再構築せず伝播する。初回の標準実装は Result のみ。引数の kind / handler を生成する式は通常の eager 評価であり、SafeBind の failure target と MonadExtractor による RHS 分解は独立した契約として扱う。
+`MonadRecover: MonadFail` は保持した Error による回復を表す。`recover(self: Self, handler: (Error -> Self)) -> Self` は失敗時だけ handler 本体を呼び、成功値と handler の再失敗をそのまま返す。Trait の `recover_kind` は recover、is_kind、fail の合成であり、不一致時は元 Error を再構築せず伝播する。通常の `Result::recover` / `Result::recover_kind` は直接の match で共通 Error を返し、入力 Error 位置の Trait 能力を要求しない。初回の標準実装は Result のみ。引数の kind / handler を生成する式は通常の eager 評価であり、SafeBind の failure target と MonadExtractor による RHS 分解は独立した契約として扱う。
 
 ## 7. 生成位置と情報の保持
 

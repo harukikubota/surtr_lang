@@ -209,6 +209,7 @@ pub enum TypeIdentity {
     Struct,
     Record,
     Enum,
+    EnumError,
     Error,
     Mod,
     Supervisor,

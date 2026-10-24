@@ -512,6 +512,9 @@ impl Checker {
         else {
             return Ok(());
         };
+        if self.callable_error_return_widens(expected, &constraints.signature.return_type.ty)? {
+            return Ok(());
+        }
         self.assert_type_relation(
             expected,
             &constraints.signature.return_type.ty,
@@ -605,6 +608,12 @@ impl Checker {
             return Ok(());
         }
         if !is_stable_context(&canonical_expected, &self.rigid_tyvars) {
+            return Ok(());
+        }
+        if self.callable_error_return_widens(
+            &normalized_expected,
+            &constraints.signature.return_type.ty,
+        )? {
             return Ok(());
         }
         self.assert_type_relation(
@@ -1439,6 +1448,7 @@ impl Checker {
             | Resolved::ProcessContextHandler(span, _)
             | Resolved::StructLit(span, _, _)
             | Resolved::ConstructorCall(span, _, _)
+            | Resolved::EnumErrorConstructorCall(span, _, _, _)
             | Resolved::EnumConstructorCall(span, _, _, _)
             | Resolved::StructDef(span, ..)
             | Resolved::RecordDef(span, _, _, _)

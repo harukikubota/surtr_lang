@@ -360,7 +360,7 @@ impl Checker {
                 if let ResolvedPattern::Annotated(_, ast_ty) = pat {
                     let annotation_kind = self.concrete_error_annotation_identity(ast_ty);
                     if let Some(kind) = inherited_error_kind.as_deref() {
-                        if annotation_kind.as_deref() != Some(kind) {
+                        if annotation_kind.as_deref() != Some(kind) && !matches!(ast_ty, AstTy::Named(_, name) if self.env.lookup_type_def(name).is_some_and(|definition| definition.kind == crate::env::TypeKind::EnumError)) {
                             return Err(TypeError::new("A narrowed Error local annotation must match its concrete declaration", Self::ast_ty_span(ast_ty).clone()));
                         }
                     } else if annotation_kind.is_some() {
@@ -426,14 +426,16 @@ impl Checker {
                 };
                 let inherited_constructor_provenance =
                     self.constructor_capability_for_node(&typed_rhs);
-                if let (Some(kind), ResolvedPattern::Annotated(binding, _)) = (&inherited_error_kind, pat) {
-                    self.env.concrete_error_bindings.insert(binding.unique_id, kind.clone());
+                if matches!(self.resolve_ty(&typed_rhs.ty), Ty::Error) {
+                    if let (Some(kind), ResolvedPattern::Annotated(binding, _)) = (&inherited_error_kind, pat) {
+                        self.env.concrete_error_bindings.insert(binding.unique_id, kind.clone());
+                    }
                 }
                 let (typed_pat, pat_ty) = self.check_pattern(pat, &typed_rhs.ty, span)?;
                 self.ensure_self_rebinding_types(&typed_pat, span)?;
 
                 self.bind_typed_pattern(&typed_pat, &self.resolve_ty(&pat_ty));
-                if let Some(kind) = inherited_error_kind {
+                if let Some(kind) = inherited_error_kind.filter(|_| matches!(self.resolve_ty(&typed_rhs.ty), Ty::Error)) {
                     self.bind_local_error_identity(&typed_pat, &kind);
                 }
                 let binding_constructor_provenance = match pat {
@@ -569,6 +571,9 @@ impl Checker {
             }
             Resolved::ConstructorCall(span, id, args) => {
                 self.check_constructor_call(span, id, args, None)
+            }
+            Resolved::EnumErrorConstructorCall(span, owner, concrete, args) => {
+                self.check_enum_error_constructor(span, owner, concrete, args)
             }
             Resolved::EnumConstructorCall(span, id, type_args, args) => {
                 self.check_explicit_enum_constructor_call(span, id, type_args, args, None)
@@ -843,39 +848,8 @@ impl Checker {
                     body,
                     expected_ty,
                 ),
-            (
-                Resolved::Do(span, intrinsic, contract, return_type_arguments, statements),
-                expected,
-            ) => self.check_do(
-                span,
-                *intrinsic,
-                contract,
-                return_type_arguments,
-                statements,
-                expected,
-                expected_relation,
-            ),
-            (Resolved::LazyApp(span, kind, func, args), Some(expected_ty)) => {
-                self.check_lazy_app(span, *kind, func, args, Some(expected_ty))
-            }
-            (Resolved::App(span, func, args), Some(expected_ty)) => {
-                self.check_application_with_expected_type(span, func, args, expected_ty)
-            }
-            (Resolved::FieldAccess(span, expr, field), expected_ty) => {
-                self.check_field_access_with_expected(span, expr, field, expected_ty)
-            }
-            (Resolved::FacetSegmentAccess(span, expr, segment), expected_ty) => {
-                self.check_facet_segment_access_with_expected(span, expr, segment, expected_ty)
-            }
             (Resolved::Grouped(span, inner), Some(expected_ty)) => {
-                let mut typed = self.check_node_with_expected_relation(
-                    inner,
-                    Some(expected_ty),
-                    expected_relation,
-                )?;
-                self.propagate_safe_operator_result(&typed.span, span);
-                typed.span = span.clone();
-                Ok(typed)
+                self.check_grouped_with_expected(span, inner, expected_ty, expected_relation)
             }
             (
                 Resolved::Match(span, scrutinee, arms) | Resolved::IsMatch(span, scrutinee, arms),
@@ -892,14 +866,74 @@ impl Checker {
                     branch_relation.as_ref(),
                 )
             }
-            (Resolved::ProcessContextHandler(span, slot), _) => {
+            (
+                Resolved::Do(span, intrinsic, contract, return_type_arguments, statements),
+                expected,
+            ) => self.check_do(
+                span,
+                *intrinsic,
+                contract,
+                return_type_arguments,
+                statements,
+                expected,
+                expected_relation,
+            ),
+            (Resolved::FieldAccess(span, expr, field), None) => {
+                self.check_field_access_with_expected(span, expr, field, None)
+            }
+            (Resolved::FacetSegmentAccess(span, expr, segment), None) => {
+                self.check_facet_segment_access_with_expected(span, expr, segment, None)
+            }
+            (Resolved::ProcessContextHandler(span, slot), None) => {
                 self.check_process_context_handler(span, slot)
             }
             (_, None) => self.check_node(node),
-            (_, Some(expected_ty)) => {
-                self.check_non_structural_node_with_expected(node, expected_ty)
-            }
+            (_, Some(expected_ty)) => self.check_expected_value(node, expected_ty),
         }
+    }
+
+    #[inline(never)]
+    fn check_grouped_with_expected(
+        &mut self,
+        span: &Span,
+        inner: &Resolved,
+        expected: &Ty,
+        expected_relation: Option<&ExpectedTypeRelation>,
+    ) -> Result<TypedNode, TypeError> {
+        let mut typed =
+            self.check_node_with_expected_relation(inner, Some(expected), expected_relation)?;
+        self.propagate_safe_operator_result(&typed.span, span);
+        typed.span = span.clone();
+        Ok(typed)
+    }
+
+    // Existing values and standard carrier results still need receiver conversion.
+    #[inline(never)]
+    fn check_expected_value(
+        &mut self,
+        node: &Resolved,
+        expected: &Ty,
+    ) -> Result<TypedNode, TypeError> {
+        let mut typed = match node {
+            Resolved::LazyApp(span, kind, func, args) => {
+                self.check_lazy_app(span, *kind, func, args, Some(expected))
+            }
+            Resolved::App(span, func, args) => {
+                self.check_application_with_expected_type(span, func, args, expected)
+            }
+            Resolved::FieldAccess(span, expr, field) => {
+                self.check_field_access_with_expected(span, expr, field, Some(expected))
+            }
+            Resolved::FacetSegmentAccess(span, expr, segment) => {
+                self.check_facet_segment_access_with_expected(span, expr, segment, Some(expected))
+            }
+            Resolved::ProcessContextHandler(span, slot) => {
+                self.check_process_context_handler(span, slot)
+            }
+            _ => self.check_non_structural_node_with_expected(node, expected),
+        }?;
+        self.coerce_enum_error_receiver(node, &mut typed, expected)?;
+        Ok(typed)
     }
 
     #[inline(never)]
@@ -944,6 +978,47 @@ impl Checker {
                     ty: Ty::List(element_ty),
                     span: span.clone(),
                     node: TypedInner::ListLiteral(typed_elems),
+                })
+            }
+            Resolved::HashMapLiteral(span, entries) => {
+                let Ty::Enum(name, args) = self.resolve_ty(expected_ty) else {
+                    return self.check_hash_map_literal(span, entries);
+                };
+                if name != "HashMap" || args.len() != 1 {
+                    return self.check_hash_map_literal(span, entries);
+                }
+                let value_ty = &args[0];
+                let mut typed_entries = Vec::new();
+                for entry in entries {
+                    let key = self.check_node_with_expected(&entry.key, Some(&Ty::Str))?;
+                    self.assert_type_relation(
+                        &Ty::Str,
+                        &key.ty,
+                        self.type_fact(SourceRole::Expected, span, &Ty::Str),
+                        self.type_fact(SourceRole::Value, &key.span, &key.ty),
+                        TypeDiagnosticReason::ArgumentTypeMismatch,
+                        DiagnosticOrigin::Call,
+                        "HashMap key",
+                        0,
+                    )?;
+                    let value = self.check_node_with_expected(&entry.value, Some(value_ty))?;
+                    self.ensure_no_runtime_facet_value(&value, "HashMap literal value")?;
+                    self.assert_type_relation(
+                        value_ty,
+                        &value.ty,
+                        self.type_fact(SourceRole::Expected, span, value_ty),
+                        self.type_fact(SourceRole::Value, &value.span, &value.ty),
+                        TypeDiagnosticReason::ArgumentTypeMismatch,
+                        DiagnosticOrigin::Call,
+                        "HashMap value",
+                        1,
+                    )?;
+                    typed_entries.push((key, value));
+                }
+                Ok(TypedNode {
+                    ty: Ty::Enum(name, args),
+                    span: span.clone(),
+                    node: TypedInner::HashMapLiteral(typed_entries),
                 })
             }
             Resolved::TupleLiteral(span, elems) => {
@@ -1025,5 +1100,104 @@ impl Checker {
                 Ok(typed)
             }
         }
+    }
+    fn check_enum_error_constructor(
+        &mut self,
+        span: &Span,
+        owner: &ResolvedId,
+        concrete: &ResolvedId,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<TypedNode, TypeError> {
+        let target = self
+            .env
+            .lookup_var(owner.unique_id)
+            .cloned()
+            .ok_or_else(|| TypeError::new("EnumError owner metadata is missing", span.clone()))?;
+        let name = self.enum_error_name(&target).ok_or_else(|| {
+            TypeError::new("Explicit Error owner requires EnumError", span.clone())
+        })?;
+        let kind = concrete
+            .qualified_name
+            .as_deref()
+            .ok_or_else(|| TypeError::new("Concrete Error identity is missing", span.clone()))?;
+        self.check_enum_error_membership(&name, kind, span)?;
+        let mut typed = self.check_constructor_call(span, concrete, args, None)?;
+        typed.ty = target;
+        Ok(typed)
+    }
+
+    fn check_enum_error_membership(
+        &self,
+        name: &str,
+        kind: &str,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        let members = self
+            .env
+            .enum_error_members
+            .get(name)
+            .expect("EnumError owner must be registered");
+        if members.iter().any(|member| member == kind) || self.env.enum_error_other.contains(name) {
+            return Ok(());
+        }
+        Err(self.enum_error_conversion_error(name, &Ty::Error, Some(kind), span))
+    }
+
+    fn coerce_enum_error_receiver(
+        &mut self,
+        source: &Resolved,
+        typed: &mut TypedNode,
+        expected: &Ty,
+    ) -> Result<(), TypeError> {
+        let direct_kind = match source {
+            Resolved::ConstructorCall(_, id, _) if self.env.is_error_constructor(id.unique_id) => {
+                id.qualified_name.clone()
+            }
+            _ => self
+                .resolved_concrete_error_identity(source)
+                .map(str::to_string),
+        };
+        self.coerce_error_value_receiver(typed, expected, direct_kind)
+    }
+
+    pub(super) fn coerce_error_value_receiver(
+        &mut self,
+        typed: &mut TypedNode,
+        expected: &Ty,
+        direct_kind: Option<String>,
+    ) -> Result<(), TypeError> {
+        let expected = self.resolve_ty(expected);
+        let actual = self.resolve_ty(&typed.ty);
+        if actual == expected || self.error_positions_agree(&expected, &actual) {
+            return Ok(());
+        }
+        if self.adapt_error_return_callable(typed, &expected)? {
+            return Ok(());
+        }
+        let conversion = if self.is_error_slot_ty(&expected) && self.is_error_slot_ty(&actual) {
+            if matches!(expected, Ty::Var(var) if !self.rigid_tyvars.contains(&var)) {
+                self.types_compatible(&expected, &actual)?;
+                typed.ty = self.resolve_ty(&expected);
+                return Ok(());
+            }
+            Some(direct_kind)
+        } else if self.error_transport_requires_conversion(&expected, &actual, &typed.span)? {
+            Some(None)
+        } else {
+            None
+        };
+        if let Some(concrete_kind) = conversion {
+            let original = typed.clone();
+            *typed = TypedNode {
+                ty: expected,
+                span: original.span.clone(),
+                node: TypedInner::ErrorCoerce {
+                    value: Box::new(original),
+                    concrete_kind,
+                },
+            };
+            self.validate_error_coercion_node(typed)?;
+        }
+        Ok(())
     }
 }

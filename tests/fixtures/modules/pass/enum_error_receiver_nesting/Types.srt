@@ -1,0 +1,12 @@
+deferror SavedFailure(value: Int) { |input: Int| Self(message: "saved", value: input) }
+deferror OutsideFailure { "outside" }
+defenumerror ClosedFailures { SavedFailure }
+defenumerror OpenFailures { SavedFailure, Other(Error) }
+defstruct Holder { failure: ClosedFailures }
+impl Holder { def new(failure: ClosedFailures) -> Holder { Holder { failure } } }
+defmod Factory {
+  def make() -> ClosedFailures { SavedFailure(1) }
+  def result() -> Result<Int, ClosedFailures> { Err(SavedFailure(2)) }
+  def nested() -> List<Result<Int, ClosedFailures>> { [Err(SavedFailure(3))] }
+  def use(value: ClosedFailures) -> String { Error::message(value) }
+}

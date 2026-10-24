@@ -1,0 +1,2 @@
+value = Selected::Failures::Concrete::Failure()
+print(Error::message(value))

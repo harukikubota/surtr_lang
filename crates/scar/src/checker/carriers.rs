@@ -2,6 +2,189 @@ use super::*;
 use diagnostics::TypeDiagnosticReason;
 
 impl Checker {
+    /// Standard carrier implementations operate on the common Error position.
+    /// This creates their call boundary type without granting a capability to
+    /// the original EnumError carrier.
+    pub(super) fn common_error_carrier_ty(&self, ty: &Ty) -> Option<Ty> {
+        match self.resolve_ty(ty) {
+            Ty::Result(ok, error) if self.is_error_slot_ty(&error) => {
+                Some(Ty::Result(ok, Box::new(Ty::Error)))
+            }
+            Ty::Struct(name, nominal)
+                if Self::canonical_user_type_name(&name) == "Global::ResultT"
+                    && nominal.arguments.len() == 3
+                    && self.is_error_slot_ty(&nominal.arguments[2]) =>
+            {
+                let mut arguments = nominal.arguments;
+                arguments[2] = Ty::Error;
+                Some(Ty::Struct(name, NominalType::new(arguments)))
+            }
+            _ => None,
+        }
+    }
+
+    pub(super) fn standard_error_carrier_boundary(
+        &self,
+        trait_name: &str,
+        carrier: &Ty,
+    ) -> Option<Ty> {
+        let boundary = self.common_error_carrier_ty(carrier)?;
+        if boundary == self.resolve_ty(carrier) {
+            return None;
+        }
+        match self.constructor_capability_projection(trait_name, carrier) {
+            ConstructorProjectionOutcome::Applicable { info, .. } => {
+                return info.standard_definition.then_some(boundary);
+            }
+            ConstructorProjectionOutcome::Rejected { failures }
+                if failures.iter().all(|failure| {
+                    matches!(
+                        failure,
+                        ConstructorProjectionFailure::NoApplicableImplementation
+                            | ConstructorProjectionFailure::UnsatisfiedConstraints
+                    )
+                }) => {}
+            _ => return None,
+        }
+        match self.constructor_capability_projection(trait_name, &boundary) {
+            ConstructorProjectionOutcome::Applicable { info, .. } if info.standard_definition => {
+                Some(boundary)
+            }
+            _ => None,
+        }
+    }
+
+    pub(super) fn coerce_error_carrier_boundary(
+        &mut self,
+        value: &mut TypedNode,
+        expected: &Ty,
+    ) -> Result<(), TypeError> {
+        let expected = self.resolve_ty(expected);
+        if self.resolve_ty(&value.ty) == expected {
+            return Ok(());
+        }
+        let source = value.clone();
+        *value = TypedNode {
+            ty: expected,
+            span: source.span.clone(),
+            node: TypedInner::ErrorCoerce {
+                value: Box::new(source),
+                concrete_kind: None,
+            },
+        };
+        self.validate_error_coercion_node(value)
+    }
+    /// Apply a proved ordinary-Trait boundary only to its declared Self inputs.
+    /// The canonical candidate proof retains all non-Error arguments and bounds.
+    pub(super) fn normalize_ordinary_error_trait_call(
+        &mut self,
+        trait_name: &str,
+        method_name: &str,
+        receiver: &mut Ty,
+        args: &mut [TypedNode],
+    ) -> Result<(), TypeError> {
+        let Some(boundary) = self.ordinary_error_carrier_boundary(trait_name, receiver)? else {
+            return Ok(());
+        };
+        let self_inputs = self
+            .traits
+            .get(trait_name)
+            .and_then(|info| info.methods.get(method_name))
+            .map(|method| {
+                method.value_parameters.iter().map(|parameter|
+                matches!(parameter.ty.syntax(), AstTy::Named(_, name) if name == "Self")
+            ).collect::<Vec<_>>()
+            })
+            .ok_or_else(|| {
+                self.typecheck_invariant_error(
+                    "ordinary Trait method contract",
+                    &Span { start: 0, end: 0 },
+                )
+            })?;
+        for (argument, is_self) in args.iter_mut().zip(self_inputs) {
+            if is_self {
+                self.coerce_error_carrier_boundary(argument, &boundary)?;
+            }
+        }
+        *receiver = boundary;
+        Ok(())
+    }
+
+    /// A generic constructor input may select the standard common-Error
+    /// carrier only when all its declared constructor contracts agree. Keep
+    /// raw user implementations and every unresolved selection on their normal
+    /// path; the ordinary relation still owns witness and slot inference.
+    pub(super) fn normalize_generic_error_carrier_argument(
+        &mut self,
+        expected: &Ty,
+        argument: &mut TypedNode,
+    ) -> Result<(), TypeError> {
+        let Ty::SelfApp(items) = expected else {
+            return Ok(());
+        };
+        let Some((Ty::Var(witness), _)) = Self::constructor_application_parts(items) else {
+            return Ok(());
+        };
+        let Some(primary) = self.constructor_witness_traits.get(witness).cloned() else {
+            return Ok(());
+        };
+        let Some(boundary) = self.common_error_carrier_ty(&argument.ty) else {
+            return Ok(());
+        };
+        if boundary == self.resolve_ty(&argument.ty) {
+            return Ok(());
+        }
+        let mut bounds = self.tyvar_bound_names(*witness);
+        if !bounds.contains(&primary) {
+            bounds.push(primary);
+        }
+        let mut missing_raw = false;
+        for bound in &bounds {
+            if !self
+                .traits
+                .get(bound)
+                .is_some_and(|info| !info.constructor_slots.is_empty())
+            {
+                return Ok(());
+            }
+            match self.constructor_capability_projection(bound, &argument.ty) {
+                ConstructorProjectionOutcome::Applicable { info, .. }
+                    if info.standard_definition => {}
+                ConstructorProjectionOutcome::Rejected { failures }
+                    if !failures.is_empty()
+                        && failures.iter().all(|failure| {
+                            matches!(
+                                failure,
+                                ConstructorProjectionFailure::NoApplicableImplementation
+                            )
+                        }) =>
+                {
+                    missing_raw = true;
+                }
+                _ => return Ok(()),
+            }
+        }
+        if !missing_raw {
+            return Ok(());
+        }
+        for bound in &bounds {
+            if !matches!(self.constructor_capability_projection(bound, &boundary),
+                ConstructorProjectionOutcome::Applicable { info, .. } if info.standard_definition)
+            {
+                return Ok(());
+            }
+        }
+        // The complete relation checks every bound and their shared mapped
+        // slots. A probe contributes no inference state or runtime evidence.
+        let checkpoint = self.candidate_probe_checkpoint();
+        let compatible = self.types_compatible(expected, &boundary);
+        self.rollback_candidate_probe(checkpoint);
+        if compatible? {
+            self.coerce_error_carrier_boundary(argument, &boundary)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn do_failure_carrier_is_rigid_variable(&self, carrier: &Ty) -> bool {
         match self.resolve_ty(carrier) {
             Ty::Var(variable) => self.rigid_tyvars.contains(&variable),
@@ -29,7 +212,16 @@ impl Checker {
                 "canonical MonadFail declaration is missing",
             ));
         };
-        match self.prove_trait_capability(&key, &carrier)? {
+        if matches!(
+            self.monad_fail_error_slot_proof(&key, &carrier),
+            Some(ApplicabilityProof::Unsatisfied)
+        ) {
+            return Ok(MonadFailResolution::Unavailable);
+        }
+        let call_carrier = self
+            .standard_error_carrier_boundary(&key, &carrier)
+            .unwrap_or_else(|| carrier.clone());
+        match self.prove_trait_capability(&key, &call_carrier)? {
             ApplicabilityProof::Unsatisfied => return Ok(MonadFailResolution::Unavailable),
             ApplicabilityProof::Deferred(_) => {
                 // The failure capability belongs to the constructor. Its mapped
@@ -37,7 +229,7 @@ impl Checker {
                 // captured parameters and implementation constraints must already
                 // be proved by the normal constructor projection contract.
                 if !matches!(
-                    self.constructor_head_projection(&key, &carrier)
+                    self.constructor_head_projection(&key, &call_carrier)
                         .into_checked()
                         .map_err(|error| error.at_span(span))?,
                     ConstructorProjectionOutcome::Applicable { .. }
@@ -66,7 +258,7 @@ impl Checker {
                 error_id.clone(),
             ))],
             None,
-            Some(&carrier),
+            Some(&call_carrier),
             None,
             None,
             None,
@@ -75,10 +267,14 @@ impl Checker {
             None,
         );
         self.env.pop_var_scope();
+        let mut call = call?;
+        if self.common_error_carrier_ty(&carrier).is_some() {
+            self.coerce_error_carrier_boundary(&mut call, &carrier)?;
+        }
         Ok(MonadFailResolution::Preserve(MonadFailTarget {
             carrier_ty: carrier,
             error_id,
-            call: Box::new(call?),
+            call: Box::new(call),
         }))
     }
 
@@ -164,6 +360,9 @@ impl Checker {
             MonadFailResolution::Unavailable | MonadFailResolution::Deferred => {}
         }
         let Some((trait_key, method_name, keyword_span)) = alternative else {
+            if let Some(error) = self.closed_monad_fail_diagnostic(&carrier, span) {
+                return Err(error);
+            }
             if !type_contains_unresolved_vars(&carrier) {
                 return Err(self.pattern_failure_error(
                     diagnostics::PatternFailureContext::Callable,

@@ -668,8 +668,8 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         ensure_rejects_call_expression_predicate as fn(),
     ),
     (
-        "require_rejects_non_concrete_error_expression",
-        require_rejects_non_concrete_error_expression as fn(),
+        "require_rejects_non_error_expression",
+        require_rejects_non_error_expression as fn(),
     ),
     (
         "kernel_and_contract_rejects_eager_signature",
@@ -852,13 +852,13 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         user_defined_container_can_use_context_operators_via_traits as fn(),
     ),
     (
-        "result_match_wildcard_self_after_ok_can_change_ok_payload_type",
-        result_match_wildcard_self_after_ok_can_change_ok_payload_type as fn(),
+        "result_match_wildcard_self_after_ok_rejects_ok_payload_change",
+        result_match_wildcard_self_after_ok_rejects_ok_payload_change as fn(),
     ),
-    surface_case!(result_match_wildcard_self_after_ok_or_can_change_ok_payload_type),
+    surface_case!(result_match_wildcard_self_after_ok_or_rejects_ok_payload_change),
     (
-        "result_match_wildcard_self_after_ok_can_keep_err_for_bind_shape",
-        result_match_wildcard_self_after_ok_can_keep_err_for_bind_shape as fn(),
+        "result_match_wildcard_self_after_ok_rejects_bind_payload_change",
+        result_match_wildcard_self_after_ok_rejects_bind_payload_change as fn(),
     ),
     (
         "result_match_wildcard_self_requires_err_proven_branch",
@@ -1306,7 +1306,7 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     surface_case!(extractor_closure_inference_and_callable_boundaries),
     surface_case!(extractor_closure_direct_argument_uses_expected_type),
     surface_case!(apply_pattern_projection_types_and_boundaries),
-    surface_case!(error_contract_surface_is_restricted_to_direct_definition_returns),
+    surface_case!(concrete_error_markers_are_restricted_to_direct_definition_returns),
     surface_case!(facet_pending_dispatch_collects_path_type_inputs),
     surface_case!(nested_ordinary_match_blocks_typecheck),
     surface_case!(nested_user_closures_typecheck_do_binds_and_captures),
@@ -7685,16 +7685,14 @@ guard = ensure(4, is_even(), NoneError())"#,
     assert!(err.message.contains("ensure requires a closure or capture"));
 }
 
-fn require_rejects_non_concrete_error_expression() {
+fn require_rejects_non_error_expression() {
     let err = typecheck_with_rules(
         r#"def bad_code() -> Int { 1 }
 guard = require(False, bad_code())"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("non-Error expression must fail");
-    assert!(err
-        .message
-        .contains("require error branch must evaluate to Error, got Int"));
+    assert_eq!(err.reason(), Some(diagnostics::TypeDiagnosticReason::ReturnTypeMismatch), "{err:?}");
 }
 
 fn kernel_and_contract_rejects_eager_signature() {
@@ -8530,7 +8528,7 @@ kleisli = &box_inc >=> &stringify"#,
     assert_eq!(boxed_function_results, 2);
 }
 
-fn result_match_wildcard_self_after_ok_can_change_ok_payload_type() {
+fn result_match_wildcard_self_after_ok_rejects_ok_payload_change() {
     let resolved = resolve_with_builtin_prelude(
         r#"def remap(value: Result<Int>) -> Result<String> {
   match value {
@@ -8540,13 +8538,11 @@ fn result_match_wildcard_self_after_ok_can_change_ok_payload_type() {
 }"#,
     );
 
-    let typed = typecheck(resolved).expect("Err-proven wildcard arm should typecheck");
-    assert!(typed
-        .iter()
-        .any(|node| matches!(node.node, TypedInner::Def(..))));
+    let error = typecheck(resolved).expect_err("a wildcard arm preserves the complete Result success type");
+    assert_eq!(error.reason(), Some(diagnostics::TypeDiagnosticReason::MatchArmTypeMismatch), "{error:?}");
 }
 
-fn result_match_wildcard_self_after_ok_or_can_change_ok_payload_type() {
+fn result_match_wildcard_self_after_ok_or_rejects_ok_payload_change() {
     let resolved = resolve_with_builtin_prelude(
         r#"def remap(value: Result<Int>) -> Result<String> {
   match value {
@@ -8556,10 +8552,11 @@ fn result_match_wildcard_self_after_ok_or_can_change_ok_payload_type() {
 }"#,
     );
 
-    typecheck(resolved).expect("OR Ok arm should preserve Err-proven wildcard coercion");
+    let error = typecheck(resolved).expect_err("OR Ok coverage does not change the wildcard value's Result type");
+    assert_eq!(error.reason(), Some(diagnostics::TypeDiagnosticReason::MatchArmTypeMismatch), "{error:?}");
 }
 
-fn result_match_wildcard_self_after_ok_can_keep_err_for_bind_shape() {
+fn result_match_wildcard_self_after_ok_rejects_bind_payload_change() {
     let resolved = resolve_with_builtin_prelude(
         r#"def bind_like(value: Result<Int>) -> Result<String> {
   match value {
@@ -8569,10 +8566,8 @@ fn result_match_wildcard_self_after_ok_can_keep_err_for_bind_shape() {
 }"#,
     );
 
-    let typed = typecheck(resolved).expect("Err-proven bind-style wildcard arm should typecheck");
-    assert!(typed
-        .iter()
-        .any(|node| matches!(node.node, TypedInner::Def(..))));
+    let error = typecheck(resolved).expect_err("bind must rebuild Err when the success payload changes");
+    assert_eq!(error.reason(), Some(diagnostics::TypeDiagnosticReason::MatchArmTypeMismatch), "{error:?}");
 }
 
 fn result_match_wildcard_self_requires_err_proven_branch() {
@@ -9348,7 +9343,9 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
                         if has_pending_trait_call(empty))
                     || has_pending_trait_call(&control.continuation)
             }
-            TypedInner::EagerBoundary(inner) => has_pending_trait_call(inner),
+            TypedInner::EagerBoundary(inner) | TypedInner::ErrorCoerce { value: inner, .. } => {
+                has_pending_trait_call(inner)
+            }
             TypedInner::ProcessContextHandler { .. } => false,
             TypedInner::SupervisorSpawn { init, .. } => has_pending_trait_call(init),
             TypedInner::SupervisorAdopt { pid, .. } => has_pending_trait_call(pid),
@@ -9463,7 +9460,9 @@ fn range_duration_comparisons_specialize_without_pending_trait_calls() {
                         if has_pending_trait_call(empty))
                     || has_pending_trait_call(&control.continuation)
             }
-            TypedInner::EagerBoundary(inner) => has_pending_trait_call(inner),
+            TypedInner::EagerBoundary(inner) | TypedInner::ErrorCoerce { value: inner, .. } => {
+                has_pending_trait_call(inner)
+            }
             TypedInner::ProcessContextHandler { .. } => false,
             TypedInner::SupervisorSpawn { init, .. } => has_pending_trait_call(init),
             TypedInner::SupervisorAdopt { pid, .. } => has_pending_trait_call(pid),
@@ -11899,9 +11898,10 @@ fn recover_kind_rejects_invalid_handlers() {
     typecheck(resolved).expect_err("one placeholder cannot be both Result value and handler");
 }
 
-fn error_contract_surface_is_restricted_to_direct_definition_returns() {
+fn concrete_error_markers_are_restricted_to_direct_definition_returns() {
     for source in [
         "ret: Result<Int> = Ok(1)",
+        "ret: Result<Int, Error> = Ok(1)",
         "f: (Int -> (_ -> Int)) = {|value: Int| always(value)}",
         "def make() -> (Int -> (_ -> Int)) { {|value: Int| always(value)} }",
         "def read(value: Result<Int>) -> Result<Int, NoneError> { value }",
@@ -11915,7 +11915,6 @@ fn error_contract_surface_is_restricted_to_direct_definition_returns() {
     }
     for source in [
         "ret: Result<Int, NoneError> = Ok(1)",
-        "ret: Result<Int, Error> = Ok(1)",
         "ret: List<Result<Int, NoneError>> = [Ok(1)]",
         "defstruct Invalid { value: Result<Int, NoneError> }",
         "f: (Int -> Result<Int, NoneError>) = {|value: Int| Ok(value)}",

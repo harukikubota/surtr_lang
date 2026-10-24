@@ -1,0 +1,4 @@
+source = ClosedFailures::ObservedFailure()
+converted: OpenFailures = source
+plain: Error = converted
+print(Error::message(plain))

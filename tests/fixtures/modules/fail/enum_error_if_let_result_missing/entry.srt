@@ -1,0 +1,1 @@
+print(to_string(if_let(Factory::result(), Err(error), match error { FirstFailure => 1 }, 0)))

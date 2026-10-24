@@ -107,10 +107,18 @@ impl Checker {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
-            Ty::Result(ok, _) => format!(
-                "Result<{}>",
-                self.diagnostic_ty_name_with_state(ok, tyvars, next_tyvar_index)
-            ),
+            Ty::Result(ok, err) => {
+                let ok = self.diagnostic_ty_name_with_state(ok, tyvars, next_tyvar_index);
+                if matches!(err.as_ref(), Ty::Error) {
+                    format!("Result<{}>", ok)
+                } else {
+                    format!(
+                        "Result<{}, {}>",
+                        ok,
+                        self.diagnostic_ty_name_with_state(err, tyvars, next_tyvar_index)
+                    )
+                }
+            }
             Ty::Var(var) => tyvars
                 .entry(*var)
                 .or_insert_with(|| {
@@ -232,13 +240,34 @@ impl Checker {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
-            Ty::Result(ok, _) => format!("Result<{}>", self.ty_name(ok)),
+            Ty::Result(ok, err) => {
+                if matches!(err.as_ref(), Ty::Error) {
+                    format!("Result<{}>", self.ty_name(ok))
+                } else {
+                    format!("Result<{}, {}>", self.ty_name(ok), self.ty_name(err))
+                }
+            }
             Ty::Var(n) => self
                 .local_annotation_tyvars
                 .iter()
                 .find_map(|(name, ty)| matches!(ty, Ty::Var(var) if var == n).then(|| name.clone()))
                 .unwrap_or_else(|| "the inferred argument type".into()),
-            Ty::Struct(name, _) | Ty::Record(name, _) => Self::surface_name(name).to_string(),
+            Ty::Struct(name, nominal) | Ty::Record(name, nominal) => {
+                if nominal.arguments.is_empty() {
+                    Self::surface_name(name).to_string()
+                } else {
+                    format!(
+                        "{}<{}>",
+                        Self::surface_name(name),
+                        nominal
+                            .arguments
+                            .iter()
+                            .map(|arg| self.ty_name(arg))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                }
+            }
             Ty::Enum(name, args) => {
                 if args.is_empty() {
                     Self::surface_name(name).to_string()

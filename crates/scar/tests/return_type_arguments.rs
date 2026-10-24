@@ -46,7 +46,7 @@ case_registry::register_case_suite!(
         rejects_explicit_capture_conflicting_with_expected_return,
         rejects_ambiguous_return_type_argument_capture,
         omitted_and_underscore_captures_share_ambiguity_check,
-        expected_generic_result_allows_err_only_self_match_arm,
+        expected_generic_result_rejects_wildcard_self_payload_change,
     ]
 );
 
@@ -865,7 +865,7 @@ factory = &make"#,
     );
 }
 
-fn expected_generic_result_allows_err_only_self_match_arm() {
+fn expected_generic_result_rejects_wildcard_self_payload_change() {
     typecheck_with_standard_environment(
         r#"def map_result(value: Result<$A>, mapper: ($A -> $B)) -> Result<$B> {
   match value {
@@ -874,5 +874,5 @@ fn expected_generic_result_allows_err_only_self_match_arm() {
   }
 }"#,
     )
-    .expect("an error-only fallback preserves Result's error channel under an expected result");
+    .expect_err("an expected generic Result does not change a wildcard value's success parameter");
 }

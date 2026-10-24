@@ -15,15 +15,15 @@ test("ResultT") {
       value = ResultT::ok::<Identity>(2)
       mapped = Functor::fmap(value, {|item| item + 1})
       bound = Monad::bind(mapped, {|item| ResultT::ok::<Identity>(item * 2)})
-      lifted: ResultT<Identity, Int> = MonadT::lift(Identity::new(7))
+      lifted: ResultT<Identity, Int, Error> = MonadT::lift(Identity::new(7))
       assert_eq("6", observed(Identity::run(ResultT::run(bound))))
       assert_eq("7", observed(Identity::run(ResultT::run(lifted))))
     }
   }
   it("applies a successful mapper and supports pure and return") {
     do {
-      mapper: ResultT<Identity, (Int -> Int)> = Applicative::pure({|item| item + 2})
-      value: ResultT<Identity, Int> = Monad::return(3)
+      mapper: ResultT<Identity, (Int -> Int), Error> = Applicative::pure({|item| item + 2})
+      value: ResultT<Identity, Int, Error> = Monad::return(3)
       applied = Applicative::ap(mapper, value)
       assert_eq("5", observed(Identity::run(ResultT::run(applied))))
       either: Either<Error, Int> = to(Ok(6))
@@ -40,7 +40,7 @@ test("ResultT") {
   }
   it("keeps MonadFail in the inner failure layer") {
     do {
-      value: ResultT<Result, Int> = MonadFail::fail(ResultTFailure())
+      value: ResultT<Result, Int, Error> = MonadFail::fail(ResultTFailure())
       inner =? ResultT::run(value)
       assert_eq("preserved", observed(inner))
     }
@@ -51,7 +51,7 @@ test("ResultT") {
       result: Result<Int> = to(either)
       original = ResultT::from_result::<Identity>(result)
       transformed: EitherT<Error, Identity, Int> = to(original)
-      restored: ResultT<Identity, Int> = to(transformed)
+      restored: ResultT<Identity, Int, Error> = to(transformed)
       assert_eq("preserved", observed(Identity::run(ResultT::run(restored))))
     }
   }

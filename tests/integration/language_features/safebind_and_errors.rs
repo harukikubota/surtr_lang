@@ -485,7 +485,7 @@ def source() -> Result<Int, Oops> {
   Err(Oops())
 }
 
-def wrapped() -> ResultT<Identity, Int> {
+def wrapped() -> ResultT<Identity, Int, Error> {
   value =? source()
   ResultT::ok::<Identity>(value + 1)
 }
@@ -593,7 +593,7 @@ print(inspect(OptionT::run(blocked)))"#,
 
 fn do_extractor_error_is_preserved_in_monad_fail() {
     assert_output(
-        r#"result: ResultT<Identity, Int> = do::<ResultT<Identity, _>> {
+        r#"result: ResultT<Identity, Int, Error> = do::<ResultT<Identity, _, Error>> {
   uncons(head, tail) <- ResultT::ok::<Identity>([])
   ResultT::ok::<Identity>(head)
 }

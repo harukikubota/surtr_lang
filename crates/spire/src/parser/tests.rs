@@ -9136,6 +9136,7 @@ fn assert_error_matches_rejects_root_and_nested_or_patterns() {
         "Failure(x) | Other(x)",
         "Failure(1 | 2)",
         "Failure(x | x)",
+        "Wrapped(Other(First | Second))",
     ] {
         let source = format!("Test::assert_error_matches(err, {pattern}, check())");
         let error = parse(&source).expect_err(&source);
@@ -9162,4 +9163,40 @@ fn assert_error_matches_keeps_pattern_slot_and_rejects_named_arguments() {
     ] {
         parse(source).expect_err(source);
     }
+}
+
+#[test]
+fn enum_error_declaration_has_canonical_member_paths_and_other() {
+    let ast = parse("defenumerror ErrorsNS::Errors { ConcNS::ConcError, Other(Error) }").unwrap();
+    let Ast::EnumDef(_, owner, params, variants, attrs) = &ast[0] else {
+        panic!("expected enum error")
+    };
+    assert_eq!(owner, "ErrorsNS::Errors");
+    assert!(params.is_empty());
+    assert!(attrs.enum_error);
+    assert_eq!(
+        variants.iter().map(|v| v.name.as_str()).collect::<Vec<_>>(),
+        ["ConcNS::ConcError", "Other"]
+    );
+}
+
+#[test]
+fn enum_error_rejects_payload_idx_and_trait_derive() {
+    for source in [
+        "defenumerror Errors { SomeError(Int) }",
+        "defenumerror Errors { Other(Int) }",
+        "defenumerror Errors { SomeError = 1 }",
+        "@derive(Eq) defenumerror Errors { SomeError }",
+    ] {
+        assert!(parse(source).is_err(), "must reject {source}");
+    }
+}
+
+#[test]
+fn enum_error_empty_set_is_declarable() {
+    let ast = parse("defenumerror Empty {}").unwrap();
+    assert!(
+        matches!(&ast[0], Ast::EnumDef(_, _, _, members, attrs) if attrs.enum_error && members.is_empty())
+    );
+    assert!(parse("defenum Empty {}").is_err());
 }

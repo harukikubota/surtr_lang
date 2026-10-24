@@ -1,0 +1,8 @@
+plain = Failure(7)
+value = match plain {
+  Failure @ original => {
+    selected: OpenFailures = original
+    selected.value
+  },
+  _ => 0,
+}

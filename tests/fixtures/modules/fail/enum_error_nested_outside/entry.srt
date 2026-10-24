@@ -1,0 +1,1 @@
+value: List<Result<Int, ClosedFailures>> = [Err(OutsideFailure())]

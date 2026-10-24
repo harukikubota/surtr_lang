@@ -112,7 +112,7 @@ impl Checker {
                 return Err(TypeError::new(
                     "Extractor callable contract is unresolved",
                     span.clone(),
-                ))
+                ));
             }
         };
         let Ty::MatchResult(payload) = ret.as_ref() else {
@@ -369,6 +369,13 @@ impl Checker {
                 ty,
                 Box::new(self.concretize_specialized_match_pattern(*inner, &source, context)?),
             ),
+            TypedMatchPattern::ErrorOther {
+                excluded_kinds,
+                inner,
+            } => TypedMatchPattern::ErrorOther {
+                excluded_kinds,
+                inner: Box::new(self.concretize_specialized_match_pattern(*inner, span, context)?),
+            },
             TypedMatchPattern::As(inner, id) => TypedMatchPattern::As(
                 Box::new(self.concretize_specialized_match_pattern(*inner, span, context)?),
                 id,

@@ -759,13 +759,10 @@ impl Checker {
     }
 
     pub(in crate::checker) fn is_result_of_named(ast_ty: &AstTy, expected_name: &str) -> bool {
-        matches!(
-            ast_ty,
-            AstTy::Generic(_, name, args)
-                if name == "Result"
-                    && args.len() == 1
-                    && matches!(&args[0], AstTy::Named(_, param_name) if param_name == expected_name)
-        )
+        matches!(ast_ty, AstTy::Generic(_, name, args)
+            if name == "Result"
+                && (args.len() == 1 || (args.len() == 2 && matches!(&args[1], AstTy::Named(_, error) if error == "Error")))
+                && matches!(&args[0], AstTy::Named(_, param_name) if param_name == expected_name))
     }
 
     pub(in crate::checker) fn ensure_builtin_type_contracts(&self) -> Result<(), TypeError> {

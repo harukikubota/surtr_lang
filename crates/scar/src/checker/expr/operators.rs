@@ -633,7 +633,26 @@ impl Checker {
                 return self.check_apply_callable(expr, "context operator");
             }
         }
-        self.check_node_with_expected_relation(expr, Some(expected), expected_relation)
+        // An inference-only constructor witness is an argument constraint,
+        // not a receiver conversion for a nested producer. Check that value
+        // once before choosing the declared standard Error boundary. Concrete
+        // Result and rigid constructor contexts keep their contextual typing.
+        let deferred_constructor = match expected {
+            Ty::SelfApp(items) => {
+                Self::constructor_application_parts(items).is_some_and(|(witness, _)| {
+                    matches!(self.resolve_ty(witness), Ty::Var(variable)
+                        if !self.rigid_tyvars.contains(&variable))
+                })
+            }
+            _ => false,
+        };
+        let mut typed = if deferred_constructor {
+            self.check_node(expr)?
+        } else {
+            self.check_node_with_expected_relation(expr, Some(expected), expected_relation)?
+        };
+        self.normalize_generic_error_carrier_argument(expected, &mut typed)?;
+        Ok(typed)
     }
 
     fn check_operator_invocation(
@@ -1516,7 +1535,10 @@ impl Checker {
         if let Some(return_syntax) = method.ret_ty.as_ref() {
             if let AstTy::Generic(_, name, arguments) = return_syntax.syntax() {
                 if Self::surface_name(name) == "Result" && arguments.len() == 2 {
-                    self.resolve_error_marker_type(&arguments[1])?;
+                    if !matches!(&arguments[1], AstTy::Named(_, name) if self.env.is_declared_error_type_name(name))
+                    {
+                        self.resolve_error_marker_type(&arguments[1])?;
+                    }
                     let AstTy::Named(_, authored_error) = &arguments[1] else {
                         return Err(self.typecheck_invariant_error(
                             "safe operator authored error marker",

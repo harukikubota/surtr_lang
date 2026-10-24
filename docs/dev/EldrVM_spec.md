@@ -305,18 +305,20 @@ Error の宣言・構築・生成責務・情報保持・生成位置は [Error 
 
 `ErrTemplate` は canonical kind、コンストラクタの `fun_idx`、入力型の列、Payload の名前・型・宣言順を保持する。独立した message テンプレートは持たない。builtin / VM と Forge の生成コードは、解決済みコンストラクタを Call / Resume と継続処理で実行する。Rust helper から VM を同期再帰駆動しない。コンパイル中のコンストラクタ評価も行わない。
 
+EnumError の実行時表現は、集合型のタグを加えない元の `Value::Error(RichError)` とする。所属と変換の可否は Scar が静的に検査し、Error と EnumError の間、および Result の Error 位置の変換は値を変更しない。分類と照合は元 Error の canonical kind を使い、Other は宣言された各 kind の補集合として検査する。Forge は `IsErrorKind` の組み合わせで照合を生成し、元 Error をそのまま子 Pattern や成功側の束縛へ渡す。message、Payload、location、cause、diagnostic、stack trace を再構築せず、分類を理由に cause を追加しない。EnumError に通常 Enum の tagged variant metadata を生成しない。
+
 コンストラクタ末尾の `MakeError` は、計算済みの String message と Payload を宣言スキーマに従って stack から取り出し、生成元位置を付けた `RichError` を作る。外部コンストラクタを再呼出しする命令ではない。`IsErrorKind` は canonical kind を照合し、`GetErrorPayload` は identity・Payload 長・field index・保存値の型を検証して読み取る。命令・metadata の不整合は RuntimeError とし、空 Payload や推測した値で救済しない。
 
 Scar の nominal 型参照は canonical name・kind と型引数だけを保持し、field schema は `TypedProgram.nominal_definitions` を正本とする。Forge は Payload schema の生成時にこのレジストリを使う。Facet の型表示は Scar が検査した有限 path の各 segment の結果型を受け取り、constructor mapping や trait 選択を再実行しない。未確定 schema を空 field で代用しない。
 
-入力と保存 Payload の runtime 値を検査済みスキーマへ照合する。長さ・型・順序、nominal identity と型引数、Enum の tag と variant fields の不整合は RuntimeError とする。generic な再帰型のスキーマは有限の定義テンプレートと参照で保持し、具体的な型引数を無限展開しない。増分 chunk も prefix を含む検査済み定義を使い、既存 bytecode の値や表示名から型を復元しない。
+入力と保存 Payload の runtime 値を検査済みスキーマへ照合する。長さ・型・順序、nominal identity と型引数、Enum の tag と variant fields の不整合は RuntimeError とする。EnumError のスキーマは canonical kind の所属と Other の有無を保持し、Result は成功位置と Error 位置の両方を検査する。generic な再帰型のスキーマは有限の定義テンプレートと参照で保持し、具体的な型引数を無限展開しない。増分 chunk も prefix を含む検査済み定義を使い、既存 bytecode の値や表示名から型を復元しない。
 
 `cause` は runtime 管理の線形 chain とする。コンストラクタ実行へ生成元の source ID / span を渡し、`location` と既存の cause / diagnostic / stack trace を共通の生成処理で統合する。`stack_trace` は呼出し経路用であり、先頭 frame で `location` を上書きしない。型・局所具象情報・readonly の静的制約は Scar の検査結果に従う。
 
 API と runtime の対応は次のとおり。canonical identity と通常値の制約は [Error spec](Error_spec.md) に従う。
 
 - ErrorKind は canonical qualified name を保持する専用 Value / Constant である。定数を読み込む際は検査済み Error template に同じ identity があることを要求する。増分 chunk では prefix と suffix の定義を参照できる。生成時には Error constructor を実行しない。Error の入力・Payload schema でも ErrorKind を区別する。
-- `Error::is_kind(error, kind)` は専用 builtin で canonical identity を比較し Boolean を返す。`Result::recover_kind` は MonadRecover の通常関数による合成であり、専用 IR・lowering・hidden recovery builtin・継続状態を持たない。
+- `Error::is_kind(error, kind)` は専用 builtin で canonical identity を比較し Boolean を返す。`Result::recover_kind` は match・is_kind・条件分岐による通常関数であり、入力 Error 位置の MonadRecover 能力を要求せず共通 Error を返す。専用 IR・lowering・hidden recovery builtin・継続状態を持たない。
 - `Test::assert_err_kind(marker, result)` は通常の ErrorKind 値を受ける。Err の kind が一致すれば `Ok(())`、異種の Err は `TestErrorKindMismatch`、Ok は `TestExpectedErrorKind`。Payload や表示文字列は比較しない。
 - `Test::assert_cause_chain(expected, result)` は通常の `List<ErrorKind>` を受け、最外側の Err から cause へ辿る kind の列と比較する。順序・長さ・重複を含め完全一致なら `Ok(())`、不一致は `TestCauseChainMismatch`、Ok は `TestExpectedCauseChain`。Payload・message・位置は比較せず、result は一度だけ評価する。診断には期待列・実際列と最初の不一致位置（0始まり）または長さの違いを含める。
 - Lazyの正規化とeager入力の評価順は[Lazy spec](Lazy_spec.md)に従う。VMへLazy markerは渡さず、確定した分岐と通常call命令を実行する。branchをruntime callableとして表す場合も呼び出しは一回とし、戻り値がcallableでも追加で実行しない。
@@ -654,3 +656,5 @@ source text がない場合も行・列は 0 とする。符号化していな�
 ---
 
 *Surtr — 既存の妥協を、型で焼き払う。*
+
+EnumError の runtime 値は元 Error をそのまま保持する。集合 identity と列挙項目は検査済み型情報として管理し、値の分類には元 Error の canonical identity を使う。message・表示名・変換元集合の tag を使わない。構築・変換・分解で元 Error を再生成せず、location・cause・diagnostic・stack trace と保存 Payload を保持する。未知項目や壊れた metadata は RuntimeError とし、Other に落として救済しない。スキーマ・VM バージョンは変更しない。

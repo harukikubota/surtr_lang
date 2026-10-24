@@ -422,6 +422,13 @@ impl Checker {
                     inferred
                 }
             }
+            TypedInner::ErrorCoerce { value: inner, .. } => {
+                self.transported_source(
+                    self.cached_source_provenance(inner, bindings, cache),
+                    &node.ty,
+                )
+                .0
+            }
             TypedInner::EagerBoundary(inner) => {
                 self.cached_value_provenance(inner, bindings, cache)
             }
@@ -460,7 +467,8 @@ impl Checker {
                     (1, vec![(Provenance::RequiresProof, Ty::Error)]),
                 ])
             }
-            TypedInner::Match(scrutinee, arms) | TypedInner::AssertErrorMatches(scrutinee, arms, _) => {
+            TypedInner::Match(scrutinee, arms)
+            | TypedInner::AssertErrorMatches(scrutinee, arms, _) => {
                 let source = self.cached_source_provenance(scrutinee, bindings, cache);
                 self.common_constructor_provenance(
                     &arms
@@ -513,6 +521,7 @@ impl Checker {
         match provenance {
             Provenance::Parameter(_) => true,
             Provenance::ConstrainedTemplate { source, .. }
+            | Provenance::ErrorTransport { source }
             | Provenance::Projection { source, .. } => has_source(source),
             Provenance::Intersection(sources)
             | Provenance::Fields(sources)
@@ -1015,6 +1024,50 @@ impl Checker {
         span: &Span,
     ) -> Result<Vec<(Ty, Source)>, TypeError> {
         match &source.0 {
+            Provenance::ErrorTransport { source: original } => {
+                let original_ty = self.resolve_ty(&original.1);
+                let (Ty::Struct(_, original_nominal) | Ty::Record(_, original_nominal)) =
+                    original_ty
+                else {
+                    return Err(
+                        self.typecheck_invariant_error("Error transport nominal source", span)
+                    );
+                };
+                let original_fields =
+                    self.nominal_source_fields(name, &original_nominal, original, span)?;
+                let target_fields = self.nominal_fields(name, nominal, span)?;
+                if target_fields.is_empty() {
+                    return if original_fields.is_empty() {
+                        Ok(Vec::new())
+                    } else {
+                        Err(self
+                            .typecheck_invariant_error("Error transport nominal field count", span))
+                    };
+                }
+                if original_fields.len() % target_fields.len() != 0 {
+                    return Err(
+                        self.typecheck_invariant_error("Error transport nominal field count", span)
+                    );
+                }
+                // Each branch contributes a complete field group. Keep all
+                // groups, including weaker sources in later branches.
+                Ok(original_fields
+                    .chunks_exact(target_fields.len())
+                    .flat_map(|fields| {
+                        fields.iter().zip(&target_fields).map(
+                            |((old_type, source), (_, target))| {
+                                let projected =
+                                    if self.resolve_ty(old_type) == self.resolve_ty(target) {
+                                        source.clone()
+                                    } else {
+                                        self.transported_source(source.clone(), target)
+                                    };
+                                (target.clone(), projected)
+                            },
+                        )
+                    })
+                    .collect())
+            }
             Provenance::Fields(_) | Provenance::Variants(_) => Ok(self
                 .nominal_fields(name, nominal, span)?
                 .into_iter()
@@ -1465,6 +1518,9 @@ impl Checker {
 
     fn invoke_provenance(&self, function: &Source, arguments: &[Source], actual: &Ty) -> Source {
         match &function.0 {
+            Provenance::ErrorTransport { source } => {
+                self.invoke_provenance(source, arguments, actual)
+            }
             Provenance::Injected {
                 function,
                 arguments: tail,
@@ -1697,7 +1753,9 @@ impl Checker {
                 function,
                 arguments,
             } => from_source(function).or_else(|| arguments.iter().find_map(from_source)),
-            Provenance::Projection { source, .. } => from_source(source),
+            Provenance::Projection { source, .. } | Provenance::ErrorTransport { source } => {
+                from_source(source)
+            }
             Provenance::Template { variables, .. } => variables.values().find_map(from_source),
             Provenance::RequiresProof
             | Provenance::Constrained(_)
@@ -1714,6 +1772,17 @@ impl Checker {
         actual_ty: &Ty,
     ) -> Result<bool, TypeError> {
         Ok(match provenance {
+            Provenance::ErrorTransport { source } => {
+                if self.transported_carrier_changes(&source.1, actual_ty) {
+                    matches!(
+                        self.constructor_projection(required, actual_ty)
+                            .into_checked()?,
+                        ConstructorProjectionOutcome::Applicable { .. }
+                    )
+                } else {
+                    self.constructor_provenance_allows(&source.0, required, &source.1)?
+                }
+            }
             Provenance::Constrained(capabilities) => capabilities.iter().any(|actual| {
                 self.constructor_capability_allows(actual, required, &mut HashSet::new())
             }),
@@ -1852,6 +1921,9 @@ impl Checker {
                     .map(|(variable, source)| (*variable, substitute(source)))
                     .collect(),
             },
+            Provenance::ErrorTransport { source: original } => Provenance::ErrorTransport {
+                source: Box::new(substitute(original)),
+            },
             Provenance::ConstrainedTemplate {
                 capabilities,
                 source: projected,
@@ -1871,6 +1943,35 @@ impl Checker {
         index: usize,
         expected: &Ty,
     ) -> Source {
+        if let Provenance::ErrorTransport { source: original } = &source.0 {
+            if !self.transported_carrier_changes(&original.1, &source.1) {
+                let old_slot = match self.transport_slot_type(capability, &original.1, index) {
+                    Ok(ty) => ty,
+                    Err(outcome) => {
+                        return (
+                            Provenance::ConstructorApplication(outcome),
+                            expected.clone(),
+                        )
+                    }
+                };
+                let target_slot = match self.transport_slot_type(capability, &source.1, index) {
+                    Ok(ty) => ty,
+                    Err(outcome) => {
+                        return (
+                            Provenance::ConstructorApplication(outcome),
+                            expected.clone(),
+                        )
+                    }
+                };
+                let projected =
+                    self.project_constructor_slot(original, capability, index, &old_slot);
+                return if old_slot == target_slot {
+                    projected
+                } else {
+                    self.transported_source(projected, &target_slot)
+                };
+            }
+        }
         if let Provenance::ConstrainedTemplate { source, .. } = &source.0 {
             return self.project_constructor_slot(source, capability, index, expected);
         }
@@ -2045,6 +2146,41 @@ impl Checker {
             }
         };
         match &source.0 {
+            Provenance::ErrorTransport { source: original } => {
+                let original_ty = match self.projection_type(&original.1, projection) {
+                    Ok(Some(ty)) => ty,
+                    Ok(None) => {
+                        return (
+                            Provenance::ConstructorApplication(
+                                ConstructorApplicationOutcome::Rejected {
+                                    failures: vec![
+                                        ConstructorProjectionFailure::MissingImplTargetMetadata,
+                                    ],
+                                },
+                            ),
+                            actual,
+                        )
+                    }
+                    Err(error) => {
+                        return (
+                            Provenance::ConstructorApplication(
+                                ConstructorApplicationOutcome::Rejected {
+                                    failures: vec![ConstructorProjectionFailure::ProofError(
+                                        Box::new(error),
+                                    )],
+                                },
+                            ),
+                            actual,
+                        )
+                    }
+                };
+                let projected = self.project_provenance(original, projection, &original_ty);
+                if self.resolve_ty(&original_ty) == self.resolve_ty(&actual) {
+                    projected
+                } else {
+                    self.transported_source(projected, &actual)
+                }
+            }
             Provenance::ConstrainedTemplate {
                 source: projected, ..
             } => self.project_provenance(projected, projection, &actual),
@@ -2174,6 +2310,70 @@ impl Checker {
                 actual,
             ),
             _ => (Provenance::RequiresProof, actual),
+        }
+    }
+
+    fn transport_slot_type(
+        &self,
+        capability: &str,
+        ty: &Ty,
+        index: usize,
+    ) -> Result<Ty, ConstructorApplicationOutcome> {
+        let (info, mapping) = match self.constructor_projection(capability, ty) {
+            ConstructorProjectionOutcome::Applicable { info, mapping } => (info, mapping),
+            ConstructorProjectionOutcome::Deferred { waiting_on } => {
+                return Err(ConstructorApplicationOutcome::Deferred { waiting_on })
+            }
+            ConstructorProjectionOutcome::Rejected { failures } => {
+                return Err(ConstructorApplicationOutcome::Rejected { failures })
+            }
+        };
+        let Some(variable) = info.constructor_slot_vars.get(index) else {
+            return Err(ConstructorApplicationOutcome::Rejected {
+                failures: vec![ConstructorProjectionFailure::SlotCountMismatch {
+                    expected: index + 1,
+                    actual: info.constructor_slot_vars.len(),
+                }],
+            });
+        };
+        mapping
+            .get(variable)
+            .map(|ty| self.resolve_ty(ty))
+            .ok_or_else(|| ConstructorApplicationOutcome::Rejected {
+                failures: vec![
+                    ConstructorProjectionFailure::MissingConstructorSlotMapping {
+                        variable: *variable,
+                    },
+                ],
+            })
+    }
+
+    fn transported_source(&self, source: Source, target: &Ty) -> Source {
+        let target = self.resolve_ty(target);
+        let original = self.resolve_ty(&source.1);
+        if original == target {
+            return source;
+        }
+        (
+            Provenance::ErrorTransport {
+                source: Box::new((source.0, original)),
+            },
+            target,
+        )
+    }
+
+    fn transported_carrier_changes(&self, source: &Ty, target: &Ty) -> bool {
+        match (self.resolve_ty(source), self.resolve_ty(target)) {
+            (Ty::Result(_, old_error), Ty::Result(_, new_error)) => old_error != new_error,
+            (Ty::Struct(old, a), Ty::Struct(new, b))
+                if old == new
+                    && Self::canonical_user_type_name(&old) == "Global::ResultT"
+                    && a.arguments.len() == 3
+                    && b.arguments.len() == 3 =>
+            {
+                a.arguments[2] != b.arguments[2]
+            }
+            _ => false,
         }
     }
 
@@ -2687,7 +2887,9 @@ impl Checker {
         bindings: &mut Bindings,
     ) {
         match pattern {
-            TypedMatchPattern::Located(_, _, inner) => self.match_provenance_bindings(inner, source, bindings),
+            TypedMatchPattern::Located(_, _, inner) => {
+                self.match_provenance_bindings(inner, source, bindings)
+            }
             TypedMatchPattern::HashMap(entries) => {
                 let payload = self.project_provenance(source, &Projection::Element, &Ty::Hole);
                 for entry in entries {
@@ -2696,6 +2898,9 @@ impl Checker {
             }
             TypedMatchPattern::Binding(id) => {
                 bindings.insert(id.unique_id, source.clone());
+            }
+            TypedMatchPattern::ErrorOther { inner, .. } => {
+                self.match_provenance_bindings(inner, source, bindings);
             }
             TypedMatchPattern::As(inner, id) => {
                 bindings.insert(id.unique_id, source.clone());
@@ -2814,6 +3019,100 @@ impl Checker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn transport_contract_checker() -> Checker {
+        let source = "defenumerror TransportClosed { NoneError }\ndefstruct TransportEnvelope<$E> { value: Identity<Int>, error: $E }\nimpl TransportEnvelope { def new(value: Identity<Int>, error: $E) -> TransportEnvelope<$E> { TransportEnvelope { value, error } } }";
+        let ast = spire::parse_with_context(source, spire::ParserContext::project(0)).unwrap();
+        let resolved = crate::test_support::resolve_ast_with_builtin_prelude(ast).unwrap();
+        let mut checker = Checker::with_persistent_state(
+            crate::test_support::session_from_cached_std_prelude().state,
+            TypecheckContext::default(),
+        );
+        checker.check_program(resolved).unwrap();
+        checker
+    }
+
+    #[test]
+    fn transported_slot_keeps_target_projection_failures() {
+        let mut checker = transport_contract_checker();
+        let functor = checker.trait_key_by_short_name("Functor").unwrap();
+        let monad = checker.trait_key_by_short_name("Monad").unwrap();
+        let payload = Ty::Struct("Identity".into(), NominalType::new(vec![Ty::Int]));
+        let original = (
+            Provenance::Sequence(vec![(Provenance::constrained(monad), payload.clone())]),
+            Ty::List(Box::new(payload.clone())),
+        );
+        for target in [Ty::Int, checker.env.fresh_tyvar()] {
+            let transported = checker.transported_source(original.clone(), &target);
+            let projected = checker.project_constructor_slot(&transported, &functor, 0, &payload);
+            assert!(
+                matches!(
+                    checker.constructor_provenance_application_outcome(&projected.0),
+                    Some(
+                        ConstructorApplicationOutcome::Rejected { .. }
+                            | ConstructorApplicationOutcome::Deferred { .. }
+                    )
+                ),
+                "target failure cannot reuse the original slot's proof: {projected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn transported_nominal_fields_keep_the_later_branch_requirement() {
+        let checker = transport_contract_checker();
+        let functor = checker.trait_key_by_short_name("Functor").unwrap();
+        let monad = checker.trait_key_by_short_name("Monad").unwrap();
+        let nominal = NominalType::new(vec![Ty::Error]);
+        let payload = checker
+            .nominal_fields("TransportEnvelope", &nominal, &Span { start: 0, end: 1 })
+            .unwrap()[0]
+            .1
+            .clone();
+        let closed = Ty::Enum("TransportClosed".into(), vec![]);
+        let source_ty = Ty::Struct(
+            "TransportEnvelope".into(),
+            NominalType::new(vec![closed.clone()]),
+        );
+        let branch = |capability: String| {
+            (
+                Provenance::Fields(vec![
+                    (Provenance::constrained(capability), payload.clone()),
+                    (Provenance::RequiresProof, closed.clone()),
+                ]),
+                source_ty.clone(),
+            )
+        };
+        let original = (
+            Provenance::Intersection(vec![branch(monad.clone()), branch(functor)]),
+            source_ty,
+        );
+        let target = Ty::Struct("TransportEnvelope".into(), nominal.clone());
+        let transported = checker.transported_source(original, &target);
+        let span = Span { start: 0, end: 1 };
+        let fields = checker
+            .nominal_source_fields("TransportEnvelope", &nominal, &transported, &span)
+            .unwrap();
+        let values = fields
+            .iter()
+            .filter(|(field, _)| *field == payload)
+            .collect::<Vec<_>>();
+        assert!(
+            !values.is_empty(),
+            "the value field's canonical identity is inspected"
+        );
+        assert!(
+            values.into_iter().any(|(_, source)| checker
+                .check_source_constructor_capability(
+                    &monad,
+                    source,
+                    &span,
+                    "transported nominal consumer"
+                )
+                .is_err()),
+            "the later weak branch must still reject the Monad field requirement"
+        );
+    }
 
     #[test]
     fn nested_nominal_callback_sources_keep_finite_projection_proofs() {

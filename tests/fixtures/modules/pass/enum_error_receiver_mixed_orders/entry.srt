@@ -1,0 +1,16 @@
+plain = Failure(1)
+named = OpenFailures::Failure(2)
+left_match: OpenFailures = match True { True => plain, False => named }
+right_match: OpenFailures = match True { True => named, False => plain }
+left_if: OpenFailures = if(True, plain, named)
+right_if: OpenFailures = if(True, named, plain)
+left_list: List<OpenFailures> = [plain, named]
+right_list: List<OpenFailures> = [named, plain]
+left_map: HashMap<OpenFailures> = hash!["first" => plain, "second" => named]
+right_map: HashMap<OpenFailures> = hash!["first" => named, "second" => plain]
+print(to_string(Error::same_kind(left_match, right_match)))
+print(to_string(Error::same_kind(left_if, right_if)))
+print(match left_list { [first, _] => Error::message(first), _ => "wrong" })
+print(match right_list { [first, _] => Error::message(first), _ => "wrong" })
+print(match HashMap::map_get(left_map, "first") { Ok(error) => Error::message(error), Err(_) => "wrong" })
+print(match HashMap::map_get(right_map, "first") { Ok(error) => Error::message(error), Err(_) => "wrong" })

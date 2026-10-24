@@ -4,6 +4,13 @@ deferror ApiError(detail: String) {
   |detail: String|
   Self(message: detail, detail)
 }
+defenumerror ResultTestFailures { ApiError }
+defenumerror ResultTestOpenFailures { ApiError, Other(Error) }
+deferror ResultWrappedFailure(inner: ResultTestOpenFailures) {
+  |inner: ResultTestOpenFailures|
+  Self(message: "wrapped", inner)
+}
+
 def inc(x: Int) -> Int { x + 1 }
 def add2(x: Int, y: Int) -> Int { x + y }
 def add3(x: Int, y: Int, z: Int) -> Int { x + y + z }
@@ -282,6 +289,20 @@ test("Result") {
       do {
         assert_ok_eq(2, Ok(&inc) |*| Ok(1))
         assert_ok_eq(2, Applicative::ap(Ok(&inc), Ok(1)))
+      }
+    }
+
+    it("preserves errors when the success type changes") {
+      do {
+        mapper: Result<(Int -> String)> = Ok({|value| to_string(value)})
+        failed_mapper: Result<(Int -> String)> = Err(ApiError("first"))
+        failed_value: Result<Int> = Err(NoneError())
+        mapper_error: Result<String> = Applicative::ap(failed_mapper, failed_value)
+        value_error: Result<String> = Applicative::ap(mapper, failed_value)
+        bound: Result<String> = Monad::bind(failed_value, {|value| Ok(to_string(value))})
+        assert_err_message_eq("first", mapper_error)
+        assert_err_kind(NoneError, value_error)
+        assert_err_kind(NoneError, bound)
       }
     }
 
@@ -779,6 +800,30 @@ test("Result") {
         assert_ok_eq("retry", retried)
         assert_err_kind(ZeroDivisionError, untouched)
         assert_stdout_eq(["retry:NoneError", "Error: NoneError: None Value."])
+      }
+    }
+
+  }
+
+
+  describe("EnumError extraction") {
+    it("expect_error accepts a closed Result and preserves its payload") {
+      do {
+        selected: Result<Int, ResultTestFailures> = Err(ApiError("selected payload"))
+        error <- expect_error(selected)
+        assert_err_kind(ApiError, Err(error))
+        assert_error_matches(error, ApiError(detail), assert_eq("selected payload", detail))
+      }
+    }
+    it("assert_error_matches checks Other nested in an Error payload") {
+      do {
+        other = ResultWrappedFailure(ResultTestOpenFailures::NoneError())
+        listed = ResultWrappedFailure(ResultTestOpenFailures::ApiError("listed"))
+        assert_error_matches(other, ResultWrappedFailure(Other(NoneError)), Ok(()))
+        assert_err_kind(
+          TestErrorPatternKindMismatch,
+          assert_error_matches(listed, ResultWrappedFailure(Other(_)), Ok(()))
+        )
       }
     }
 

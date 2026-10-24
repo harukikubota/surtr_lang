@@ -3,6 +3,53 @@ use super::*;
 use diagnostics::{DiagnosticOrigin, PatternKind, SourceRole, TypeDiagnosticReason};
 
 impl Checker {
+    fn select_enum_error_other_candidate(
+        &self,
+        span: &Span,
+        candidates: &[ResolvedId],
+        expected: &Ty,
+    ) -> Result<ResolvedId, TypeError> {
+        let owner = self.enum_error_name(expected).ok_or_else(|| {
+            TypeError::new(
+                "Other Pattern requires an inspected EnumError with a declared Other item",
+                span.clone(),
+            )
+        })?;
+        if !self.env.enum_error_other.contains(&owner) {
+            return Err(TypeError::new(
+                format!(
+                    "EnumError {} does not declare Other",
+                    Self::surface_name(&owner)
+                ),
+                span.clone(),
+            ));
+        }
+        let mut matching = candidates.iter().filter(|candidate| {
+            self.lookup_enum_variant_by_constructor_id(candidate.unique_id)
+                .is_some_and(|variant| {
+                    variant.enum_error
+                        && variant.error_identity.is_none()
+                        && variant.enum_name == owner
+                })
+        });
+        let selected = matching.next().cloned().ok_or_else(|| {
+            TypeError::new(
+                format!(
+                    "EnumError {} Other item is not visible",
+                    Self::surface_name(&owner)
+                ),
+                span.clone(),
+            )
+        })?;
+        if matching.next().is_some() {
+            return Err(self.typecheck_invariant_error(
+                "multiple canonical Other items for one EnumError",
+                span,
+            ));
+        }
+        Ok(selected)
+    }
+
     pub(super) fn resolved_pattern_span(pattern: &ResolvedPattern) -> Result<Span, TypeError> {
         Ok(match pattern {
             ResolvedPattern::Located(span, _) => span.clone(),
@@ -17,7 +64,9 @@ impl Checker {
             | ResolvedPattern::Constructor(head, _)
             | ResolvedPattern::Extractor(head, _, _)
             | ResolvedPattern::Record(head, _) => head.span.clone(),
-            ResolvedPattern::HashMap(span, _) => span.clone(),
+            ResolvedPattern::HashMap(span, _) | ResolvedPattern::EnumErrorOther(span, _, _) => {
+                span.clone()
+            }
             ResolvedPattern::Wildcard(span)
             | ResolvedPattern::AnnotatedWildcard(span, _)
             | ResolvedPattern::ListNil(span)
@@ -45,15 +94,14 @@ impl Checker {
         expected: Option<&Ty>,
         expected_relation: Option<&ExpectedTypeRelation>,
     ) -> Result<TypedNode, TypeError> {
-        // A polymorphic constructor used as the scrutinee (for example
-        // `Err(NoneError())`) cannot be inferred in isolation: without an
-        // expected type its payload type defaults to `Unit`.  Match patterns
-        // are an equally valid source of constraints, so seed the scrutinee
-        // from the first informative pattern and let arm bindings/body
-        // expressions refine the fresh variables it contains.
+        // Ordinary nominal constructors can use Pattern constraints to infer
+        // generic payloads. Error-sensitive hints cannot be receiver contexts:
+        // the scrutinee keeps its declared Error position, and Pattern children
+        // plus arm bodies constrain any fresh constructor payload variables.
         let pattern_hint = arms
             .iter()
-            .find_map(|arm| self.infer_match_pattern_ty(&arm.pattern));
+            .find_map(|arm| self.infer_match_pattern_ty(&arm.pattern))
+            .filter(|hint| !self.type_contains_error_position(hint));
         let mut typed_scrut = match pattern_hint.as_ref() {
             Some(expected) => self.check_node_with_expected(scrutinee, Some(expected))?,
             None => self.check_node(scrutinee)?,
@@ -81,7 +129,7 @@ impl Checker {
 
         let scrutinee_provenance = self.constructor_capability_for_node(&typed_scrut);
         for (ordinal, arm) in arms.iter().enumerate() {
-            let mut typed_arm = self.check_match_arm(
+            let typed_arm = self.check_match_arm(
                 arm,
                 &typed_scrut.ty,
                 &scrutinee_provenance,
@@ -89,25 +137,6 @@ impl Checker {
                 expected,
                 expected_relation,
             )?;
-            if let Some(ref rt) = result_ty {
-                let coerce = self.with_type_relation_probe(
-                    &[rt, &typed_arm.body.ty, &typed_scrut.ty],
-                    |checker| {
-                        Ok::<_, TypeError>(
-                            !checker.types_compatible(rt, &typed_arm.body.ty)?
-                                && checker.can_coerce_err_only_result_self_arm(
-                                    &typed_scrut,
-                                    &typed_arms,
-                                    &typed_arm,
-                                    rt,
-                                )?,
-                        )
-                    },
-                )?;
-                if coerce {
-                    typed_arm.body.ty = self.resolve_ty(rt);
-                }
-            }
             let body_node = &typed_arm.body;
             if let Some(first) = typed_arms.first().filter(|_| callable_expected.is_none()) {
                 let first: &TypedMatchArm = first;
@@ -172,6 +201,61 @@ impl Checker {
             span: span.clone(),
             node: TypedInner::Match(Box::new(typed_scrut), typed_arms),
         })
+    }
+
+    pub(super) fn type_contains_error_position(&self, ty: &Ty) -> bool {
+        fn visit(checker: &Checker, ty: &Ty, owners: &mut HashSet<String>) -> bool {
+            let ty = checker.resolve_ty(ty);
+            if checker.enum_error_name(&ty).is_some() {
+                return true;
+            }
+            match &ty {
+                Ty::Error | Ty::Result(..) => true,
+                Ty::Enum(_, arguments) | Ty::Tuple(arguments) | Ty::SelfApp(arguments) => {
+                    arguments.iter().any(|ty| visit(checker, ty, owners))
+                }
+                Ty::Struct(name, nominal) | Ty::Record(name, nominal) => {
+                    // Inspect actual arguments at every application, but each owner's
+                    // finite schema only once. Never instantiate recursive fields.
+                    if nominal
+                        .arguments
+                        .iter()
+                        .any(|ty| visit(checker, ty, owners))
+                    {
+                        return true;
+                    }
+                    let definition = checker
+                        .env
+                        .lookup_type_def(name)
+                        .expect("checked nominal type has its declaration schema");
+                    if !owners.insert(definition.name.to_string()) {
+                        return false;
+                    }
+                    definition
+                        .fields
+                        .iter()
+                        .any(|(_, ty)| visit(checker, ty, owners))
+                }
+                Ty::List(item)
+                | Ty::MatchResult(item)
+                | Ty::ExtractorClosure(item)
+                | Ty::Lazy(item)
+                | Ty::Pid(item) => visit(checker, item, owners),
+                Ty::Func(params, ret)
+                | Ty::UserFunc { params, ret, .. }
+                | Ty::BuiltinFunc { params, ret, .. } => {
+                    params.iter().any(|ty| visit(checker, ty, owners))
+                        || visit(checker, ret, owners)
+                }
+                Ty::Facet(_, source, focus, update_source, update_focus) => {
+                    [source, focus, update_source, update_focus]
+                        .iter()
+                        .any(|ty| visit(checker, ty, owners))
+                }
+                _ => false,
+            }
+        }
+        visit(self, ty, &mut HashSet::new())
     }
 
     /// Infer a type skeleton from a pattern before the scrutinee is checked.
@@ -242,54 +326,8 @@ impl Checker {
             }),
             // Extractor patterns need the scrutinee type supplied by the
             // extractor contract; they remain checked by the normal path.
-            ResolvedPattern::Extractor(_, _, _) => None,
+            ResolvedPattern::Extractor(_, _, _) | ResolvedPattern::EnumErrorOther(_, _, _) => None,
         }
-    }
-
-    fn can_coerce_err_only_result_self_arm(
-        &mut self,
-        scrutinee: &TypedNode,
-        previous_arms: &[TypedMatchArm],
-        arm: &TypedMatchArm,
-        expected_ty: &Ty,
-    ) -> Result<bool, TypeError> {
-        if arm.guard.is_some() || !matches!(arm.pattern, TypedMatchPattern::Wildcard) {
-            return Ok(false);
-        }
-
-        let (scrut_ok, scrut_err) = match self.resolve_ty(&scrutinee.ty) {
-            Ty::Result(ok, err) => (ok, err),
-            _ => return Ok(false),
-        };
-        let (expected_ok, expected_err) = match self.resolve_ty(expected_ty) {
-            Ty::Result(ok, err) => (ok, err),
-            _ => return Ok(false),
-        };
-
-        if !self.types_compatible(scrut_err.as_ref(), expected_err.as_ref())? {
-            return Ok(false);
-        }
-
-        if self.types_compatible(scrut_ok.as_ref(), expected_ok.as_ref())? {
-            return Ok(false);
-        }
-
-        let (scrut_id, body_id) = match (&scrutinee.node, &arm.body.node) {
-            (TypedInner::Var(scrut_id), TypedInner::Var(body_id)) => {
-                (scrut_id.unique_id, body_id.unique_id)
-            }
-            _ => return Ok(false),
-        };
-        if scrut_id != body_id {
-            return Ok(false);
-        }
-
-        Ok(previous_arms.iter().any(|prev_arm| {
-            prev_arm.guard.is_none()
-                && Self::match_or_alternative_matches(&prev_arm.pattern, &|pattern| {
-                    matches!(pattern, TypedMatchPattern::Constructor { tag: 0, .. })
-                })
-        }))
     }
 
     pub(super) fn check_match_exhaustive(
@@ -484,7 +522,7 @@ impl Checker {
         if missing.is_empty() {
             Ok(())
         } else {
-            Err(self.pattern_error(
+            let mut error = self.pattern_error(
                 TypeDiagnosticReason::NonExhaustiveMatch,
                 PatternKind::Match,
                 Some(enum_name.to_string()),
@@ -494,7 +532,20 @@ impl Checker {
                 None,
                 missing,
                 span,
-            ))
+            );
+            if let Some(declaration_span) = self.env.enum_error_declaration_spans.get(enum_name) {
+                let diagnostic = error
+                    .structured
+                    .as_mut()
+                    .expect("exhaustiveness diagnostics are structured");
+                diagnostic.related.push(diagnostics::SourceFact::typed(
+                    SourceRole::Declaration,
+                    diagnostics::SourceId(0),
+                    declaration_span.clone(),
+                    Self::surface_name(enum_name),
+                ));
+            }
+            Err(error)
         }
     }
 
@@ -504,6 +555,14 @@ impl Checker {
         variant: &crate::env::EnumVariantInfo,
     ) -> bool {
         Self::match_or_alternative_matches(pattern, &|pattern| match pattern {
+            TypedMatchPattern::ErrorKind(kind) | TypedMatchPattern::ErrorPayload { kind, .. }
+                if variant.enum_error =>
+            {
+                variant.error_identity.as_ref() == Some(kind)
+            }
+            TypedMatchPattern::ErrorOther { .. } if variant.enum_error => {
+                variant.error_identity.is_none()
+            }
             TypedMatchPattern::Constructor { tag, .. } => *tag == variant.tag,
             TypedMatchPattern::BoolLit(value) => {
                 variant.special_variant
@@ -725,6 +784,11 @@ impl Checker {
                         ));
                     }
                 }
+                let alias_expected_ty = if narrowed_kind.is_some() {
+                    Ty::Error
+                } else {
+                    self.resolve_ty(expected_ty)
+                };
                 let alias_bind_ty = if let Some(ast_ty) = alias_ty {
                     let expected = self.resolve_ast_ty_in_context(
                         ast_ty,
@@ -734,7 +798,7 @@ impl Checker {
                             self.local_type_syntax_context()
                         },
                     )?;
-                    if !self.types_compatible(&expected, expected_ty)? {
+                    if !self.types_compatible(&expected, &alias_expected_ty)? {
                         return Err(self.pattern_error(
                             TypeDiagnosticReason::PatternTypeMismatch,
                             PatternKind::Other,
@@ -749,7 +813,7 @@ impl Checker {
                     }
                     self.resolve_ty(&expected)
                 } else {
-                    self.resolve_ty(expected_ty)
+                    alias_expected_ty
                 };
                 self.env.bind_var(alias.unique_id, alias_bind_ty);
                 if let Some(kind) = Self::single_error_pattern_identity(&typed_inner) {
@@ -979,6 +1043,14 @@ impl Checker {
                 }
                 Ok(TypedMatchPattern::Or(typed_items))
             }
+            ResolvedPattern::EnumErrorOther(span, candidates, inners) => {
+                let selected =
+                    self.select_enum_error_other_candidate(span, candidates, expected_ty)?;
+                self.check_match_subpattern(
+                    &ResolvedPattern::Constructor(selected, inners.clone()),
+                    expected_ty,
+                )
+            }
             ResolvedPattern::Constructor(ctor_id, inner_pats) => {
                 if matches!(self.resolve_ty(expected_ty), Ty::Error)
                     && self
@@ -1004,7 +1076,7 @@ impl Checker {
                             "Err matches the Result layer being inspected; do not write Err(Err(...)).",
                         ));
                 }
-                if matches!(expected_ty, Ty::Error)
+                if self.is_error_value_ty(expected_ty)
                     && self.env.is_error_constructor(ctor_id.unique_id)
                 {
                     let fields = inner_pats
@@ -1124,6 +1196,57 @@ impl Checker {
                     });
                 }
 
+                if let Some(enum_name) = self.enum_error_name(expected_ty) {
+                    let variant = self
+                        .lookup_enum_variant_by_constructor_id(ctor_id.unique_id)
+                        .ok_or_else(|| {
+                            self.typecheck_invariant_error(
+                                "EnumError Pattern missing variant metadata",
+                                &ctor_id.span,
+                            )
+                        })?;
+                    if !variant.enum_error || variant.enum_name != enum_name {
+                        return Err(TypeError::new(
+                            "EnumError Pattern must name a declared member or Other",
+                            ctor_id.span.clone(),
+                        ));
+                    }
+                    if variant.error_identity.is_some() {
+                        let fields = inner_pats
+                            .iter()
+                            .cloned()
+                            .map(|pattern| (None, pattern))
+                            .collect::<Vec<_>>();
+                        return self.check_error_payload_pattern(
+                            ctor_id,
+                            &fields,
+                            expected_ty,
+                            true,
+                        );
+                    }
+                    if inner_pats.len() != 1 {
+                        return Err(TypeError::new(
+                            "EnumError Other Pattern expects one Error child",
+                            ctor_id.span.clone(),
+                        ));
+                    }
+                    let excluded_kinds = self
+                        .env
+                        .enum_error_members
+                        .get(&enum_name)
+                        .cloned()
+                        .ok_or_else(|| {
+                            self.typecheck_invariant_error(
+                                "EnumError member metadata missing",
+                                &ctor_id.span,
+                            )
+                        })?;
+                    let inner = self.check_match_subpattern(&inner_pats[0], &Ty::Error)?;
+                    return Ok(TypedMatchPattern::ErrorOther {
+                        excluded_kinds,
+                        inner: Box::new(inner),
+                    });
+                }
                 let Ty::Enum(expected_enum_name, _) = expected_ty else {
                     return Err(self.pattern_error(
                         TypeDiagnosticReason::PatternShapeMismatch,
@@ -1363,6 +1486,7 @@ impl Checker {
             | TypedMatchPattern::DurationLit(_)
             | TypedMatchPattern::ErrorKind(_)
             | TypedMatchPattern::ErrorPayload { .. }
+            | TypedMatchPattern::ErrorOther { .. }
             | TypedMatchPattern::Constructor { .. }
             | TypedMatchPattern::ListNil
             | TypedMatchPattern::ListCons(_, _)
@@ -1396,24 +1520,40 @@ impl Checker {
         expected: &Ty,
         kind_only: bool,
     ) -> Result<TypedMatchPattern, TypeError> {
-        if !matches!(self.resolve_ty(expected), Ty::Error) {
+        if !self.is_error_value_ty(expected) {
             return Err(TypeError::new(
                 "Error definition Pattern requires an Error value",
                 id.span.clone(),
             ));
         }
-        let kind = id.qualified_name.clone().ok_or_else(|| {
-            TypeError::new(
-                "Error Pattern is missing declaration identity",
-                id.span.clone(),
-            )
-        })?;
+        let kind = match self.lookup_enum_variant_by_constructor_id(id.unique_id) {
+            Some(variant) if variant.enum_error => variant.error_identity.ok_or_else(|| {
+                self.typecheck_invariant_error(
+                    "EnumError member Pattern has no concrete identity",
+                    &id.span,
+                )
+            })?,
+            _ => id.qualified_name.clone().ok_or_else(|| {
+                TypeError::new(
+                    "Error Pattern is missing declaration identity",
+                    id.span.clone(),
+                )
+            })?,
+        };
+        if let Some(enum_name) = self.enum_error_name(expected) {
+            let members = self.env.enum_error_members.get(&enum_name).ok_or_else(|| {
+                self.typecheck_invariant_error("EnumError member metadata missing", &id.span)
+            })?;
+            if !members.contains(&kind) {
+                return Err(TypeError::new(format!("Error {kind} is not a declared member of {enum_name}; match Other to inspect unlisted errors"), id.span.clone()));
+            }
+        }
         if kind_only && fields.is_empty() {
             return Ok(TypedMatchPattern::ErrorKind(kind));
         }
         let schema = self
             .env
-            .lookup_type_def(&id.name)
+            .lookup_type_def(&kind)
             .ok_or_else(|| TypeError::new("Error Payload schema is missing", id.span.clone()))?
             .fields
             .clone();
@@ -1490,6 +1630,9 @@ impl Checker {
                 }
             }
             TypedMatchPattern::Binding(id) => out.push(id.clone()),
+            TypedMatchPattern::ErrorOther { inner, .. } => {
+                Self::collect_or_binding_ids(inner, out);
+            }
             TypedMatchPattern::As(inner, alias) => {
                 Self::collect_or_binding_ids(inner, out);
                 out.push(alias.clone());
@@ -1523,7 +1666,7 @@ impl Checker {
         bindings: &HashSet<u32>,
     ) -> bool {
         match &node.node {
-            TypedInner::EagerBoundary(inner) => {
+            TypedInner::EagerBoundary(inner) | TypedInner::ErrorCoerce { value: inner, .. } => {
                 Self::external_pattern_success_value(inner, bindings)
             }
             TypedInner::Var(id) => !bindings.contains(&id.unique_id),
@@ -1612,7 +1755,9 @@ impl Checker {
         if success.guard.is_some() || failure.guard.is_some() {
             return Err(self.typecheck_invariant_error("if_let arms cannot have guards", span));
         }
-        let hint = self.infer_match_pattern_ty(&success.pattern);
+        let hint = self
+            .infer_match_pattern_ty(&success.pattern)
+            .filter(|hint| !self.type_contains_error_position(hint));
         let mut typed_value = self.check_node_with_expected(scrutinee, hint.as_ref())?;
         if let Some(hint) = &hint {
             self.assert_type_relation(

@@ -323,6 +323,7 @@ impl Checker {
                         | Resolved::LazyApp(_, LazyCaptureKind::If | LazyCaptureKind::IfThen, _, _)
                 )
                 || self.body_tail_is_return_type_argument_call(body)
+                || expected.is_some_and(|expected| matches!(expected, Ty::Func(_, ret) if self.type_contains_error_position(ret)))
             {
                 if let Some(Ty::Func(_, expected_ret)) = expected {
                     self.check_node_with_expected_relation(
@@ -586,7 +587,7 @@ impl Checker {
                                     hint: None,
                                 })?
                         }
-                        crate::env::TypeKind::Enum => {
+                        crate::env::TypeKind::Enum | crate::env::TypeKind::EnumError => {
                             return Err(TypeError {
                                 structured: None,
                                 message: format!(

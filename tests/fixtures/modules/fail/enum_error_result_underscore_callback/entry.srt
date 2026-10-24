@@ -1,0 +1,2 @@
+def rejected(callback: (Int -> Result<Int, _>)) -> Result<Int> { callback(1) }
+rejected(&Ok)

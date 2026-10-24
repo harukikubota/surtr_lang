@@ -1,0 +1,2 @@
+selected: Result<Int, ClosedFailures> = Err(Failure())
+rejected: Result<Int, ClosedFailures> = Transport::relay(selected)

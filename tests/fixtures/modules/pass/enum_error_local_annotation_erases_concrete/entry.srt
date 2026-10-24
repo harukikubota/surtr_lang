@@ -1,0 +1,9 @@
+plain = Failure(7)
+print(match plain {
+  Failure @ original => {
+    selected: OpenFailures = original
+    widened: Error = selected
+    Error::message(widened)
+  },
+  _ => "wrong",
+})

@@ -14,9 +14,49 @@ impl Resolver {
         }
     }
 
+    fn enum_error_other_candidates(&self, span: &Span, scope: &Scope) -> Vec<ResolvedId> {
+        if scope.lookup("Other").is_some() {
+            return Vec::new();
+        }
+        self.owner_registry
+            .entries()
+            .filter(|owner| owner.kind == OwnerKind::EnumError)
+            .filter_map(|owner| {
+                let owner_name = if owner.canonical_key.contains("::") {
+                    owner.canonical_key.clone()
+                } else {
+                    format!("Global::{}", owner.canonical_key)
+                };
+                let name = format!("{owner_name}::Other");
+                let uid = scope.lookup(&name)?;
+                if self.declaration_uid_kinds.get(&uid) != Some(&DeclarationKind::EnumVariant) {
+                    return None;
+                }
+                Some(ResolvedId {
+                    name: name.clone(),
+                    qualified_name: Some(name.clone()),
+                    unique_id: uid,
+                    compiler_generated: false,
+                    symbol_info: self.symbol_info_for_uid(&name, uid),
+                    span: span.clone(),
+                })
+            })
+            .collect()
+    }
+
     pub(super) fn pattern_has_deferred_application(&self, pattern: &AstPattern) -> bool {
         match pattern {
-            AstPattern::Call(_, name, args) => {
+            AstPattern::Call(span, name, args) => {
+                if name == "Other"
+                    && !self
+                        .enum_error_other_candidates(span, &self.scope)
+                        .is_empty()
+                {
+                    return args
+                        .iter()
+                        .filter_map(|argument| argument.pattern.as_deref())
+                        .any(|child| self.pattern_has_deferred_application(child));
+                }
                 let kind = self
                     .scope
                     .lookup(name)
@@ -60,6 +100,25 @@ impl Resolver {
     ) -> Result<AstPattern, ResolveError> {
         match &mut pattern {
             AstPattern::Call(span, name, args) => {
+                if name == "Other"
+                    && !self
+                        .enum_error_other_candidates(span, &self.scope)
+                        .is_empty()
+                {
+                    for argument in args.iter_mut() {
+                        let child = argument.pattern.take().ok_or_else(|| {
+                            deferred_pattern_parse_error(
+                                argument.pattern_error.clone(),
+                                "EnumError Other payload must be a Pattern",
+                                argument.span.clone(),
+                            )
+                        })?;
+                        argument.pattern =
+                            Some(Box::new(self.select_pattern_argument_roles(*child)?));
+                        argument.expression = None;
+                    }
+                    return Ok(pattern);
+                }
                 let uid = self.scope.lookup(name).ok_or_else(|| {
                     pattern_argument_error(
                         format!("Undefined MatchBlock head: {name}"),
@@ -345,6 +404,16 @@ impl Resolver {
             AstPattern::BoolLit(span, b) => Ok(ResolvedPattern::BoolLit(span, b)),
             AstPattern::DurationLit(span, n) => Ok(ResolvedPattern::DurationLit(span, n)),
             AstPattern::Constructor(span, ctor_name, inners) => {
+                if ctor_name == "Other" {
+                    let candidates = self.enum_error_other_candidates(&span, outer);
+                    if !candidates.is_empty() {
+                        let children = inners
+                            .into_iter()
+                            .map(|child| self.resolve_pattern_inner(child, seen, outer))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        return Ok(ResolvedPattern::EnumErrorOther(span, candidates, children));
+                    }
+                }
                 let ctor_uid = outer.lookup(&ctor_name).ok_or_else(|| ResolveError {
                     message: format!("Undefined constructor: {}", ctor_name),
                     span: span.clone(),
@@ -371,6 +440,25 @@ impl Resolver {
                 ))
             }
             AstPattern::Call(span, head_name, inners) => {
+                if head_name == "Other" {
+                    let candidates = self.enum_error_other_candidates(&span, outer);
+                    if !candidates.is_empty() {
+                        let children = inners
+                            .into_iter()
+                            .map(|argument| {
+                                let child = argument.pattern.ok_or_else(|| {
+                                    deferred_pattern_parse_error(
+                                        argument.pattern_error,
+                                        "EnumError Other payload must be a Pattern",
+                                        argument.span,
+                                    )
+                                })?;
+                                self.resolve_pattern_inner(*child, seen, outer)
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        return Ok(ResolvedPattern::EnumErrorOther(span, candidates, children));
+                    }
+                }
                 let head_uid = outer.lookup(&head_name).ok_or_else(|| ResolveError {
                     message: if Self::is_constructor_style_head(&head_name) {
                         format!("Undefined constructor: {}", head_name)
@@ -755,6 +843,7 @@ fn remap_or_pattern_bindings(
                 })?;
         }
         ResolvedPattern::Constructor(_, items)
+        | ResolvedPattern::EnumErrorOther(_, _, items)
         | ResolvedPattern::Extractor(_, _, items)
         | ResolvedPattern::Tuple(items)
         | ResolvedPattern::Or(items) => {

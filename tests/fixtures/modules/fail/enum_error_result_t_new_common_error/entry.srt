@@ -1,0 +1,2 @@
+selected: Result<Int, ClosedFailures> = Err(Failure())
+rejected: ResultT<Identity, Int, ClosedFailures> = ResultT::new(Identity::new(selected))

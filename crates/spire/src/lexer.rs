@@ -232,6 +232,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 "defstruct" => Token::Defstruct,
                 "defrecord" => Token::Defrecord,
                 "deferror" => Token::Deferror,
+                "defenumerror" => Token::Defenumerror,
                 "defenum" => Token::Defenum,
                 "defextractor" => Token::Defextractor,
                 "impl" => Token::Impl,

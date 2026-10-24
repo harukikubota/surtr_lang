@@ -248,7 +248,9 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
                 }
             }
         }
-        Resolved::ConstructorCall(_, _, args) | Resolved::EnumConstructorCall(_, _, _, args) => {
+        Resolved::ConstructorCall(_, _, args)
+        | Resolved::EnumConstructorCall(_, _, _, args)
+        | Resolved::EnumErrorConstructorCall(_, _, _, args) => {
             for arg in args {
                 collect_record_arg_usage(arg, usage);
             }
@@ -367,7 +369,7 @@ fn collect_pattern_usage(pattern: &ResolvedPattern, usage: &mut WarningUsage) {
                 collect_pattern_usage(inner, usage);
             }
         }
-        ResolvedPattern::Constructor(_, inners) => {
+        ResolvedPattern::Constructor(_, inners) | ResolvedPattern::EnumErrorOther(_, _, inners) => {
             for inner in inners {
                 collect_pattern_usage(inner, usage);
             }

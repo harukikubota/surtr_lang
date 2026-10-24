@@ -231,7 +231,20 @@ impl Checker {
         self.env.pop_var_scope();
         self.facet_bindings = saved_facet_bindings;
         self.constructor_capabilities = saved_constructor_capabilities;
-        result
+        self.finish_do_expected_receiver(result, expected)
+    }
+
+    #[inline(never)]
+    fn finish_do_expected_receiver(
+        &mut self,
+        result: Result<TypedNode, TypeError>,
+        expected: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
+        let mut typed = result?;
+        if let Some(expected) = expected {
+            self.coerce_error_value_receiver(&mut typed, expected, None)?;
+        }
+        Ok(typed)
     }
 
     fn check_do_statements(
@@ -748,7 +761,7 @@ impl Checker {
             &[Ty::Error],
             pattern_span,
         )?;
-        let TypedInner::TraitCall { args, .. } = &mut checked.node else {
+        let Some(args) = Self::do_bind_call_args_mut(&mut checked) else {
             return Err(self.policy_error(
                 TypeDiagnosticReason::TypecheckInvariantViolation,
                 diagnostics::TypePolicy::ProducerContract,
@@ -850,6 +863,17 @@ impl Checker {
             },
         }));
         Ok(*self.resolve_typed_node(checked))
+    }
+
+    // Keep the checked outward Error conversion around the call whose generated
+    // mapper we update. Conversion is transparent at runtime but retains its
+    // nominal target and specialization validation in the IR.
+    fn do_bind_call_args_mut(node: &mut TypedNode) -> Option<&mut Vec<TypedNode>> {
+        match &mut node.node {
+            TypedInner::ErrorCoerce { value, .. } => Self::do_bind_call_args_mut(value),
+            TypedInner::TraitCall { args, .. } => Some(args),
+            _ => None,
+        }
     }
 
     fn statement_question_parts(statement: &Resolved) -> Option<(&Span, &Resolved)> {
@@ -1222,7 +1246,17 @@ impl Checker {
         })
     }
 
-    fn extract_safebind_rhs(&mut self, key: &str, rhs: TypedNode) -> Result<TypedNode, TypeError> {
+    fn extract_safebind_rhs(
+        &mut self,
+        key: &str,
+        mut rhs: TypedNode,
+    ) -> Result<TypedNode, TypeError> {
+        // Normalize the original value before introducing the temporary. The
+        // ordinary call still owns one bare variable argument, replaced once
+        // with the already-checked value including its Error transport.
+        if let Some(boundary) = self.standard_error_carrier_boundary(key, &rhs.ty) {
+            self.coerce_error_carrier_boundary(&mut rhs, &boundary)?;
+        }
         let span = rhs.span.clone();
         let input = ResolvedId {
             name: "__extract_input".into(),
@@ -1444,12 +1478,16 @@ impl Checker {
         let rhs_ty = self.resolve_ty(&typed_rhs.ty);
         let original_rhs_span = typed_rhs.span.clone();
         let extraction_key = self.canonical_monad_extractor_key(span)?;
-        let extraction_proof = self.prove_trait_capability(&extraction_key, &rhs_ty)?;
+        let extraction_receiver = self
+            .standard_error_carrier_boundary(&extraction_key, &rhs_ty)
+            .unwrap_or_else(|| rhs_ty.clone());
+        let extraction_proof =
+            self.prove_trait_capability(&extraction_key, &extraction_receiver)?;
         let extracts = match extraction_proof {
             ApplicabilityProof::Satisfied(_) => true,
             ApplicabilityProof::Deferred(_) | ApplicabilityProof::Unsatisfied => {
                 match self
-                    .constructor_capability_projection(&extraction_key, &rhs_ty)
+                    .constructor_capability_projection(&extraction_key, &extraction_receiver)
                     .into_checked()?
                 {
                     // Capability proofs may defer just because a payload is

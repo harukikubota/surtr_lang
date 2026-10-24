@@ -1,0 +1,3 @@
+phase: typecheck
+contains: Error
+contains: OpenFailures

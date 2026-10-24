@@ -1,0 +1,8 @@
+deferror FirstFailure { "first" }
+deferror SecondFailure { "second" }
+defenumerror ClosedFailures { FirstFailure, SecondFailure }
+defmod Factory {
+  def first() -> ClosedFailures { FirstFailure() }
+  def second() -> ClosedFailures { SecondFailure() }
+  def result() -> Result<Int, ClosedFailures> { Err(FirstFailure()) }
+}

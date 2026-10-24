@@ -1,0 +1,5 @@
+deferror AlphaFailure(value: Int) { |input: Int| Self(message: "alpha", value: input) }
+deferror BetaFailure { "beta" }
+defenumerror OpenFailures { AlphaFailure, Other(Error) }
+defenumerror ClosedFailures { AlphaFailure }
+impl Eq for ClosedFailures { def eq(self: Self, rhs: Self) -> Boolean { True } }

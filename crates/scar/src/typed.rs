@@ -23,6 +23,7 @@ pub struct TypedProgram {
     pub nodes: Vec<TypedNode>,
     /// Checked enum templates visible in this program, including an incremental prefix.
     pub enum_definitions: std::collections::HashMap<String, Vec<TypedEnumVariantDef>>,
+    pub enum_error_definitions: std::collections::HashMap<String, (Vec<String>, bool)>,
     /// Checked struct and record templates, preserving formal and phantom type parameters.
     pub nominal_definitions: std::collections::HashMap<String, TypedNominalDefinition>,
     /// Process declarations checked with `nodes`; excludes an incremental prefix.
@@ -551,6 +552,11 @@ pub enum TypedInner {
     /// Constructor call — tag + field values (in definition order)
     ConstructorCall(u32, Vec<TypedNode>),
 
+    /// Statically checked Error-slot conversion; runtime value remains unchanged.
+    ErrorCoerce {
+        value: Box<TypedNode>,
+        concrete_kind: Option<String>,
+    },
     ErrorConstruct {
         kind: String,
         message: Box<TypedNode>,
@@ -780,6 +786,11 @@ pub enum TypedMatchPattern {
     DurationLit(SurtrInt),
     /// Concrete `deferror` kind pattern for abstract Error values.
     ErrorKind(String),
+    /// Complement of the declared EnumError members, retaining the original Error.
+    ErrorOther {
+        excluded_kinds: Vec<String>,
+        inner: Box<TypedMatchPattern>,
+    },
     ErrorPayload {
         kind: String,
         fields: Vec<TypedMatchPattern>,
@@ -849,6 +860,8 @@ pub struct TypedClosureParam {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypedEnumVariantDef {
+    pub enum_error: bool,
+    pub error_identity: Option<String>,
     pub enum_ty: Ty,
     pub payload_types: Vec<Ty>,
     pub discriminant: SurtrInt,
@@ -861,6 +874,8 @@ pub struct TypedEnumVariantDef {
 impl From<&crate::env::EnumVariantInfo> for TypedEnumVariantDef {
     fn from(variant: &crate::env::EnumVariantInfo) -> Self {
         Self {
+            enum_error: variant.enum_error,
+            error_identity: variant.error_identity.clone(),
             enum_ty: variant.enum_ty.clone(),
             payload_types: variant.payload.clone(),
             discriminant: variant.discriminant.clone(),

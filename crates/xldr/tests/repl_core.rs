@@ -468,9 +468,13 @@ fn assert_repl_pattern_mismatch(engine: &mut ReplEngine, source: &str, expected:
 fn core_do_monad_fail_pattern_error_is_preserved_in_fresh_repl() {
     for source in [
         "match do::<Result> { 2 <- Ok(1); Ok(3) } { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
-        "match Identity::run(ResultT::run(do::<ResultT<Identity, _>> { 2 <- ResultT::ok::<Identity>(1); ResultT::ok::<Identity>(3) })) { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
+        "match Identity::run(ResultT::run(do::<ResultT<Identity, _, Error>> { 2 <- ResultT::ok::<Identity>(1); ResultT::ok::<Identity>(3) })) { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
     ] {
-        assert_repl_pattern_mismatch(&mut engine(), source, "(\"IntLiteralPatternMismatch\", \"Int literal pattern 2 did not match 1\")");
+        assert_repl_pattern_mismatch(
+            &mut engine(),
+            source,
+            "(\"IntLiteralPatternMismatch\", \"Int literal pattern 2 did not match 1\")",
+        );
     }
 }
 
@@ -482,7 +486,7 @@ fn core_do_monad_fail_pattern_error_is_preserved_across_chunks() {
         "saved_text = \"relocation must preserve Error kind and message\"",
         "saved_error: Result<Int> = Err(NoneError())",
         "mismatch: Result<Int> = do::<Result> { 2 <- Ok(1); Ok(3) }",
-        "mismatch_t: ResultT<Identity, Int> = do::<ResultT<Identity, _>> { 2 <- ResultT::ok::<Identity>(1); ResultT::ok::<Identity>(3) }",
+        "mismatch_t: ResultT<Identity, Int, Error> = do::<ResultT<Identity, _, Error>> { 2 <- ResultT::ok::<Identity>(1); ResultT::ok::<Identity>(3) }",
     ] {
         let result = engine.handle_line(source);
         assert!(
@@ -495,7 +499,11 @@ fn core_do_monad_fail_pattern_error_is_preserved_across_chunks() {
         "match mismatch { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
         "match Identity::run(ResultT::run(mismatch_t)) { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
     ] {
-        assert_repl_pattern_mismatch(&mut engine, source, "(\"IntLiteralPatternMismatch\", \"Int literal pattern 2 did not match 1\")");
+        assert_repl_pattern_mismatch(
+            &mut engine,
+            source,
+            "(\"IntLiteralPatternMismatch\", \"Int literal pattern 2 did not match 1\")",
+        );
     }
     assert_eq!(rendered_text(&engine.handle_line("saved_closure(1)")), "42");
     assert_eq!(
@@ -508,7 +516,7 @@ fn core_do_monad_fail_safebind_and_alternative_boundaries() {
     let mut engine = engine();
     for source in [
         "match do::<Result> { Option::Some(value) =? Ok(Option<Int>::None); Ok(value) } { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
-        "match Identity::run(ResultT::run(do::<ResultT<Identity, _>> { Option::Some(value) =? Ok(Option<Int>::None); ResultT::ok::<Identity>(value) })) { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
+        "match Identity::run(ResultT::run(do::<ResultT<Identity, _, Error>> { Option::Some(value) =? Ok(Option<Int>::None); ResultT::ok::<Identity>(value) })) { Err(error) => (Error::kind(error), Error::message(error)), Ok(_) => (\"unexpected Ok\", \"\"), }",
     ] {
         assert_repl_pattern_mismatch(&mut engine, source, "(\"EnumVariantPatternMismatch\", \"Option pattern expected Some, got None\")");
     }
@@ -1640,7 +1648,9 @@ fn core_command_completion_uses_command_use_sites() {
         .expect(":sig should be present");
     assert_eq!(
         sig.detail.as_deref(),
-        Some(":sig <symbol|query>  Show signatures for visible callable, family, owner, or process surfaces")
+        Some(
+            ":sig <symbol|query>  Show signatures for visible callable, family, owner, or process surfaces"
+        )
     );
 
     let head_candidates = engine.completions(":si", ":si".len()).candidates;
@@ -6396,11 +6406,13 @@ fn core_callable_refs_and_signature_errors_are_ui_independent() {
 fn core_generic_callable_capture_uses_site_signature_inside_nested_values() {
     let mut engine = engine();
 
-    let rejected = rendered_text(&engine.handle_line("r: Result<Int, Error> = Ok(1)"));
+    let annotated = engine.handle_line("r: Result<Int, Error> = Ok(1)");
     assert!(
-        rejected.contains("Result<T, E> is only allowed in function return signatures"),
-        "{rejected}"
+        matches!(annotated.output, ReplOutput::EvalSuccess { .. }),
+        "{}",
+        rendered_text(&annotated)
     );
+    assert_eq!(rendered_text(&annotated), "r: Result<Int> = Ok(1)");
     let declaration =
         rendered_text(&engine.handle_line("def fetch() -> Result<Int, NoneError> { Ok(1) }"));
     assert!(!declaration.contains("Error:"), "{declaration}");
@@ -6517,17 +6529,42 @@ fn core_facet_capture_identity_survives_bindings_and_nested_fields() {
     }
 
     for (source, expected) in [
-        ("read_at: (Int, List<Int> -> Result<Int>) = &Facet::view(List.[&1], &2)", "read_at: (Int, List<Int> -> Result<Int>) = FnCapture(module: Facet, name: view, sig: (Int, List<Int> -> Result<Int>))"),
-        ("partial = &read_at(1, &1)", "partial: (List<Int> -> Result<Int>) = FnCapture(module: Facet, name: view, sig: (List<Int> -> Result<Int>))"),
-        ("again = &partial(&1)", "again: (List<Int> -> Result<Int>) = FnCapture(module: Facet, name: view, sig: (List<Int> -> Result<Int>))"),
-        ("nested = Ok(again)", "nested: Result<(List<Int> -> Result<Int>)> = Ok(FnCapture(module: Facet, name: view, sig: (List<Int> -> Result<Int>)))"),
+        (
+            "read_at: (Int, List<Int> -> Result<Int>) = &Facet::view(List.[&1], &2)",
+            "read_at: (Int, List<Int> -> Result<Int>) = FnCapture(module: Facet, name: view, sig: (Int, List<Int> -> Result<Int>))",
+        ),
+        (
+            "partial = &read_at(1, &1)",
+            "partial: (List<Int> -> Result<Int>) = FnCapture(module: Facet, name: view, sig: (List<Int> -> Result<Int>))",
+        ),
+        (
+            "again = &partial(&1)",
+            "again: (List<Int> -> Result<Int>) = FnCapture(module: Facet, name: view, sig: (List<Int> -> Result<Int>))",
+        ),
+        (
+            "nested = Ok(again)",
+            "nested: Result<(List<Int> -> Result<Int>)> = Ok(FnCapture(module: Facet, name: view, sig: (List<Int> -> Result<Int>)))",
+        ),
         ("again([10, 20])", "Ok(20)"),
-        ("put: ((Int, String), Int -> (Int, String)) = &Facet::put(Tuple._0, &1, &2)", "put: ((Int, String), Int -> (Int, String)) = FnCapture(module: Facet, name: put, sig: ((Int, String), Int -> (Int, String)))"),
-        ("put_partial = &put(&1, 3)", "put_partial: ((Int, String) -> (Int, String)) = FnCapture(module: Facet, name: put, sig: ((Int, String) -> (Int, String)))"),
-        ("put_again = &put_partial(&1)", "put_again: ((Int, String) -> (Int, String)) = FnCapture(module: Facet, name: put, sig: ((Int, String) -> (Int, String)))"),
+        (
+            "put: ((Int, String), Int -> (Int, String)) = &Facet::put(Tuple._0, &1, &2)",
+            "put: ((Int, String), Int -> (Int, String)) = FnCapture(module: Facet, name: put, sig: ((Int, String), Int -> (Int, String)))",
+        ),
+        (
+            "put_partial = &put(&1, 3)",
+            "put_partial: ((Int, String) -> (Int, String)) = FnCapture(module: Facet, name: put, sig: ((Int, String) -> (Int, String)))",
+        ),
+        (
+            "put_again = &put_partial(&1)",
+            "put_again: ((Int, String) -> (Int, String)) = FnCapture(module: Facet, name: put, sig: ((Int, String) -> (Int, String)))",
+        ),
         ("put_again((1, \"a\"))", "(3, \"a\")"),
     ] {
-        assert_eq!(rendered_text(&engine.handle_line(source)), expected, "{source}");
+        assert_eq!(
+            rendered_text(&engine.handle_line(source)),
+            expected,
+            "{source}"
+        );
     }
 }
 
@@ -7209,7 +7246,9 @@ fn lazy_capture_guidance_survives_repl_alias_and_failed_line() {
 fn error_contract_surface_and_extractor_inspection_share_value_rendering() {
     let mut engine = ReplEngine::from_script_source(
         "error_contracts.srt",
-        r#"impl Int {
+        r#"defenumerror QueryFailures { NoneError, Other(Error) }
+def retained_transformer(value: ResultT<Identity, Int, QueryFailures>) -> ResultT<Identity, Int, QueryFailures> { value }
+impl Int {
   defextractor plain(value: Int) -> MatchResult<Int> { MatchResult::Ok(value) }
   defextractor detailed(value: Int) -> MatchResult<Int, Error> { MatchResult::Ok(value) }
 }
@@ -7304,13 +7343,85 @@ impl ExtractorFactory<$A> for Unit {
         .and_then(|candidate| candidate.detail.as_deref())
         .expect("standard function completion detail");
     assert!(detail.contains("Result<String>"), "{detail}");
-    assert!(!detail.contains("NoneError"), "{detail}");
+    assert!(!detail.contains("StringPrefixMissing"), "{detail}");
+    let help = engine
+        .completions("String::strip_prefix(", "String::strip_prefix(".len())
+        .signature
+        .expect("standard function signature help")
+        .lines
+        .join("\n");
+    assert!(help.contains("Result<String>"), "{help}");
+    assert!(!help.contains("StringPrefixMissing"), "{help}");
+    let declared = signature_text(&engine.handle_line(":sig String::strip_prefix"));
+    assert!(
+        declared.contains("Result<String, StringPrefixMissing>"),
+        "{declared}"
+    );
+    let doc = engine.handle_line(":doc String::strip_prefix");
+    let (symbol, signature) = doc_target(&doc);
+    assert_eq!(symbol, "String::strip_prefix");
+    let signature = signature.expect("standard function documentation signature");
+    assert!(
+        signature.contains("Result<String, StringPrefixMissing>"),
+        "{signature}"
+    );
     let captured = rendered_text(&engine.handle_line("reader: (-> Result<Int>) = &detailed"));
     assert!(captured.contains("sig: (-> Result<Int>)"), "{captured}");
     assert!(!captured.contains("NoneError"), "{captured}");
+    for source in [
+        "def selected_result(value: Result<Int, QueryFailures>) -> Result<Int, QueryFailures> { value }",
+        "selected_value: Result<Int, QueryFailures> = Ok(1)",
+    ] {
+        let result = engine.handle_line(source);
+        assert!(
+            matches!(result.output, ReplOutput::EvalSuccess { .. }),
+            "{source}: {}",
+            rendered_text(&result)
+        );
+    }
+    for query in ["selected_result", "selected_value"] {
+        let completion = engine.completions(query, query.len());
+        let detail = completion
+            .candidates
+            .iter()
+            .find(|candidate| candidate.label == query)
+            .and_then(|candidate| candidate.detail.as_deref())
+            .expect("EnumError completion detail");
+        assert!(
+            detail.contains("Result<Int, QueryFailures>"),
+            "{query}: {detail}"
+        );
+        let signature = if query == "selected_value" {
+            rendered_text(&engine.handle_line(&format!(":type {query}")))
+        } else {
+            signature_text(&engine.handle_line(&format!(":sig {query}")))
+        };
+        assert!(
+            signature.contains("Result<Int, QueryFailures>"),
+            "{query}: {signature}"
+        );
+    }
+    let completion = engine.completions("retained_transformer", "retained_transformer".len());
+    let detail = completion
+        .candidates
+        .iter()
+        .find(|candidate| candidate.label == "retained_transformer")
+        .and_then(|candidate| candidate.detail.as_deref())
+        .expect("ResultT signature detail");
+    assert!(
+        detail.contains("ResultT<Identity<_>, Int, QueryFailures>"),
+        "{detail}"
+    );
+    let help = engine
+        .completions("selected_result(", "selected_result(".len())
+        .signature
+        .expect("EnumError signature help")
+        .lines
+        .join("\n");
+    assert!(help.contains("Result<Int, QueryFailures>"), "{help}");
     let rejected = rendered_text(&engine.handle_line("ret: Result<Int, NoneError> = Ok(1)"));
     assert!(
-        rejected.contains("only allowed in function return signatures"),
+        rejected.contains("Result Error position requires Error or EnumError"),
         "{rejected}"
     );
 }
@@ -7361,7 +7472,14 @@ fn core_generic_trait_forwarding_retains_substitutions_across_submissions() {
             "def partial::<$B>(source: Result<$A>) -> (($A -> Result<$B>) -> Result<$B>) { &inner(source, &1) }",
         ] {
             let result = engine.handle_line(declaration);
-            assert!(!matches!(result.output, ReplOutput::Diagnostic { .. } | ReplOutput::EvalError { .. }), "{}", rendered_text(&result));
+            assert!(
+                !matches!(
+                    result.output,
+                    ReplOutput::Diagnostic { .. } | ReplOutput::EvalError { .. }
+                ),
+                "{}",
+                rendered_text(&result)
+            );
         }
         let mut calls = [
             ("outer(Ok(7), {|x: Int| Ok(x + 1)})", "Ok(8)"),

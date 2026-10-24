@@ -352,23 +352,25 @@ impl Checker {
             } => {
                 let defer = defer_constructor_conflicts
                     && self.constructor_argument_needs_deferred_check(expected_ty);
-                let typed = if defer {
+                let mut typed = if defer {
                     self.check_node(expr)?
                 } else {
                     self.check_node_with_expected(expr, Some(expected_ty))?
                 };
+                self.normalize_generic_error_carrier_argument(expected_ty, &mut typed)?;
                 self.ensure_no_runtime_facet_value(&typed, "Function call arguments")?;
                 self.check_expected_constructor_capability(expected_ty, callee_label, &typed)?;
                 (typed, defer)
             }
-            CallArgumentMode::Positional => (
-                if matches!(self.resolve_ty(expected_ty), Ty::Hole) {
+            CallArgumentMode::Positional => {
+                let mut typed = if matches!(self.resolve_ty(expected_ty), Ty::Hole) {
                     self.check_node(expr)?
                 } else {
                     self.check_node_with_expected(expr, Some(expected_ty))?
-                },
-                false,
-            ),
+                };
+                self.normalize_generic_error_carrier_argument(expected_ty, &mut typed)?;
+                (typed, false)
+            }
         })
     }
 

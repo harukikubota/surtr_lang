@@ -1,0 +1,2 @@
+deferror Failure(value: Int) { |input: Int| Self(message: "failure", value: input) }
+defenumerror OpenFailures { Failure, Other(Error) }

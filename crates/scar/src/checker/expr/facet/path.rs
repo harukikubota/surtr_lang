@@ -1261,7 +1261,10 @@ impl Checker {
             });
         }
         match self.resolve_ty(source_ty) {
-            Ty::Error if matches!(field.as_str(), "kind" | "message") => {
+            error_ty
+                if self.is_error_value_ty(&error_ty)
+                    && matches!(field.as_str(), "kind" | "message") =>
+            {
                 let builtin_id =
                     sindr::builtin::builtin_meta_for_decl(field, Some(&format!("Error::{field}")))
                         .map(|meta| meta.runtime_id())

@@ -144,7 +144,7 @@ compiler はこの head 自体を契約として扱います。
 - `Result` は `Result<$T>`
 - `Hole` は ignored-input callable marker
 
-`Result<T, E>` は builtin type declaration ではなく、関数定義の直接の戻り値位置だけで使える error contract 記法として扱います。値や通常の型注釈では正規表記の `Result<T>` を使います。
+`Result<T, E>` は builtin 宣言とは別の型表記であり、E に Error または EnumError を指定できます。変数、引数、field、関数型、入れ子にも使えます。具象 Error 名の指定は関数定義の直接の戻り値だけに許可する説明用 metadata です。
 `Hole` は ordinary data type ではなく、`_` の背後にある callable marker です。
 
 target-oriented trait の型入力は `to::<Target>(value)` のような明示型引数で指定します。

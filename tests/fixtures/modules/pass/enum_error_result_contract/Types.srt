@@ -1,0 +1,7 @@
+deferror AlphaFailure(value: Int) { |input: Int| Self(message: "alpha", value: input) }
+deferror BetaFailure { "beta" }
+defenumerror OpenFailures { AlphaFailure, Other(Error) }
+defenumerror ClosedFailures { AlphaFailure }
+defmod Factory {
+  def selected() -> Result<Int, ClosedFailures> { Err(AlphaFailure(9)) }
+}

@@ -868,6 +868,7 @@ pub enum DeclarationKind {
     Struct,
     Record,
     Deferror,
+    EnumError,
     Enum,
     EnumVariant,
     Const,
@@ -928,6 +929,7 @@ pub enum OwnerKind {
     Struct,
     Record,
     Enum,
+    EnumError,
     Error,
     Trait,
     Sig,
@@ -1110,6 +1112,7 @@ impl OwnerRegistry {
                 | DeclarationKind::Struct
                 | DeclarationKind::Record
                 | DeclarationKind::Deferror
+                | DeclarationKind::EnumError
                 | DeclarationKind::Enum
                 | DeclarationKind::Trait
                 | DeclarationKind::Const
@@ -1188,6 +1191,7 @@ fn type_identity_diagnostic_name(identity: TypeIdentity) -> &'static str {
         TypeIdentity::Enum => "Enum",
         TypeIdentity::SpecialEnumVariant => "Enum variant",
         TypeIdentity::Error => "Error",
+        TypeIdentity::EnumError => "EnumError",
         TypeIdentity::Mod => "Mod",
         TypeIdentity::Supervisor => "Supervisor",
         TypeIdentity::Sig => "Sig",
@@ -1631,7 +1635,14 @@ pub(super) fn collect_stage_impl_target_resolutions(
         for stmt in &module.ast {
             let (name, kind) = match stmt {
                 Ast::StructDef(_, name, ..) => (name, DeclarationKind::Struct),
-                Ast::EnumDef(_, name, _, _, _) => (name, DeclarationKind::Enum),
+                Ast::EnumDef(_, name, _, _, attrs) => (
+                    name,
+                    if attrs.enum_error {
+                        DeclarationKind::EnumError
+                    } else {
+                        DeclarationKind::Enum
+                    },
+                ),
                 Ast::RecordDef(_, name, _, _) => (name, DeclarationKind::Record),
                 Ast::DeferrorDef(_, name, _, _, _) => (name, DeclarationKind::Deferror),
                 _ => continue,
@@ -2351,6 +2362,12 @@ fn direct_owner_entry(
         Ast::RecordDef(span, name, _, _) => {
             (name.as_str(), TypeIdentity::Record, OwnerKind::Record, span)
         }
+        Ast::EnumDef(span, name, _, _, attrs) if attrs.enum_error => (
+            name.as_str(),
+            TypeIdentity::EnumError,
+            OwnerKind::EnumError,
+            span,
+        ),
         Ast::EnumDef(span, name, _, _, _) => (
             name.as_str(),
             builtin_type_head_meta_by_name(global_surface_name(name))
@@ -2687,6 +2704,7 @@ pub fn precollect_declarations(
                     if !matches!(
                         target_kind,
                         DeclarationKind::Struct
+                            | DeclarationKind::EnumError
                             | DeclarationKind::Enum
                             | DeclarationKind::BuiltinType
                     ) {
@@ -2947,7 +2965,11 @@ pub fn precollect_declarations(
                             TYPE_DECL_ENTRY_MODULE_PATH,
                             name.clone(),
                             fq_name,
-                            DeclarationKind::Enum,
+                            if attrs.enum_error {
+                                DeclarationKind::EnumError
+                            } else {
+                                DeclarationKind::Enum
+                            },
                             stage_index,
                             false,
                             false,
@@ -3254,7 +3276,14 @@ impl Resolver {
             for stmt in &stmts {
                 let (name, kind) = match stmt {
                     Ast::StructDef(_, name, ..) => (name, DeclarationKind::Struct),
-                    Ast::EnumDef(_, name, _, _, _) => (name, DeclarationKind::Enum),
+                    Ast::EnumDef(_, name, _, _, attrs) => (
+                        name,
+                        if attrs.enum_error {
+                            DeclarationKind::EnumError
+                        } else {
+                            DeclarationKind::Enum
+                        },
+                    ),
                     Ast::RecordDef(_, name, _, _) => (name, DeclarationKind::Record),
                     Ast::DeferrorDef(_, name, _, _, _) => (name, DeclarationKind::Deferror),
                     _ => continue,
@@ -3288,6 +3317,7 @@ impl Resolver {
                     if !matches!(
                         target_kind,
                         DeclarationKind::Struct
+                            | DeclarationKind::EnumError
                             | DeclarationKind::Enum
                             | DeclarationKind::BuiltinType
                     ) {
@@ -3797,7 +3827,15 @@ impl Resolver {
                     )?;
                     let qualified_enum = name.clone();
                     let uid = self.reserve_declaration_uid(&qualified_enum);
-                    self.record_predeclared_uid(name, uid, DeclarationKind::Enum);
+                    self.record_predeclared_uid(
+                        name,
+                        uid,
+                        if attrs.enum_error {
+                            DeclarationKind::EnumError
+                        } else {
+                            DeclarationKind::Enum
+                        },
+                    );
                     self.predeclare_scope_binding(name, uid, Some(name));
 
                     for variant in variants {

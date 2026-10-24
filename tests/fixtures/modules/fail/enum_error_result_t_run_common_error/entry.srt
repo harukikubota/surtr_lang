@@ -1,0 +1,4 @@
+selected: Result<Int, ClosedFailures> = Err(Failure())
+base = ResultT::ok::<Identity>(0)
+stored: ResultT<Identity, Int, ClosedFailures> =? Facet::set(ResultT.inner, base, Identity::new(selected))
+rejected: Result<Int, ClosedFailures> = Identity::run(ResultT::run(stored))

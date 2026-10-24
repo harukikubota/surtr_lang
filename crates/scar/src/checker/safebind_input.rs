@@ -154,6 +154,10 @@ impl Checker {
                 let variant = self.instantiate_enum_variant(&variant);
                 SafeBindInputRequirement::Exact(variant.enum_ty)
             }
+            // EnumError item Patterns are checked only by match/if_let.
+            // Keep that producer-owned rejection ahead of extraction guidance;
+            // neither owner selection nor child checking belongs in this probe.
+            ResolvedPattern::EnumErrorOther(..) => return Ok(None),
             ResolvedPattern::ExtractorApplication { head, args } => {
                 let selected = self.select_extractor_application(head, args)?;
                 return self.safebind_missing_extraction_input(&selected, rhs_ty, payload_ty);

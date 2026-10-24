@@ -272,7 +272,7 @@ fn builtin_declaration_rejects_an_unregistered_owner_alias() {
 fn internal_runtime_name_does_not_bypass_builtin_surface_signature_validation() {
     let process = include_str!("../../../lib/process.srt").replace(
         "@builtin def call(body: (-> Result<$A>)) -> Result<$A>",
-        "@builtin def call(body: (-> Result<$A>)) -> Int",
+        "@builtin def call(body: (-> Result<$A>)) -> Result<Int, NoneError>",
     );
     let err = support::typecheck_std_modules_with_overrides(&[("Task", &process)])
         .expect_err("a public builtin backed by an internal runtime name must match metadata");

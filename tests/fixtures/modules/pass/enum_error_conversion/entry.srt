@@ -1,0 +1,7 @@
+plain = AlphaFailure(7)
+selected: OpenFailures = plain
+closed: ClosedFailures = AlphaFailure(8)
+converted: OpenFailures = closed
+widened: Error = selected
+print(to_string(Error::same_kind(plain, converted)))
+print(to_string(Error::same_kind(widened, selected)))
