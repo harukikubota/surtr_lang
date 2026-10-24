@@ -1,0 +1,86 @@
+deferror ExtractionSaved(code: Int) {
+  |value: Int| Self(message: "saved", code: value)
+}
+defenumerror ExtractionClosed { ExtractionSaved }
+defenumerror ExtractionOpen { ExtractionSaved, Other(Error) }
+defenumerror ExtractionDedicated { ExtractionSaved }
+
+defmod ExtractionChecks {
+  def source(error: ExtractionClosed) -> Result<Int, ExtractionClosed> {
+    print("source")
+    Err(error)
+  }
+  def retain(value: Result<Int, ExtractionClosed>) -> Result<Int, ExtractionClosed> { value }
+  def relay(source: Result<Int, ExtractionClosed>) -> Result<Int> {
+    value =? source
+    Ok(value)
+  }
+  def one_layer(source: Result<Result<Int, ExtractionClosed>, ExtractionClosed>) -> Result<Int> {
+    inner =? source
+    print("one-layer")
+    ExtractionChecks::retain(inner)
+  }
+  def nested(source: Result<Result<Unit, ExtractionClosed>, ExtractionClosed>) -> Result<Int> {
+    source?
+    print("continued")
+    Ok(9)
+  }
+  def partial(source: Result<Int, ExtractionOpen>) -> Result<Int, ExtractionOpen> {
+    do::<Result<Int, ExtractionOpen>> {
+      1 <- source
+      Ok(3)
+    }
+  }
+  def dedicated_source(error: ExtractionDedicated) -> Result<Int, ExtractionDedicated> {
+    print("custom-source")
+    Err(error)
+  }
+  def dedicated(source: Result<Int, ExtractionDedicated>) -> Result<Int> {
+    value =? source
+    Ok(value)
+  }
+  def generic(source: $M<$A>) -> Result<$A>
+  where
+    $M: MonadExtractor
+  {
+    value =? source
+    Ok(value)
+  }
+  def describe(label: String, result: Result<Int>, original: Error) -> String {
+    match result {
+      Ok(value) => "#{label}:ok:#{value}",
+      Err(ExtractionSaved(code) @ error) => "#{label}:#{code}:#{Error::message(error)}:#{Error::same_kind(original, error)}",
+      Err(_) => "#{label}:wrong",
+    }
+  }
+}
+
+impl Functor for Result<$T, ExtractionDedicated>
+where
+  $T: Functor.$A
+{
+  def fmap(self: Result<$A, ExtractionDedicated>, mapper: ($A -> $B)) -> Result<$B, ExtractionDedicated> {
+    match self { Ok(value) => Ok(mapper(value)), Err(error) => Err(error) }
+  }
+}
+impl Applicative for Result<$T, ExtractionDedicated> {
+  def pure::<Result<$T, ExtractionDedicated>>(value: $A) -> Result<$A, ExtractionDedicated> { Ok(value) }
+  def ap(mapper: Result<($A -> $B), ExtractionDedicated>, value: Result<$A, ExtractionDedicated>) -> Result<$B, ExtractionDedicated> {
+    match mapper {
+      Ok(fun) => match value { Ok(inner) => Ok(fun(inner)), Err(error) => Err(error) },
+      Err(error) => Err(error),
+    }
+  }
+}
+impl Monad for Result<$T, ExtractionDedicated> {
+  def return::<Result<$T, ExtractionDedicated>>(value: $A) -> Result<$A, ExtractionDedicated> { Ok(value) }
+  def bind(self: Result<$A, ExtractionDedicated>, mapper: ($A -> Result<$B, ExtractionDedicated>)) -> Result<$B, ExtractionDedicated> {
+    match self { Ok(value) => mapper(value), Err(error) => Err(error) }
+  }
+}
+impl MonadExtractor for Result<$T, ExtractionDedicated> {
+  def extract(self: Result<$A, ExtractionDedicated>) -> Result<$A> {
+    print("custom-extract")
+    match self { Ok(value) => Ok(value), Err(error) => Err(error) }
+  }
+}

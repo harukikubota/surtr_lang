@@ -1,0 +1,1 @@
+print(to_string(match Factory::make() { FirstFailure => 1, Other(_) => 2 }))

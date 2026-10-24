@@ -1,0 +1,1 @@
+value: Result<Int, ClosedFailures> = MonadFail::fail(AlphaFailure(1))

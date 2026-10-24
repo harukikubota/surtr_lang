@@ -49,6 +49,7 @@ pub fn typecheck_staged_program_with_context_with_warnings(
         TypedProgram {
             nodes,
             enum_definitions: checker.env.typed_enum_definitions(),
+            enum_error_definitions: checker.env.typed_enum_error_definitions(),
             nominal_definitions: checker.env.typed_nominal_definitions(),
             process_specs,
             boot_plan: program.boot_plan,
@@ -165,6 +166,8 @@ pub(super) struct PersistentCheckerState {
     pub(super) trait_impl_index_by_base_trait: TraitImplIndex,
     pub(super) trait_methods_by_qualified_name: HashMap<String, (String, String)>,
     pub(super) tyvar_bounds: HashMap<u32, Vec<String>>,
+    pub(super) error_slot_tyvars: HashSet<u32>,
+    pub(super) failure_error_slot_tyvars: HashSet<u32>,
     pub(super) constructor_witness_traits: HashMap<u32, String>,
     pub(super) process_marker_tyvars: HashSet<u32>,
     pub(super) constructor_capabilities: HashMap<u32, ConstructorCapabilityProvenance>,
@@ -192,6 +195,8 @@ impl PersistentCheckerState {
             trait_impl_index_by_base_trait: HashMap::new(),
             trait_methods_by_qualified_name: HashMap::new(),
             tyvar_bounds: HashMap::new(),
+            error_slot_tyvars: HashSet::new(),
+            failure_error_slot_tyvars: HashSet::new(),
             constructor_witness_traits: HashMap::new(),
             process_marker_tyvars: HashSet::new(),
             constructor_capabilities: HashMap::new(),
@@ -219,6 +224,8 @@ impl PersistentCheckerState {
             trait_impl_index_by_base_trait: self.trait_impl_index_by_base_trait.clone(),
             trait_methods_by_qualified_name: self.trait_methods_by_qualified_name.clone(),
             tyvar_bounds: self.tyvar_bounds.clone(),
+            error_slot_tyvars: self.error_slot_tyvars.clone(),
+            failure_error_slot_tyvars: self.failure_error_slot_tyvars.clone(),
             constructor_witness_traits: self.constructor_witness_traits.clone(),
             process_marker_tyvars: self.process_marker_tyvars.clone(),
             constructor_capabilities: self.constructor_capabilities.clone(),
@@ -249,6 +256,8 @@ impl From<ScarCheckpoint> for PersistentCheckerState {
             trait_impl_index_by_base_trait: checkpoint.trait_impl_index_by_base_trait,
             trait_methods_by_qualified_name: checkpoint.trait_methods_by_qualified_name,
             tyvar_bounds: checkpoint.tyvar_bounds,
+            error_slot_tyvars: checkpoint.error_slot_tyvars,
+            failure_error_slot_tyvars: checkpoint.failure_error_slot_tyvars,
             constructor_witness_traits: checkpoint.constructor_witness_traits,
             process_marker_tyvars: checkpoint.process_marker_tyvars,
             constructor_capabilities: checkpoint.constructor_capabilities,
@@ -281,6 +290,8 @@ pub struct ScarCheckpoint {
     trait_impl_index_by_base_trait: TraitImplIndex,
     trait_methods_by_qualified_name: HashMap<String, (String, String)>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
+    error_slot_tyvars: HashSet<u32>,
+    failure_error_slot_tyvars: HashSet<u32>,
     #[serde(default)]
     constructor_witness_traits: HashMap<u32, String>,
     process_marker_tyvars: HashSet<u32>,
@@ -366,12 +377,14 @@ impl ScarSession {
         };
         let persisted_process_specs = checker.process_specs.clone();
         let enum_definitions = checker.env.typed_enum_definitions();
+        let enum_error_definitions = checker.env.typed_enum_error_definitions();
         let nominal_definitions = checker.env.typed_nominal_definitions();
         self.state = checker.into_persistent_state();
         self.process_specs = persisted_process_specs;
         Ok(TypedProgram {
             nodes,
             enum_definitions,
+            enum_error_definitions,
             nominal_definitions,
             process_specs,
             boot_plan: program.boot_plan,
@@ -391,6 +404,7 @@ impl ScarSession {
         let persisted_process_specs = checker.process_specs.clone();
         let warnings = checker.warnings.take();
         let enum_definitions = checker.env.typed_enum_definitions();
+        let enum_error_definitions = checker.env.typed_enum_error_definitions();
         let nominal_definitions = checker.env.typed_nominal_definitions();
         self.state = checker.into_persistent_state();
         self.process_specs = persisted_process_specs;
@@ -398,6 +412,7 @@ impl ScarSession {
             TypedProgram {
                 nodes,
                 enum_definitions,
+                enum_error_definitions,
                 nominal_definitions,
                 process_specs,
                 boot_plan: program.boot_plan,

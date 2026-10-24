@@ -1,0 +1,1 @@
+factory: (-> Result<Int, OpenFailures>) = &Factory::plain_result

@@ -2132,6 +2132,7 @@ impl Parser<'_> {
             where_clause,
             Box::new(body),
             DeclAttrs {
+                enum_error: attrs.enum_error,
                 doc: attrs.doc,
                 builtin: attrs.builtin,
                 compiler_generated: attrs.compiler_generated,
@@ -3158,13 +3159,25 @@ impl Parser<'_> {
 
     pub(super) fn parse_enum_def_with_attrs(
         &mut self,
-        attrs: DeclAttrs,
+        mut attrs: DeclAttrs,
         start_override: Option<usize>,
     ) -> Result<Ast, ParseError> {
         let sp = self.peek_span();
-        self.expect(&Token::Defenum)?;
+        attrs.enum_error = matches!(self.peek(), Token::Defenumerror);
+        self.expect(if attrs.enum_error {
+            &Token::Defenumerror
+        } else {
+            &Token::Defenum
+        })?;
         let (name, _name_span) = self.expect_qualified_ident(2, "type")?;
         let type_params = self.parse_nominal_decl_type_params()?;
+        if attrs.enum_error && !type_params.is_empty() {
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
+                "EnumError does not accept type parameters",
+                sp.clone(),
+            ));
+        }
         let payload_type_context = TypeParseContext::nominal_declaration(&type_params);
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
@@ -3186,6 +3199,7 @@ impl Parser<'_> {
                     let span = self.expect(&Token::False)?;
                     ("False".to_string(), span)
                 }
+                _ if attrs.enum_error => self.expect_qualified_ident(2, "concrete error")?,
                 _ => self.expect_ident()?,
             };
             let mut payload = Vec::new();
@@ -3207,6 +3221,16 @@ impl Parser<'_> {
                     }
                 }
                 self.expect(&Token::RParen)?;
+            }
+
+            if attrs.enum_error
+                && (matches!(self.peek(), Token::Bind)
+                    || (!payload.is_empty()
+                        && !(variant_name == "Other"
+                            && matches!(payload.as_slice(), [AstTy::Named(_, name)] if name == "Error")))
+                    || (variant_name == "Other" && payload.is_empty()))
+            {
+                return Err(ParseError::syntax(crate::error::ParseErrorReason::DeclarationSyntax, "EnumError members cannot declare payloads or idx; only Other(Error) is allowed", self.peek_span()));
             }
 
             let discriminant = if matches!(self.peek(), Token::Bind) {
@@ -3240,7 +3264,7 @@ impl Parser<'_> {
             }
         }
 
-        if variants.is_empty() {
+        if variants.is_empty() && !attrs.enum_error {
             return Err(ParseError::syntax(
                 crate::error::ParseErrorReason::DeclarationSyntax,
                 "Enum definition requires at least one variant",
@@ -4309,13 +4333,13 @@ impl Parser<'_> {
                 Token::Defstruct => self.parse_struct_def_with_attrs(attrs, Some(start)),
                 Token::Defrecord => self.parse_record_def_with_attrs(attrs, Some(start)),
                 Token::Deferror => self.parse_deferror_def_with_attrs(attrs, Some(start)),
-                Token::Defenum => self.parse_enum_def_with_attrs(attrs, Some(start)),
+                Token::Defenum | Token::Defenumerror => self.parse_enum_def_with_attrs(attrs, Some(start)),
                 Token::Defextractor => self.parse_extractor_def_with_attrs(attrs, Some(start)),
                 Token::Type => self.parse_type_alias(),
                 Token::Eof => Err(ParseError::incomplete("declaration", self.peek_span())),
                 _ => Err(ParseError::syntax(
                     crate::error::ParseErrorReason::DeclarationSyntax,
-                    "@doc / @autoimport must annotate `def`, `defmod`, `deftrait`, `impl`, `defagent`, `defstruct`, `defrecord`, `deferror`, `defenum`, `defextractor`, `@builtin type/def/defextractor`, or `@intrinsic def`",
+                    "@doc / @autoimport must annotate `def`, `defmod`, `deftrait`, `impl`, `defagent`, `defstruct`, `defrecord`, `deferror`, `defenum`, `defenumerror`, `defextractor`, `@builtin type/def/defextractor`, or `@intrinsic def`",
                     self.peek_span(),
                 )),
             }

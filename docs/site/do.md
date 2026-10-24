@@ -180,7 +180,7 @@ selected # [2, 3]
 
 liftしたbaseのErrをtotal `<-`でsequenceする場合も、通常のTransformer Monad実装がそのErrを保持します。
 
-`ResultT<M, A>`と`EitherT<Error, M, A>`は内側にErrorを保持します。
+`ResultT<M, A, E>`と`EitherT<Error, M, A>`は内側にErrorを保持します。
 `ReaderT<E, M, A>`と`StateT<S, M, A>`は、baseがMonadFailを実装するとき、
 run時にbaseの`fail`を返します。
 

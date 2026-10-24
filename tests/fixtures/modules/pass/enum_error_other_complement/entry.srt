@@ -1,0 +1,4 @@
+selected: Failures = SavedFailure(7)
+print(match selected { Other(_) => "swallowed", SavedFailure(value) @ original => "#{value}:#{original.value}" })
+other: Failures = OtherFailure(8)
+print(to_string(match other { Other(OtherFailure(value)) => value, Other(_) => 0, SavedFailure => 1 }))

@@ -1515,7 +1515,7 @@ fn normalize_surface_type(ty: &str, variables: &mut HashMap<String, String>) -> 
         .chars()
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
-    let compact = compact.replace("<()>", "<Unit>");
+    let compact = compact.replace("()", "Unit");
     let ty = if compact == "()" { "Unit" } else { &compact };
     let mut normalized = String::with_capacity(ty.len());
     let mut chars = ty.chars().peekable();

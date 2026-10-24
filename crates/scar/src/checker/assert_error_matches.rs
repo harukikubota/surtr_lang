@@ -111,7 +111,9 @@ impl Checker {
                 "OR Pattern is not allowed in assert_error_matches",
                 span.clone(),
             )),
-            TypedMatchPattern::As(inner, _) => self.ensure_assert_error_pattern(inner, span),
+            TypedMatchPattern::As(inner, _) | TypedMatchPattern::ErrorOther { inner, .. } => {
+                self.ensure_assert_error_pattern(inner, span)
+            }
             TypedMatchPattern::Tuple(items)
             | TypedMatchPattern::Record(items)
             | TypedMatchPattern::ErrorPayload { fields: items, .. }

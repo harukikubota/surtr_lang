@@ -1,0 +1,7 @@
+deferror SavedFailure(value: Int) { |input: Int| Self(message: "saved", value: input) }
+deferror OtherFailure(value: Int) { |input: Int| Self(message: "other", value: input) }
+defenumerror Failures { Other(Error), SavedFailure }
+defmod Stored {
+  def retain(value: ResultT<Identity, Int, Failures>) -> ResultT<Identity, Int, Failures> { value }
+  def inner(value: ResultT<Identity, Int, Failures>) -> Identity<Result<Int, Failures>> { value.inner }
+}

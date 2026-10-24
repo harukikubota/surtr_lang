@@ -1,0 +1,1 @@
+value = Applicative::pure::<ResultT<Identity, Int, _>>(1)

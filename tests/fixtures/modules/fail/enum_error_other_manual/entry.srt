@@ -1,0 +1,1 @@
+value = OpenFailures::Other(SavedFailure(1))

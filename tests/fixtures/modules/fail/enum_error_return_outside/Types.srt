@@ -1,0 +1,5 @@
+deferror SavedFailure(value: Int) { |input: Int| Self(message: "saved", value: input) }
+deferror OutsideFailure { "outside" }
+defenumerror ClosedFailures { SavedFailure }
+defenumerror OpenFailures { SavedFailure, Other(Error) }
+defmod Factory { def make() -> ClosedFailures { OutsideFailure() } }

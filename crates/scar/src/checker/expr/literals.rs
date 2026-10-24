@@ -41,7 +41,7 @@ impl Checker {
             }
         };
 
-        if !self.types_compatible(&typed_head.ty, &tail_elem_ty)? {
+        if !self.types_match_without_error_conversion(&typed_head.ty, &tail_elem_ty)? {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -81,7 +81,7 @@ impl Checker {
 
         let elem_ty = typed_elems[0].ty.clone();
         for te in typed_elems.iter().skip(1) {
-            if !self.types_compatible(&elem_ty, &te.ty)? {
+            if !self.types_match_without_error_conversion(&elem_ty, &te.ty)? {
                 return Err(TypeError {
                     structured: None,
                     message: format!(
@@ -141,7 +141,7 @@ impl Checker {
 
         let value_ty = typed_entries[0].1.ty.clone();
         for (_, value) in typed_entries.iter().skip(1) {
-            if !self.types_compatible(&value_ty, &value.ty)? {
+            if !self.types_match_without_error_conversion(&value_ty, &value.ty)? {
                 return Err(TypeError {
                     structured: None,
                     message: format!(

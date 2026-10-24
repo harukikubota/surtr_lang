@@ -7,6 +7,8 @@ use diagnostics::{
 };
 
 struct TypeRelationCheckpoint {
+    error_slot_tyvars: HashSet<u32>,
+    failure_error_slot_tyvars: HashSet<u32>,
     substitutions: Vec<(u32, Option<Ty>)>,
     tyvar_bounds: Vec<(u32, Option<Vec<String>>)>,
     process_marker_tyvars: Vec<(u32, bool)>,
@@ -38,6 +40,8 @@ impl Checker {
             cursor += 1;
         }
         TypeRelationCheckpoint {
+            error_slot_tyvars: self.error_slot_tyvars.clone(),
+            failure_error_slot_tyvars: self.failure_error_slot_tyvars.clone(),
             substitutions: tracked
                 .iter()
                 .map(|var| (*var, self.substitutions.get(var).cloned()))
@@ -62,6 +66,8 @@ impl Checker {
     }
 
     fn rollback_type_relation(&mut self, checkpoint: TypeRelationCheckpoint) {
+        self.error_slot_tyvars = checkpoint.error_slot_tyvars;
+        self.failure_error_slot_tyvars = checkpoint.failure_error_slot_tyvars;
         for (var, value) in checkpoint.substitutions {
             match value {
                 Some(value) => {
@@ -109,6 +115,23 @@ impl Checker {
                 }
             }
         }
+    }
+
+    pub(super) fn types_match_without_error_conversion(
+        &mut self,
+        expected: &Ty,
+        actual: &Ty,
+    ) -> Result<bool, TypeError> {
+        let checkpoint = self.type_relation_checkpoint_for(&[expected, actual]);
+        let compatible = self
+            .types_compatible(expected, actual)
+            .map(|matched| matched && self.error_positions_agree(expected, actual));
+        if !matches!(compatible, Ok(true)) {
+            if let Some(checkpoint) = checkpoint {
+                self.rollback_type_relation(checkpoint);
+            }
+        }
+        compatible
     }
 
     pub(super) fn with_type_relation_probe<T>(
@@ -165,7 +188,16 @@ impl Checker {
         // Avoid cloning the candidate-probe state for declaration-owned generics:
         // they are common in standard-library bodies but are immutable here.
         let checkpoint = self.type_relation_checkpoint_for(&[expected, actual]);
-        let compatible = self.types_compatible(expected, actual);
+        let compatible = if matches!(
+            reason,
+            TypeDiagnosticReason::IfBranchTypeMismatch
+                | TypeDiagnosticReason::MatchArmTypeMismatch
+                | TypeDiagnosticReason::CondBranchTypeMismatch
+        ) {
+            self.types_match_without_error_conversion(expected, actual)
+        } else {
+            self.types_compatible(expected, actual)
+        };
         if matches!(compatible, Ok(true)) {
             return Ok(());
         }
@@ -1229,6 +1261,112 @@ mod tests {
         );
         assert_eq!(checker.resolve_ty(&variable), variable);
         assert_eq!(checker.candidate_probe_checkpoint_count.get(), 0);
+    }
+
+    #[test]
+    fn speculative_error_slot_relation_restores_conversion_obligations() {
+        for fails_relation in [false, true] {
+            let mut checker = Checker::new(TypecheckContext::default());
+            let Ty::Var(source) = checker.env.fresh_tyvar() else {
+                unreachable!()
+            };
+            let Ty::Var(target) = checker.env.fresh_tyvar() else {
+                unreachable!()
+            };
+            checker.error_slot_tyvars.insert(source);
+            checker.failure_error_slot_tyvars.insert(source);
+            let source_ty = Ty::Tuple(vec![Ty::Var(source), Ty::Int]);
+            let target_ty = Ty::Tuple(vec![
+                Ty::Var(target),
+                if fails_relation { Ty::Str } else { Ty::Int },
+            ]);
+            let compatible =
+                checker.with_type_relation_probe(&[&source_ty, &target_ty], |checker| {
+                    let compatible = checker.types_compatible(&source_ty, &target_ty).unwrap();
+                    assert!(checker.error_slot_tyvars.contains(&target));
+                    assert!(checker.failure_error_slot_tyvars.contains(&target));
+                    compatible
+                });
+            assert_eq!(compatible, !fails_relation);
+            assert!(
+                checker.bind_tyvar(target, &Ty::Int).unwrap(),
+                "a probed target must not retain an Error conversion requirement"
+            );
+            assert!(
+                !checker.bind_tyvar(source, &Ty::Int).unwrap(),
+                "the declaration's original Error requirement must remain"
+            );
+            assert!(checker.failure_error_slot_tyvars.contains(&source));
+        }
+    }
+
+    #[test]
+    fn failed_error_slot_assertion_restores_conversion_obligations() {
+        let mut checker = Checker::new(TypecheckContext::default());
+        let Ty::Var(source) = checker.env.fresh_tyvar() else {
+            unreachable!()
+        };
+        let Ty::Var(target) = checker.env.fresh_tyvar() else {
+            unreachable!()
+        };
+        checker.error_slot_tyvars.insert(source);
+        checker.failure_error_slot_tyvars.insert(source);
+        let expected = Ty::Tuple(vec![Ty::Var(source), Ty::Int]);
+        let actual = Ty::Tuple(vec![Ty::Var(target), Ty::Str]);
+        let span = Span { start: 0, end: 1 };
+        checker
+            .assert_type_relation(
+                &expected,
+                &actual,
+                checker.type_fact(SourceRole::Expected, &span, &expected),
+                checker.type_fact(SourceRole::Value, &span, &actual),
+                TypeDiagnosticReason::ArgumentTypeMismatch,
+                DiagnosticOrigin::Call,
+                "pair",
+                0,
+            )
+            .expect_err("second tuple slot is incompatible");
+        assert!(
+            checker.bind_tyvar(target, &Ty::Int).unwrap(),
+            "failed assertion must not constrain the target to Error"
+        );
+        assert!(
+            !checker.bind_tyvar(source, &Ty::Int).unwrap(),
+            "original Error obligation remains after failed assertion"
+        );
+        assert!(checker.failure_error_slot_tyvars.contains(&source));
+    }
+
+    #[test]
+    fn inferred_relation_rejects_error_conversion_and_restores_alias_inference() {
+        let mut checker = Checker::new(TypecheckContext::default());
+        checker
+            .env
+            .enum_error_members
+            .insert("Open".into(), Vec::new());
+        checker.env.enum_error_other.insert("Open".into());
+        let Ty::Var(variable) = checker.env.fresh_tyvar() else {
+            unreachable!()
+        };
+        let expected = Ty::Tuple(vec![Ty::Var(variable), Ty::Error]);
+        let actual = Ty::Tuple(vec![Ty::Enum("Open".into(), Vec::new()), Ty::Var(variable)]);
+        assert!(
+            checker.with_type_relation_probe(&[&expected, &actual], |checker| checker
+                .types_compatible(&expected, &actual)
+                .unwrap()),
+            "designated receiver relation permits Error widening"
+        );
+        assert!(
+            !checker
+                .types_match_without_error_conversion(&expected, &actual)
+                .unwrap(),
+            "inferred result types must not merge Error positions through widening"
+        );
+        assert_eq!(checker.resolve_ty(&Ty::Var(variable)), Ty::Var(variable));
+        assert!(
+            checker.bind_tyvar(variable, &Ty::Int).unwrap(),
+            "failed inference leaves the variable available for another relation"
+        );
     }
 
     #[test]

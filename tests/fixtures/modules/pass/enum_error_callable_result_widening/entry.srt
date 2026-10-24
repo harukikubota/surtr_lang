@@ -1,0 +1,19 @@
+error_function: (-> Error) = &Factory::error
+original = error_function()
+print(match original { SavedFailure(value) => "error:#{value}", _ => "wrong" })
+
+bound_function: (Int -> Result<Int>) = &Factory::result
+bound = bound_function(8)
+print(match bound { Ok(_) => "wrong", Err(SavedFailure(value)) => "bound:#{value}", Err(_) => "wrong" })
+
+captured_function: (Int -> Result<Int>) = Factory::make_callback()
+first = captured_function(11)
+print(match first { Ok(_) => "wrong", Err(SavedFailure(value)) => "first:#{value}", Err(_) => "wrong" })
+second = captured_function(12)
+print(match second { Ok(_) => "wrong", Err(SavedFailure(value)) => "second:#{value}", Err(_) => "wrong" })
+
+selected: ClosedFailures = SavedFailure(7)
+closed_callback: (Int -> Result<Int, ClosedFailures>) = {|value| Factory::return_saved(selected, value)}
+common = Monad::bind(Ok(5), closed_callback)
+print(match common { Ok(_) => "wrong", Err(SavedFailure(value) @ error) => "bind:#{value}:#{error.value}:#{Error::message(error)}", Err(_) => "wrong" })
+print(to_string(match common { Ok(_) => False, Err(error) => Error::same_kind(original, error) }))

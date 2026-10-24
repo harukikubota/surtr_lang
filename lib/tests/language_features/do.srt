@@ -44,7 +44,7 @@ def do_failure_source() -> Result<Int, DoFailureStop> {
   Err(DoFailureStop())
 }
 
-def result_t_safebind_failure() -> ResultT<Identity, Int> {
+def result_t_safebind_failure() -> ResultT<Identity, Int, Error> {
   value =? do_failure_source()
   ResultT::ok::<Identity>(value + 1)
 }

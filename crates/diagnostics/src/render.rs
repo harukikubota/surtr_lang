@@ -302,6 +302,7 @@ fn structured_expected_got(spec: &DiagnosticSpec) -> Option<(Option<String>, Opt
         }
         DiagnosticData::Pattern(value) => (value.expected_type, value.actual_type),
         DiagnosticData::Policy(value) => (value.expected_type, value.actual_type),
+        DiagnosticData::ErrorCollection(value) => (Some(value.target), Some(value.source_type)),
         _ => (None, None),
     })
 }

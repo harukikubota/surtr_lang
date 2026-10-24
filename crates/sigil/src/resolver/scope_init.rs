@@ -42,6 +42,7 @@ pub(super) fn is_compiler_runtime_builtin(name: &str) -> bool {
 
 pub(super) fn resolve_decl_attrs(attrs: &DeclAttrs) -> ResolvedDeclAttrs {
     ResolvedDeclAttrs {
+        enum_error: attrs.enum_error,
         doc: attrs.doc.clone(),
         builtin: attrs.builtin,
         derives: attrs.derives.clone(),

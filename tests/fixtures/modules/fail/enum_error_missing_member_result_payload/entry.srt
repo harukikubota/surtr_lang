@@ -1,0 +1,2 @@
+value: Result<Int, Failures> = Err(FirstFailure())
+print(to_string(match value { Ok(_) => 0, Err(error) => match error { FirstFailure => 1, Other(_) => 2 } }))

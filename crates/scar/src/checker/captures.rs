@@ -50,6 +50,7 @@ impl Checker {
             TypedInner::Bind(_, rhs)
             | TypedInner::ApplyPattern { value: rhs, .. }
             | TypedInner::SafeBind(_, rhs, ..)
+            | TypedInner::ErrorCoerce { value: rhs, .. }
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _)
             | TypedInner::EagerBoundary(rhs) => children.push(rhs),
@@ -226,7 +227,9 @@ impl Checker {
                         matching(&entry.pattern, outer, out);
                     }
                 }
-                TypedMatchPattern::Located(_, _, inner) | TypedMatchPattern::As(inner, _) => matching(inner, outer, out),
+                TypedMatchPattern::Located(_, _, inner)
+                | TypedMatchPattern::As(inner, _)
+                | TypedMatchPattern::ErrorOther { inner, .. } => matching(inner, outer, out),
                 TypedMatchPattern::ListCons(a, b) => {
                     matching(a, outer, out);
                     matching(b, outer, out);

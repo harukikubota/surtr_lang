@@ -37,6 +37,7 @@ pub fn codegen(typed: Vec<TypedNode>) -> Result<Bytecode, CodegenError> {
         process_specs: Vec::new(),
         boot_plan: SupervisorInitSpec::default(),
         enum_definitions: std::collections::HashMap::new(),
+        enum_error_definitions: HashMap::new(),
         nominal_definitions: std::collections::HashMap::new(),
     })
 }
@@ -48,10 +49,12 @@ pub fn codegen_typed_program(typed: TypedProgram) -> Result<Bytecode, CodegenErr
         process_specs,
         boot_plan,
         enum_definitions,
+        enum_error_definitions,
         nominal_definitions,
     } = typed;
     let mut gene = Codegen::new();
     gene.state.enum_types.extend(enum_definitions);
+    gene.state.enum_error_types.extend(enum_error_definitions);
     gene.state.nominal_types.extend(nominal_definitions);
     gene.emit_program(nodes.clone())?;
     let (opcodes, state) = gene.finalize()?;
@@ -266,9 +269,9 @@ fn collect_match_pattern_expressions<'a>(
                 collect_match_pattern_expressions(&entry.pattern, expressions);
             }
         }
-        TypedMatchPattern::Located(_, _, inner) | TypedMatchPattern::As(inner, _) => {
-            collect_match_pattern_expressions(inner, expressions)
-        }
+        TypedMatchPattern::Located(_, _, inner)
+        | TypedMatchPattern::ErrorOther { inner, .. }
+        | TypedMatchPattern::As(inner, _) => collect_match_pattern_expressions(inner, expressions),
         TypedMatchPattern::ListCons(head, tail) => {
             collect_match_pattern_expressions(head, expressions);
             collect_match_pattern_expressions(tail, expressions);
@@ -504,6 +507,7 @@ fn collect_missing_singleton_calls(
         | TypedInner::SafeBind(_, rhs, _, _)
         | TypedInner::ApplyPattern { value: rhs, .. }
         | TypedInner::FieldAccess(rhs, _)
+        | TypedInner::ErrorCoerce { value: rhs, .. }
         | TypedInner::Semi(rhs) => collect_missing_singleton_calls(
             rhs,
             surface_to_process,
@@ -2040,6 +2044,7 @@ struct CodegenState {
     next_fun_idx: u32,
     type_registry: TypeRegistry,
     enum_types: HashMap<String, Vec<TypedEnumVariantDef>>,
+    enum_error_types: HashMap<String, (Vec<String>, bool)>,
     nominal_types: HashMap<String, TypedNominalDefinition>,
     boot_process_specs: HashMap<String, BootProcessSpec>,
     error_templates: Vec<ErrTemplate>,
@@ -2059,6 +2064,7 @@ impl CodegenState {
             next_fun_idx: 0,
             type_registry: TypeRegistry::new(),
             enum_types: HashMap::new(),
+            enum_error_types: HashMap::new(),
             nominal_types: HashMap::new(),
             boot_process_specs: HashMap::new(),
             error_templates: Vec::new(),
@@ -2126,6 +2132,7 @@ impl ForgeSession {
                 next_fun_idx,
                 type_registry: bytecode.type_registry.clone(),
                 enum_types: HashMap::new(),
+                enum_error_types: HashMap::new(),
                 nominal_types: HashMap::new(),
                 boot_process_specs: bytecode
                     .runtime_process_specs
@@ -2150,6 +2157,7 @@ impl ForgeSession {
             process_specs: Vec::new(),
             boot_plan: SupervisorInitSpec::default(),
             enum_definitions: std::collections::HashMap::new(),
+            enum_error_definitions: HashMap::new(),
             nominal_definitions: std::collections::HashMap::new(),
         })
     }
@@ -2171,6 +2179,7 @@ impl ForgeSession {
                 process_specs: Vec::new(),
                 boot_plan: SupervisorInitSpec::default(),
                 enum_definitions: std::collections::HashMap::new(),
+                enum_error_definitions: HashMap::new(),
                 nominal_definitions: std::collections::HashMap::new(),
             },
             true,
@@ -2187,9 +2196,11 @@ impl ForgeSession {
             process_specs,
             boot_plan,
             enum_definitions,
+            enum_error_definitions,
             nominal_definitions,
         } = typed;
         self.state.enum_types.extend(enum_definitions);
+        self.state.enum_error_types.extend(enum_error_definitions);
         self.state.nominal_types.extend(nominal_definitions);
         let typed_for_meta = nodes.clone();
         let (chunk, meta, functions) =
@@ -2552,7 +2563,8 @@ mod tests {
         let nominals = HashMap::from([("Global::PidBox".into(), definition)]);
         let enums = HashMap::new();
         assert_eq!(
-            super::error_value_schema(&ty, &span(0, 1), &enums, &nominals).unwrap(),
+            super::error_value_schema(&ty, &span(0, 1), &enums, &nominals, &HashMap::new())
+                .unwrap(),
             S::Struct {
                 name: "Global::PidBox".into(),
                 arguments: vec![S::ProcessMarker("Global::Worker".into())],
@@ -2564,7 +2576,14 @@ mod tests {
             Ty::Pid(Box::new(Ty::Int)),
             marker,
         ] {
-            assert!(super::error_value_schema(&invalid, &span(0, 1), &enums, &nominals).is_err());
+            assert!(super::error_value_schema(
+                &invalid,
+                &span(0, 1),
+                &enums,
+                &nominals,
+                &HashMap::new()
+            )
+            .is_err());
         }
     }
 
@@ -2850,6 +2869,7 @@ mod tests {
                 },
             ],
             enum_definitions: std::collections::HashMap::new(),
+            enum_error_definitions: HashMap::new(),
             nominal_definitions: std::collections::HashMap::new(),
             process_specs: vec![singleton_process_spec(name)],
             boot_plan: SupervisorInitSpec {
@@ -2863,6 +2883,45 @@ mod tests {
                 ..SupervisorInitSpec::default()
             },
         }
+    }
+
+    #[test]
+    fn checked_error_schema_preserves_empty_and_nonempty_enum_error_owners() {
+        use sindr::ir::ErrorValueSchema as S;
+        let enums = HashMap::new();
+        let nominals = HashMap::new();
+        let owners: HashMap<String, (Vec<String>, bool)> = HashMap::from([
+            ("Global::EmptyErrors".into(), (vec![], false)),
+            (
+                "Global::OpenErrors".into(),
+                (vec!["ConcNS::SavedError".into()], true),
+            ),
+        ]);
+        for (name, (kinds, has_other)) in &owners {
+            assert_eq!(
+                super::error_value_schema(
+                    &Ty::Enum(name.clone(), vec![]),
+                    &span(0, 1),
+                    &enums,
+                    &nominals,
+                    &owners
+                )
+                .unwrap(),
+                S::EnumError {
+                    name: name.clone(),
+                    kinds: kinds.clone(),
+                    has_other: *has_other
+                }
+            );
+        }
+        assert!(super::error_value_schema(
+            &Ty::Enum("Global::EmptyErrors".into(), vec![Ty::Int]),
+            &span(0, 1),
+            &enums,
+            &nominals,
+            &owners
+        )
+        .is_err());
     }
 
     #[test]
@@ -2882,6 +2941,7 @@ mod tests {
                 &span(0, 1),
                 &enums,
                 &nominals,
+                &HashMap::new(),
             )
             .unwrap();
             assert_eq!(
@@ -2896,6 +2956,7 @@ mod tests {
                 &span(0, 1),
                 &enums,
                 &nominals,
+                &HashMap::new(),
             )
             .is_err());
         }
@@ -2921,6 +2982,7 @@ mod tests {
                 &span(0, 1),
                 &enums,
                 &nominals,
+                &HashMap::new(),
             )
             .unwrap();
             assert_eq!(
@@ -2935,6 +2997,7 @@ mod tests {
                 &span(0, 1),
                 &enums,
                 &nominals,
+                &HashMap::new(),
             )
             .is_err());
         }
@@ -2944,6 +3007,7 @@ mod tests {
                 &span(0, 1),
                 &enums,
                 &nominals,
+                &HashMap::new(),
             )
             .unwrap(),
             S::HashMap(Box::new(S::Int))
@@ -2953,6 +3017,7 @@ mod tests {
             &span(0, 1),
             &enums,
             &nominals,
+            &HashMap::new(),
         )
         .is_err());
         assert!(super::error_value_schema(
@@ -2960,6 +3025,7 @@ mod tests {
             &span(0, 1),
             &enums,
             &nominals,
+            &HashMap::new(),
         )
         .is_err());
     }
@@ -2974,6 +3040,7 @@ mod tests {
             &span(0, 1),
             &enums,
             &nominals,
+            &HashMap::new(),
         )
         .unwrap();
         assert_eq!(
@@ -2987,7 +3054,9 @@ mod tests {
             vec![Ty::Int],
             Box::new(Ty::MatchResult(Box::new(Ty::Int))),
         )));
-        let schema = super::error_value_schema(&extractor, &span(0, 1), &enums, &nominals).unwrap();
+        let schema =
+            super::error_value_schema(&extractor, &span(0, 1), &enums, &nominals, &HashMap::new())
+                .unwrap();
         assert_eq!(
             schema,
             S::Callable {
@@ -5529,6 +5598,7 @@ mod tests {
                 ..Default::default()
             },
             enum_definitions: HashMap::new(),
+            enum_error_definitions: HashMap::new(),
             nominal_definitions: HashMap::new(),
         };
         let (configured, _) = session
@@ -5580,6 +5650,7 @@ mod tests {
                 nodes: Vec::new(),
                 process_specs: Vec::new(),
                 enum_definitions: HashMap::new(),
+                enum_error_definitions: HashMap::new(),
                 nominal_definitions: HashMap::new(),
                 boot_plan: SupervisorInitSpec {
                     entries: vec![SupervisorInitEntry {
@@ -6702,17 +6773,21 @@ fn error_value_schema(
     span: &Span,
     enums: &HashMap<String, Vec<TypedEnumVariantDef>>,
     nominals: &HashMap<String, TypedNominalDefinition>,
+    enum_errors: &HashMap<String, (Vec<String>, bool)>,
 ) -> Result<sindr::ir::ErrorValueSchema, CodegenError> {
     fn convert(
         ty: &Ty,
         span: &Span,
         enums: &HashMap<String, Vec<TypedEnumVariantDef>>,
         nominals: &HashMap<String, TypedNominalDefinition>,
+        enum_errors: &HashMap<String, (Vec<String>, bool)>,
         sub: &HashMap<u32, sindr::ir::ErrorValueSchema>,
         active: &mut Vec<(String, Vec<sindr::ir::ErrorValueSchema>)>,
     ) -> Result<sindr::ir::ErrorValueSchema, CodegenError> {
         use sindr::ir::ErrorValueSchema as S;
-        let nested = |ty: &Ty, active: &mut Vec<_>| convert(ty, span, enums, nominals, sub, active);
+        let nested = |ty: &Ty, active: &mut Vec<_>| {
+            convert(ty, span, enums, nominals, enum_errors, sub, active)
+        };
         Ok(match ty {
             Ty::Var(id) => {
                 return sub.get(id).cloned().ok_or_else(|| CodegenError {
@@ -6734,7 +6809,10 @@ fn error_value_schema(
                     .map(|ty| nested(ty, active))
                     .collect::<Result<_, _>>()?,
             ),
-            Ty::Result(ok, _) => S::Result(Box::new(nested(ok, active)?)),
+            Ty::Result(ok, error) => S::Result(
+                Box::new(nested(ok, active)?),
+                Box::new(nested(error, active)?),
+            ),
             Ty::Func(params, ret)
             | Ty::UserFunc { params, ret, .. }
             | Ty::BuiltinFunc { params, ret, .. } => S::Callable {
@@ -6784,7 +6862,17 @@ fn error_value_schema(
                 let fields = definition
                     .fields
                     .iter()
-                    .map(|(_, ty)| convert(ty, span, enums, nominals, &substitution, active))
+                    .map(|(_, ty)| {
+                        convert(
+                            ty,
+                            span,
+                            enums,
+                            nominals,
+                            enum_errors,
+                            &substitution,
+                            active,
+                        )
+                    })
                     .collect::<Result<_, _>>()?;
                 active.pop();
                 S::Struct {
@@ -6795,6 +6883,19 @@ fn error_value_schema(
             }
             Ty::Enum(name, args) => {
                 let name = name.to_string();
+                if let Some((kinds, has_other)) = enum_errors.get(&name) {
+                    if !args.is_empty() {
+                        return Err(CodegenError {
+                            message: "EnumError does not take type arguments".into(),
+                            span: span.clone(),
+                        });
+                    }
+                    return Ok(S::EnumError {
+                        name,
+                        kinds: kinds.clone(),
+                        has_other: *has_other,
+                    });
+                }
                 let arguments = args
                     .iter()
                     .map(|ty| nested(ty, active))
@@ -6843,6 +6944,12 @@ fn error_value_schema(
                     message: format!("Error schema missing Enum declaration {name}"),
                     span: span.clone(),
                 })?;
+                if defs.iter().any(|variant| variant.enum_error) {
+                    return Err(CodegenError {
+                        message: "Checked EnumError owner metadata missing".into(),
+                        span: span.clone(),
+                    });
+                }
                 active.push((name.clone(), arguments.clone()));
                 let mut variants = Vec::new();
                 for variant in defs {
@@ -6867,7 +6974,17 @@ fn error_value_schema(
                     let fields = variant
                         .payload_types
                         .iter()
-                        .map(|ty| convert(ty, span, enums, nominals, &substitution, active))
+                        .map(|ty| {
+                            convert(
+                                ty,
+                                span,
+                                enums,
+                                nominals,
+                                enum_errors,
+                                &substitution,
+                                active,
+                            )
+                        })
                         .collect::<Result<_, _>>()?;
                     variants.push(sindr::ir::ErrorVariantSchema {
                         name: variant.constructor_name.clone(),
@@ -6897,7 +7014,15 @@ fn error_value_schema(
             span: span.clone(),
         });
     }
-    convert(ty, span, enums, nominals, &HashMap::new(), &mut Vec::new())
+    convert(
+        ty,
+        span,
+        enums,
+        nominals,
+        enum_errors,
+        &HashMap::new(),
+        &mut Vec::new(),
+    )
 }
 
 fn final_error_construct(node: &TypedNode) -> Option<&TypedNode> {
@@ -6966,7 +7091,17 @@ fn ty_to_string_with_type_params(ty: &Ty, type_params: &[TypedTypeParam]) -> Str
             "MatchResult<{}>",
             ty_to_string_with_type_params(payload, type_params)
         ),
-        Ty::Result(ok, _) => format!("Result<{}>", ty_to_string_with_type_params(ok, type_params)),
+        Ty::Result(ok, error) => {
+            let ok = ty_to_string_with_type_params(ok, type_params);
+            if matches!(error.as_ref(), Ty::Error) {
+                format!("Result<{ok}>")
+            } else {
+                format!(
+                    "Result<{ok}, {}>",
+                    ty_to_string_with_type_params(error, type_params)
+                )
+            }
+        }
         Ty::Struct(name, nominal) | Ty::Record(name, nominal) => {
             let name = surface_path_name(name);
             let args = nominal
@@ -8252,6 +8387,7 @@ impl Codegen {
                                 &param.id.span,
                                 &self.state.enum_types,
                                 &self.state.nominal_types,
+                                &self.state.enum_error_types,
                             )
                         })
                         .collect::<Result<_, _>>()?,
@@ -8265,6 +8401,7 @@ impl Codegen {
                                     &construct.span,
                                     &self.state.enum_types,
                                     &self.state.nominal_types,
+                                    &self.state.enum_error_types,
                                 )?,
                             ))
                         })
@@ -8649,7 +8786,9 @@ impl Codegen {
                 self.emit(Opcode::LoadLocal(slot));
             }
 
-            TypedInner::EagerBoundary(inner) => self.emit_node(inner)?,
+            TypedInner::EagerBoundary(inner) | TypedInner::ErrorCoerce { value: inner, .. } => {
+                self.emit_node(inner)?
+            }
 
             TypedInner::Bind(pat, rhs) => {
                 if matches!(rhs.ty, Ty::Facet(..)) {
@@ -9314,7 +9453,7 @@ impl Codegen {
 
             TypedInner::EnumDef(_, variants) => {
                 for variant in variants {
-                    if variant.lowering.is_some() {
+                    if variant.lowering.is_some() || variant.enum_error {
                         continue;
                     }
                     self.state
@@ -12940,9 +13079,16 @@ impl Codegen {
     ) -> Result<(), CodegenError> {
         let destination = PatternFailureDestination::ExpressionResult(end);
         let pattern = match pattern {
-            TypedMatchPattern::ErrorKind(kind) | TypedMatchPattern::ErrorPayload { kind, .. } => {
-                let expected =
-                    self.add_constant(Constant::Str(surface_path_name(kind).to_string()));
+            TypedMatchPattern::ErrorKind(_)
+            | TypedMatchPattern::ErrorPayload { .. }
+            | TypedMatchPattern::ErrorOther { .. } => {
+                let expected_kind = match pattern {
+                    TypedMatchPattern::ErrorKind(kind)
+                    | TypedMatchPattern::ErrorPayload { kind, .. } => surface_path_name(kind),
+                    TypedMatchPattern::ErrorOther { .. } => "Other",
+                    _ => unreachable!("guarded Error Pattern"),
+                };
+                let expected = self.add_constant(Constant::Str(expected_kind.to_string()));
                 self.emit(Opcode::LoadConst(expected));
                 self.emit(Opcode::LoadLocal(slot));
                 self.emit_internal_builtin_call("kind", 1, source)?;
@@ -13217,6 +13363,23 @@ impl Codegen {
                 self.emit_duration_lit_pattern_test(slot, n, fail_label);
                 MatchPatternDecomp::None
             }
+            TypedMatchPattern::ErrorOther {
+                excluded_kinds,
+                inner,
+            } => {
+                for kind in excluded_kinds {
+                    self.emit(Opcode::LoadLocal(slot));
+                    self.emit(Opcode::IsErrorKind { kind: kind.clone() });
+                    self.emit_jump_if_true(fail_label);
+                }
+                self.emit_match_pattern_test_with_mode(
+                    inner,
+                    slot,
+                    fail_label,
+                    err_span,
+                    failure_policy,
+                )?
+            }
             TypedMatchPattern::ErrorKind(kind) => {
                 self.emit_error_kind_test_from_local(slot, kind, fail_label)?;
                 MatchPatternDecomp::None
@@ -13439,6 +13602,9 @@ impl Codegen {
         err_span: &Span,
     ) -> Result<(), CodegenError> {
         match pat {
+            TypedMatchPattern::ErrorOther { inner, .. } => {
+                self.emit_match_pattern_bind(inner, slot, decomp, err_span)?;
+            }
             TypedMatchPattern::Located(source, _, inner) => {
                 self.emit_match_pattern_bind(inner, slot, decomp, source)?
             }

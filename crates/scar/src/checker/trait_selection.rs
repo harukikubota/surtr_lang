@@ -1407,7 +1407,7 @@ impl Checker {
             TypeKind::Record | TypeKind::ConcreteError => {
                 Ty::Record(def.name.clone(), NominalType::new(args.clone()))
             }
-            TypeKind::Enum => Ty::Enum(def.name.clone(), args.clone()),
+            TypeKind::Enum | TypeKind::EnumError => Ty::Enum(def.name.clone(), args.clone()),
         };
         Ok(match &ty.head {
             CanonicalTypeHead::Variable(var) => Ty::Var(*var),
@@ -1790,6 +1790,12 @@ impl Checker {
                     Span { start: 0, end: 0 },
                 )
             })?;
+        if matches!(
+            self.monad_fail_error_slot_proof(trait_key, &self.canonical_to_ty(subject)?),
+            Some(ApplicabilityProof::Unsatisfied)
+        ) {
+            return Ok(ApplicabilityProof::Unsatisfied);
+        }
         if let Some(evidence) = self.exact_capability_evidence(subject, trait_key) {
             return Ok(ApplicabilityProof::Satisfied(evidence));
         }
@@ -1874,6 +1880,14 @@ impl Checker {
             return Ok(ApplicabilityProof::Deferred(deferred));
         }
         let subject_ty = self.canonical_to_ty(subject)?;
+        if let Some(boundary) = self.ordinary_error_carrier_boundary(trait_key, &subject_ty)? {
+            return self.prove_canonical_capability(
+                trait_id,
+                &self.canonical_request(&boundary)?,
+                visiting,
+                next_variable,
+            );
+        }
         Ok(if self.compiler_trait_impl_exists(trait_key, &subject_ty) {
             ApplicabilityProof::Satisfied(Vec::new())
         } else {
@@ -2009,6 +2023,14 @@ impl Checker {
         argument_tys: &[Ty],
         result_ty: &Ty,
     ) -> Result<CandidateApplicability, TypeError> {
+        if matches!(
+            self.monad_fail_error_slot_proof(trait_name, receiver),
+            Some(ApplicabilityProof::Unsatisfied)
+        ) {
+            return Ok(CandidateApplicability::Rejected(CandidateRejection {
+                failures: Vec::new(),
+            }));
+        }
         let profile = self.profiler.start();
         let result = self.probe_trait_method_instantiation(
             trait_name,
@@ -2592,118 +2614,176 @@ impl Checker {
         trait_args: &[Ty],
         ty: &Ty,
     ) -> Result<ApplicabilityProof, TypeError> {
-        let requested_head = self.requested_head_type_list(trait_name, trait_args, ty)?;
-        let receiver = requested_head
-            .entries
-            .iter()
-            .find(|entry| entry.role == TypeListRole::ImplTarget)
-            .expect("requested target")
-            .ty
-            .clone();
-        let requested = requested_head
-            .entries
-            .iter()
-            .filter(|entry| entry.role == TypeListRole::TraitArgument)
-            .map(|entry| entry.ty.clone())
-            .collect::<Vec<_>>();
-        if let Some(evidence) = self.exact_capability_evidence(&receiver, trait_name) {
-            return Ok(ApplicabilityProof::Satisfied(evidence));
-        }
-        let mut request_waiting = Vec::new();
-        for ty in requested.iter().chain(std::iter::once(&receiver)) {
-            self.canonical_waiting_variables(ty, &mut request_waiting);
-        }
-        if let CanonicalTypeHead::Variable(var) = receiver.head {
-            if self.rigid_tyvars.contains(&var) {
-                return Ok(self
-                    .rigid_capability_evidence(var, trait_name)
-                    .map(ApplicabilityProof::Satisfied)
-                    .or_else(|| {
-                        self.tyvar_satisfies_compiler_trait(var, trait_name)
-                            .then(|| ApplicabilityProof::Satisfied(Vec::new()))
-                    })
-                    .unwrap_or(ApplicabilityProof::Unsatisfied));
-            }
-        }
-        let mut applicable = None;
-        let mut waiting = Vec::new();
-        for key in self.trait_impl_candidate_keys(trait_name) {
-            let info = self.trait_impls[&key].clone();
-            let candidate = &*self;
-            let mut next_variable = self.env.next_tyvar;
-            let mut fresh = HashMap::new();
-            let mut unifier = CanonicalUnifier {
-                rigid_variables: self.rigid_tyvars.clone(),
-                ..Default::default()
-            };
-            let args = info
-                .head_type_list
-                .entries
-                .iter()
-                .filter(|entry| entry.role == TypeListRole::TraitArgument)
-                .collect::<Vec<_>>();
-            if args.len() != requested.len() {
-                continue;
-            }
-            let mut matches = true;
-            for (entry, request) in args.iter().zip(&requested) {
-                let pattern = candidate.fresh_canonical(&entry.ty, &mut fresh, &mut next_variable);
-                matches &= unifier.unify(&pattern, request);
-            }
-            let target = &info
-                .head_type_list
+        self.probe_trait_head_with_provenance(trait_name, trait_args, ty)
+            .map(|(proof, _, _)| proof)
+    }
+
+    fn probe_trait_head_with_provenance(
+        &self,
+        trait_name: &str,
+        trait_args: &[Ty],
+        ty: &Ty,
+    ) -> Result<(ApplicabilityProof, Option<bool>, bool), TypeError> {
+        let mut selected_standard = None;
+        let mut candidate_deferred = false;
+        let proof = (|| -> Result<ApplicabilityProof, TypeError> {
+            let requested_head = self.requested_head_type_list(trait_name, trait_args, ty)?;
+            let receiver = requested_head
                 .entries
                 .iter()
                 .find(|entry| entry.role == TypeListRole::ImplTarget)
-                .expect("target")
-                .ty;
-            let target = candidate.fresh_canonical(target, &mut fresh, &mut next_variable);
-            matches &= unifier.unify(&target, &receiver);
-            if !matches {
-                continue;
+                .expect("requested target")
+                .ty
+                .clone();
+            let requested = requested_head
+                .entries
+                .iter()
+                .filter(|entry| entry.role == TypeListRole::TraitArgument)
+                .map(|entry| entry.ty.clone())
+                .collect::<Vec<_>>();
+            if let Some(evidence) = self.exact_capability_evidence(&receiver, trait_name) {
+                return Ok(ApplicabilityProof::Satisfied(evidence));
             }
-            match candidate.prove_canonical_constraints(
-                &info.impl_constraints,
-                &mut fresh,
-                &unifier,
-                &mut HashSet::new(),
-                &mut next_variable,
-            )? {
-                ApplicabilityProof::Satisfied(evidence) if request_waiting.is_empty() => {
-                    if applicable.is_some() {
-                        return Err(TypeError::new(
+            let mut request_waiting = Vec::new();
+            for ty in requested.iter().chain(std::iter::once(&receiver)) {
+                self.canonical_waiting_variables(ty, &mut request_waiting);
+            }
+            if let CanonicalTypeHead::Variable(var) = receiver.head {
+                if self.rigid_tyvars.contains(&var) {
+                    return Ok(self
+                        .rigid_capability_evidence(var, trait_name)
+                        .map(ApplicabilityProof::Satisfied)
+                        .or_else(|| {
+                            self.tyvar_satisfies_compiler_trait(var, trait_name)
+                                .then(|| ApplicabilityProof::Satisfied(Vec::new()))
+                        })
+                        .unwrap_or(ApplicabilityProof::Unsatisfied));
+                }
+            }
+            let mut applicable = None;
+            let mut waiting = Vec::new();
+            for key in self.trait_impl_candidate_keys(trait_name) {
+                let info = self.trait_impls[&key].clone();
+                let candidate = &*self;
+                let mut next_variable = self.env.next_tyvar;
+                let mut fresh = HashMap::new();
+                let mut unifier = CanonicalUnifier {
+                    rigid_variables: self.rigid_tyvars.clone(),
+                    ..Default::default()
+                };
+                let args = info
+                    .head_type_list
+                    .entries
+                    .iter()
+                    .filter(|entry| entry.role == TypeListRole::TraitArgument)
+                    .collect::<Vec<_>>();
+                if args.len() != requested.len() {
+                    continue;
+                }
+                let mut matches = true;
+                for (entry, request) in args.iter().zip(&requested) {
+                    let pattern =
+                        candidate.fresh_canonical(&entry.ty, &mut fresh, &mut next_variable);
+                    matches &= unifier.unify(&pattern, request);
+                }
+                let target = &info
+                    .head_type_list
+                    .entries
+                    .iter()
+                    .find(|entry| entry.role == TypeListRole::ImplTarget)
+                    .expect("target")
+                    .ty;
+                let target = candidate.fresh_canonical(target, &mut fresh, &mut next_variable);
+                matches &= unifier.unify(&target, &receiver);
+                if !matches {
+                    continue;
+                }
+                match candidate.prove_canonical_constraints(
+                    &info.impl_constraints,
+                    &mut fresh,
+                    &unifier,
+                    &mut HashSet::new(),
+                    &mut next_variable,
+                )? {
+                    ApplicabilityProof::Satisfied(evidence) if request_waiting.is_empty() => {
+                        if applicable.is_some() {
+                            return Err(TypeError::new(
                             "Internal error: multiple applicable coherent trait implementations",
                             Span { start: 0, end: 0 },
                         ));
+                        }
+                        applicable = Some((evidence, info.standard_definition));
                     }
-                    applicable = Some(evidence);
+                    ApplicabilityProof::Satisfied(_) => waiting.extend(request_waiting.clone()),
+                    ApplicabilityProof::Deferred(_) => {
+                        // Report only call-site variables to the caller. The
+                        // boundary selector separately remembers unresolved
+                        // candidate constraints without leaking fresh IDs.
+                        waiting.extend(request_waiting.clone());
+                        candidate_deferred = true;
+                    }
+                    ApplicabilityProof::Unsatisfied => {}
                 }
-                ApplicabilityProof::Satisfied(_) => waiting.extend(request_waiting.clone()),
-                ApplicabilityProof::Deferred(_) => {
-                    waiting.extend(request_waiting.clone());
-                }
-                ApplicabilityProof::Unsatisfied => {}
             }
+            if let Some((evidence, standard)) = applicable {
+                selected_standard = Some(standard);
+                return Ok(ApplicabilityProof::Satisfied(evidence));
+            }
+            if !waiting.is_empty() {
+                waiting.sort_unstable();
+                waiting.dedup();
+                return Ok(ApplicabilityProof::Deferred(waiting));
+            }
+            if !request_waiting.is_empty()
+                && matches!(receiver.head, CanonicalTypeHead::Variable(_))
+            {
+                return Ok(ApplicabilityProof::Deferred(request_waiting));
+            }
+            let receiver_ty = self.canonical_to_ty(&receiver)?;
+            Ok(
+                if self.compiler_trait_impl_exists(trait_name, &receiver_ty) {
+                    ApplicabilityProof::Satisfied(Vec::new())
+                } else {
+                    ApplicabilityProof::Unsatisfied
+                },
+            )
+        })()?;
+        Ok((proof, selected_standard, candidate_deferred))
+    }
+
+    /// Ordinary Trait heads use the same canonical selection as capability
+    /// proofs. Only a uniquely applicable standard declaration authorizes
+    /// changing a Result carrier's Error position at its call boundary.
+    pub(super) fn ordinary_error_carrier_boundary(
+        &self,
+        trait_name: &str,
+        carrier: &Ty,
+    ) -> Result<Option<Ty>, TypeError> {
+        let Some(info) = self.traits.get(trait_name) else {
+            return Ok(None);
+        };
+        if !info.constructor_slots.is_empty() || !info.type_params.is_empty() {
+            return Ok(None);
         }
-        if let Some(evidence) = applicable {
-            return Ok(ApplicabilityProof::Satisfied(evidence));
+        let Some(boundary) = self.common_error_carrier_ty(carrier) else {
+            return Ok(None);
+        };
+        if boundary == self.resolve_ty(carrier) {
+            return Ok(None);
         }
-        if !waiting.is_empty() {
-            waiting.sort_unstable();
-            waiting.dedup();
-            return Ok(ApplicabilityProof::Deferred(waiting));
+        let (raw, _, raw_deferred) =
+            self.probe_trait_head_with_provenance(trait_name, &[], carrier)?;
+        if raw_deferred || !matches!(raw, ApplicabilityProof::Unsatisfied) {
+            return Ok(None);
         }
-        if !request_waiting.is_empty() && matches!(receiver.head, CanonicalTypeHead::Variable(_)) {
-            return Ok(ApplicabilityProof::Deferred(request_waiting));
-        }
-        let receiver_ty = self.canonical_to_ty(&receiver)?;
-        Ok(
-            if self.compiler_trait_impl_exists(trait_name, &receiver_ty) {
-                ApplicabilityProof::Satisfied(Vec::new())
-            } else {
-                ApplicabilityProof::Unsatisfied
-            },
-        )
+        let (proof, standard, candidate_deferred) =
+            self.probe_trait_head_with_provenance(trait_name, &[], &boundary)?;
+        Ok((!candidate_deferred
+            && matches!(
+                (proof, standard),
+                (ApplicabilityProof::Satisfied(_), Some(true))
+            ))
+        .then_some(boundary))
     }
 
     pub(super) fn prove_trait_capability(
@@ -2714,6 +2794,12 @@ impl Checker {
         let Some(trait_id) = self.traits.get(trait_name).map(|info| info.id.unique_id) else {
             return Ok(ApplicabilityProof::Unsatisfied);
         };
+        if matches!(
+            self.monad_fail_error_slot_proof(trait_name, ty),
+            Some(ApplicabilityProof::Unsatisfied)
+        ) {
+            return Ok(ApplicabilityProof::Unsatisfied);
+        }
         let subject = self.canonical_request(ty)?;
         let mut next_variable = self.env.next_tyvar;
         let outcome = self.prove_canonical_capability(
@@ -3013,6 +3099,9 @@ impl Checker {
             | Ty::MatchResult(..)
             | Ty::Hole => TraitImplPolicy::Forbidden,
             Ty::Pid(..) => TraitImplPolicy::CompilerOwned,
+            Ty::Enum(name, _) if self.env.enum_error_members.contains_key(&name) => {
+                TraitImplPolicy::Forbidden
+            }
             Ty::Struct(name, _) | Ty::Record(name, _) | Ty::Enum(name, _) => {
                 builtin_type_name(surface_path_name(&name))
                     .map(|builtin| builtin.trait_impl_policy())

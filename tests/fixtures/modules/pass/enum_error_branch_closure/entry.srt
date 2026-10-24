@@ -1,0 +1,4 @@
+plain = AlphaFailure(7)
+selected: ClosedFailures = match plain { AlphaFailure @ error => error, _ => AlphaFailure(0) }
+factory: (-> ClosedFailures) = match plain { AlphaFailure @ error => {|| error}, _ => {|| AlphaFailure(0)} }
+print(to_string(Error::same_kind(selected, factory())))

@@ -1,0 +1,2 @@
+source: Result<Int> = Err(AlphaFailure(1))
+value: Result<Int, ClosedFailures> = Result::map_err(source, AlphaFailure(2))

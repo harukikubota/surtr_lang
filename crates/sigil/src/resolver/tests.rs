@@ -10635,3 +10635,126 @@ fn assert_error_matches_pin_and_extractor_prearguments_keep_outer_scope() {
         assert!(error.message.contains("fresh"), "{source}: {error:?}");
     }
 }
+
+#[test]
+fn enum_error_members_resolve_canonical_concrete_identity() {
+    let resolved = resolve(parse("deferror ConcNS::ConcError { \"x\" }\ndefenumerror ErrorsNS::Errors { ConcNS::ConcError, Other(Error) }\nvalue = ErrorsNS::Errors::ConcNS::ConcError()").unwrap()).unwrap();
+    let Resolved::EnumDef(_, _, _, members, attrs) = &resolved[1] else {
+        panic!("expected enum")
+    };
+    assert!(attrs.enum_error);
+    assert_eq!(
+        members[0].error_identity.as_deref(),
+        Some("ConcNS::ConcError")
+    );
+    let Resolved::Bind(_, _, value) = &resolved[2] else {
+        panic!("expected binding")
+    };
+    assert!(
+        matches!(value.as_ref(), Resolved::EnumErrorConstructorCall(_, owner, concrete, _) if owner.qualified_name.as_deref() == Some("ErrorsNS::Errors") && concrete.qualified_name.as_deref() == Some("ConcNS::ConcError"))
+    );
+}
+
+#[test]
+fn enum_error_rejects_non_error_and_duplicate_members() {
+    for source in [
+        "defstruct Value { x: Int }\ndefenumerror Errors { Value }",
+        "deferror SomeError { \"x\" }\ndefenumerror Errors { SomeError, SomeError }",
+        "defenumerror Errors { MissingError, Other(Error) }",
+    ] {
+        assert!(
+            resolve(parse(source).unwrap()).is_err(),
+            "must reject {source}"
+        );
+    }
+}
+
+#[test]
+fn enum_error_owner_does_not_infer_concrete_namespace() {
+    let source = "deferror ConcNS::ConcError { \"x\" }\ndefenumerror Errors { ConcNS::ConcError, Other(Error) }\nvalue = Errors::ConcError()";
+    assert!(resolve(parse(source).unwrap()).is_err());
+    let source = "deferror ConcNS::ConcError { \"x\" }\ndeferror ConcError { \"y\" }\ndefenumerror Errors { ConcNS::ConcError, Other(Error) }\nvalue = Errors::ConcError()";
+    let resolved = resolve(parse(source).unwrap()).unwrap();
+    let Resolved::Bind(_, _, value) = resolved.last().unwrap() else {
+        panic!("expected binding")
+    };
+    assert!(
+        matches!(value.as_ref(), Resolved::EnumErrorConstructorCall(_, _, concrete, _) if concrete.qualified_name.as_deref() == Some("Global::ConcError"))
+    );
+}
+
+#[test]
+fn enum_error_explicit_owner_constructor_capture_is_rejected() {
+    for member in ["SomeError", "UnlistedError"] {
+        let source = format!("deferror SomeError {{ \"x\" }}\ndeferror UnlistedError {{ \"y\" }}\ndefenumerror Errors {{ SomeError, Other(Error) }}\nf = &Errors::{member}");
+        let err =
+            resolve(parse(&source).unwrap()).expect_err("explicit owner capture is unsupported");
+        assert!(
+            err.message.contains("constructor capture"),
+            "{}",
+            err.message
+        );
+    }
+}
+
+#[test]
+fn enum_error_inherent_methods_keep_owner_identity() {
+    let source = "deferror SomeError { \"x\" }\ndefenumerror Errors { SomeError }\nimpl Errors { def code() -> Int { 1 } }";
+    let ast = parse(source).unwrap();
+    let stages = vec![ast
+        .into_iter()
+        .flat_map(|statement| staged_modules_from_source_ast(vec![statement], None))
+        .collect::<Vec<_>>()];
+    let precollected = precollect_declarations(&stages).unwrap();
+    let resolved =
+        resolve_staged_program(&stages, Vec::new(), &precollected.declaration_index, None).unwrap();
+    assert!(resolved.iter().any(|node| matches!(node, Resolved::Def(_, id, ..) if id.qualified_name.as_deref() == Some("Global::Errors::code") && id.symbol_info.as_ref().is_some_and(|info| info.identity == TypeIdentity::EnumError))));
+}
+
+#[test]
+fn enum_error_constructor_rejects_ambiguous_owner_split() {
+    let source = "deferror Errors::FooError { \"x\" }\ndeferror FooError { \"y\" }\ndefenumerror NS { Errors::FooError }\ndefenumerror NS::Errors { FooError }\nvalue = NS::Errors::FooError()";
+    let error = resolve(parse(source).unwrap())
+        .expect_err("two owner identities must not choose a prefix implicitly");
+    assert!(
+        error.message.contains("Ambiguous EnumError owner"),
+        "{}",
+        error.message
+    );
+    let source = "deferror Errors::FooError { \"x\" }\ndefenumerror NS { Errors::FooError }\ndefenumerror NS::Errors { Other(Error) }\nvalue = NS::Errors::FooError()";
+    let error = resolve(parse(source).unwrap())
+        .expect_err("concrete name failure must not select a different owner");
+    assert!(
+        error.message.contains("Ambiguous EnumError owner"),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
+fn enum_error_four_segment_constructor_has_one_owner_split() {
+    let source = "deferror ConcNS::FooError { \"x\" }\ndefenumerror NS { ConcNS::FooError }\ndefenumerror NS::Errors { ConcNS::FooError }\nvalue = NS::Errors::ConcNS::FooError()";
+    let resolved = resolve(parse(source).unwrap()).unwrap();
+    let Resolved::Bind(_, _, value) = resolved.last().unwrap() else {
+        panic!("expected binding")
+    };
+    assert!(
+        matches!(value.as_ref(), Resolved::EnumErrorConstructorCall(_, owner, concrete, _) if owner.qualified_name.as_deref() == Some("NS::Errors") && concrete.qualified_name.as_deref() == Some("ConcNS::FooError"))
+    );
+}
+
+#[test]
+fn enum_error_owner_and_synthetic_members_are_not_bare_values() {
+    for value in ["Errors", "Errors()", "Errors::SomeError", "Errors::Other"] {
+        let source = format!("deferror SomeError {{ \"x\" }}\ndefenumerror Errors {{ SomeError, Other(Error) }}\nvalue = {value}");
+        let error = resolve(parse(&source).unwrap())
+            .expect_err("EnumError values require an explicit concrete Error call");
+        assert!(
+            error
+                .message
+                .contains("explicit concrete Error constructor call"),
+            "{}",
+            error.message
+        );
+    }
+}

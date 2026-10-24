@@ -1,0 +1,8 @@
+print(Factory::use(SavedFailure(4)))
+held = Holder(SavedFailure(5))
+print(Error::message(held.failure))
+values: List<Result<Int, ClosedFailures>> = [Err(SavedFailure(6))]
+print(match values { [Err(error)] => Error::message(error), _ => "wrong" })
+print(match Factory::nested() { [Err(error)] => Error::message(error), _ => "wrong" })
+print(match Factory::result() { Err(error) => Error::message(error), Ok(_) => "wrong" })
+print(Error::message(Factory::make()))

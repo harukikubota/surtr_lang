@@ -129,6 +129,7 @@ pub enum Token {
     Defrecord,
     Deferror,
     Defenum,
+    Defenumerror,
     Defextractor,
     Impl,
     For,

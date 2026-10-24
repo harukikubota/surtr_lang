@@ -14,6 +14,8 @@ enum ResolvedDeferredDoFailure {
 struct CallableSpecializationRequirements {
     tyvars: Vec<u32>,
     requires_concrete: bool,
+    /// Error identities and transport constructors must be known independently of payload layout.
+    concrete_tyvars: Vec<u32>,
 }
 
 #[derive(Default)]
@@ -50,6 +52,22 @@ impl Checker {
         let mut variables = Vec::new();
         Self::collect_ty_vars(ty, &mut variables);
         variables.is_empty()
+    }
+
+    fn specialization_requirements_are_met(
+        requirements: &CallableSpecializationRequirements,
+        mapping: &HashMap<u32, Ty>,
+    ) -> bool {
+        let required = if requirements.requires_concrete {
+            &requirements.tyvars
+        } else {
+            &requirements.concrete_tyvars
+        };
+        required.iter().all(|variable| {
+            mapping
+                .get(variable)
+                .is_some_and(Self::specialization_type_is_concrete)
+        })
     }
 
     fn resolve_deferred_do_failure(
@@ -117,11 +135,21 @@ impl Checker {
             }
             let requires_concrete = summary.requires_concrete
                 || self.direct_pattern_requirement_tyvars.contains_key(fun_idx);
+            let concrete_tyvars = bound_tyvars
+                .iter()
+                .filter(|variable| {
+                    self.error_slot_tyvars.contains(variable)
+                        || self.failure_error_slot_tyvars.contains(variable)
+                        || summary.transport_constructors.contains(variable)
+                })
+                .copied()
+                .collect();
             bound_tyvars_by_fun_idx.insert(
                 *fun_idx,
                 CallableSpecializationRequirements {
                     tyvars: bound_tyvars,
                     requires_concrete,
+                    concrete_tyvars,
                 },
             );
         }
@@ -888,6 +916,7 @@ impl Checker {
             TypedInner::Bind(_, rhs)
             | TypedInner::ApplyPattern { value: rhs, .. }
             | TypedInner::SafeBind(_, rhs, _, _)
+            | TypedInner::ErrorCoerce { value: rhs, .. }
             | TypedInner::Semi(rhs) => self.collect_bound_tyvars_in_node(rhs, ordered, seen),
             TypedInner::DoSafeBind(control) => {
                 self.collect_bound_tyvars_in_node(&control.rhs, ordered, seen);
@@ -951,7 +980,8 @@ impl Checker {
                 self.collect_bound_tyvars_in_node(value, ordered, seen);
                 self.collect_bound_tyvars_in_node(err, ordered, seen);
             }
-            TypedInner::Match(scrutinee, arms) | TypedInner::AssertErrorMatches(scrutinee, arms, _) => {
+            TypedInner::Match(scrutinee, arms)
+            | TypedInner::AssertErrorMatches(scrutinee, arms, _) => {
                 self.collect_bound_tyvars_in_node(scrutinee, ordered, seen);
                 for arm in arms {
                     if let Some(guard) = &arm.guard {
@@ -1057,7 +1087,11 @@ impl Checker {
     fn collect_bound_tyvars_in_ty(&self, ty: &Ty, ordered: &mut Vec<u32>, seen: &mut HashSet<u32>) {
         match self.resolve_ty(ty) {
             Ty::Var(var) => {
-                if !self.tyvar_bound_names(var).is_empty() && seen.insert(var) {
+                if (!self.tyvar_bound_names(var).is_empty()
+                    || self.error_slot_tyvars.contains(&var)
+                    || self.failure_error_slot_tyvars.contains(&var))
+                    && seen.insert(var)
+                {
                     ordered.push(var);
                 }
             }
@@ -1301,6 +1335,7 @@ mod tests {
                                 Vec::new()
                             },
                             requires_concrete: level + 1 == depth,
+                            concrete_tyvars: Vec::new(),
                         },
                     );
                 }
@@ -1401,6 +1436,7 @@ mod tests {
                     CallableSpecializationRequirements {
                         tyvars: if index == 20 { vec![1] } else { Vec::new() },
                         requires_concrete: index == 20,
+                        concrete_tyvars: Vec::new(),
                     },
                 )
             })
@@ -1440,6 +1476,7 @@ mod tests {
                 CallableSpecializationRequirements {
                     tyvars: vec![1],
                     requires_concrete: true,
+                    concrete_tyvars: Vec::new(),
                 },
             ),
             (
@@ -1447,6 +1484,7 @@ mod tests {
                 CallableSpecializationRequirements {
                     tyvars: vec![],
                     requires_concrete: false,
+                    concrete_tyvars: Vec::new(),
                 },
             ),
             (
@@ -1454,6 +1492,7 @@ mod tests {
                 CallableSpecializationRequirements {
                     tyvars: vec![5, 3, 4],
                     requires_concrete: false,
+                    concrete_tyvars: Vec::new(),
                 },
             ),
         ]);
@@ -1465,6 +1504,53 @@ mod tests {
         assert!(requirements[&21].requires_concrete);
         assert_eq!(requirements[&22].tyvars, vec![3, 4, 5]);
         assert_eq!(work.edge_visits, 2);
+    }
+
+    #[test]
+    fn error_identity_requirement_propagates_without_concretizing_payloads() {
+        let checker = Checker::new(TypecheckContext::default());
+        let definitions = HashMap::from([
+            (20, Arc::new(forwarding_def(20, 1, 21, 2, Ty::Var(1)))),
+            (21, Arc::new(forwarding_def(21, 2, 20, 1, Ty::Var(2)))),
+        ]);
+        let summaries = checker
+            .callable_summaries(&definitions, &HashSet::new())
+            .unwrap();
+        let reverse = Checker::reverse_callable_edges(&summaries);
+        let mut requirements = HashMap::from([
+            (
+                20,
+                CallableSpecializationRequirements {
+                    tyvars: vec![1],
+                    requires_concrete: false,
+                    concrete_tyvars: vec![1],
+                },
+            ),
+            (
+                21,
+                CallableSpecializationRequirements {
+                    tyvars: Vec::new(),
+                    requires_concrete: false,
+                    concrete_tyvars: Vec::new(),
+                },
+            ),
+        ]);
+        checker
+            .propagate_callable_specialization_requirements(&summaries, &reverse, &mut requirements)
+            .unwrap();
+        assert_eq!(requirements[&21].concrete_tyvars, vec![2]);
+        assert_eq!(requirements[&21].tyvars, vec![2]);
+        assert!(!requirements[&21].requires_concrete);
+        let mut caller = requirements.remove(&21).unwrap();
+        caller.tyvars.push(3);
+        assert!(Checker::specialization_requirements_are_met(
+            &caller,
+            &HashMap::from([(2, Ty::Error), (3, Ty::Var(99))])
+        ));
+        assert!(!Checker::specialization_requirements_are_met(
+            &caller,
+            &HashMap::from([(2, Ty::Var(98)), (3, Ty::Int)])
+        ));
     }
 
     #[test]
@@ -1507,6 +1593,7 @@ mod tests {
                 CallableSpecializationRequirements {
                     tyvars: vec![],
                     requires_concrete: false,
+                    concrete_tyvars: Vec::new(),
                 },
             ),
             (
@@ -1514,6 +1601,7 @@ mod tests {
                 CallableSpecializationRequirements {
                     tyvars: vec![2],
                     requires_concrete: true,
+                    concrete_tyvars: Vec::new(),
                 },
             ),
         ]);
@@ -1816,6 +1904,7 @@ mod tests {
             CallableSpecializationRequirements {
                 tyvars: vec![1],
                 requires_concrete: true,
+                concrete_tyvars: Vec::new(),
             },
         )]);
         let needs = HashSet::from([20]);
@@ -1871,9 +1960,11 @@ mod tests {
             let error = checker
                 .trait_specialization_arguments(&def, &[1], &mapping)
                 .expect_err("missing or nested unresolved solver substitutions must fail");
-            assert!(error
-                .message
-                .contains("Incomplete trait method substitution"));
+            assert!(
+                error
+                    .message
+                    .contains("Incomplete trait method substitution")
+            );
         }
         let mapping = HashMap::from([(1, Ty::List(Box::new(Ty::Int))), (2, Ty::Bool)]);
         assert_eq!(
@@ -1915,7 +2006,28 @@ mod tests {
     fn specialization_keys_distinguish_structural_type_arguments() {
         let mut checker = Checker::new(TypecheckContext::default());
         checker.env.next_fun_idx = 100;
-        let ty_var = 1;
+        let Ty::Var(ty_var) = checker.env.fresh_tyvar() else {
+            unreachable!("fresh type variable")
+        };
+        let Ty::Var(box_parameter) = checker.env.fresh_tyvar() else {
+            unreachable!("fresh type variable")
+        };
+        checker.env.predeclare_type_def(
+            "Global::Box".into(),
+            TypeKind::Struct,
+            vec!["$T".into()],
+            vec![None],
+        );
+        checker
+            .env
+            .resolve_type_def_signature(
+                "Global::Box",
+                vec![("value".into(), Ty::Var(box_parameter))],
+                vec![box_parameter],
+                HashSet::new(),
+                HashSet::new(),
+            )
+            .expect("Box must have a resolved nominal declaration");
         let original_fun_idx = 20;
         let function_id = resolved_id("id", Some("Global::id"), 10);
         let param_id = resolved_id("x", None, 11);

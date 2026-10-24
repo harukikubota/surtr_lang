@@ -1,0 +1,7 @@
+deferror Failure { "failure" }
+defenumerror OpenFailures { Failure, Other(Error) }
+defenumerror ClosedFailures { Failure }
+defmod Factory {
+  def plain() -> Error { Failure() }
+  def plain_result() -> Result<Int> { Err(Failure()) }
+}

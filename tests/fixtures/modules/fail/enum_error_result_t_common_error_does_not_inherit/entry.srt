@@ -1,0 +1,4 @@
+selected: Result<Int, ClosedFailures> = Err(Failure())
+common: Result<Int> = selected
+wrapped: ResultT<Identity, Int, Error> = ResultT::new(Identity::new(common))
+rejected: Result<Int, ClosedFailures> = Identity::run(ResultT::run(wrapped))

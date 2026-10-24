@@ -380,6 +380,9 @@ impl ScarSession {
             }
         }
         match &mut node.node {
+            TypedInner::ErrorCoerce { value, .. } => {
+                Self::rewrite_fun_indices_in_node(value, rewrites);
+            }
             TypedInner::ErrorConstruct {
                 message,
                 payload,
@@ -749,7 +752,7 @@ impl ScarSession {
                 Self::rewrite_fun_indices_in_ty(ty, rewrites);
                 Self::rewrite_fun_indices_in_match_pattern(inner, rewrites);
             }
-            TypedMatchPattern::As(inner, _) => {
+            TypedMatchPattern::As(inner, _) | TypedMatchPattern::ErrorOther { inner, .. } => {
                 Self::rewrite_fun_indices_in_match_pattern(inner, rewrites)
             }
             TypedMatchPattern::Or(items)

@@ -1,0 +1,2 @@
+namespace Concrete { deferror Failure { "namespaced" } }
+namespace Selected { defenumerror Failures { Concrete::Failure } }

@@ -82,6 +82,8 @@ include 文全体とし、拒否された宣言、または衝突する双方の
 
 - `apply_pattern` の projection は選択済み Pattern 引数だけで検査する。index の範囲・重複・欠番・許可位置と注釈型の不一致は静的エラーとし、runtime `Err` に変換しない。通常 Pattern 不一致には既存の literal / list / constructor 診断を使い、Extractor の `Err` は kind・message・cause・source を保持する。consumer 自体は外側 callable / do へ早期 return しない。
 
+EnumError の所属・Other 不在・不正な Error 位置・外側項目の非網羅性・Trait / derive 禁止は、検査責務を持つフェーズで元の宣言 identity と入力 span を保持して診断する。Other を名前解決失敗や内部不整合の fallback として使わない。拒否は Ariadne の主ラベルで修正箇所と理由を示し、副ラベルで参照した集合型の宣言や所属条件を示す。案内は型定義から導出し、所属・変換・返却・網羅性の拒否テストで両ラベルの指す位置を確認する。
+
 ## 具象エラー定義の総称型
 
 Scar は具象エラー定義の保存 Payload とメッセージコンストラクタ引数にある型変数を、`GenericTypeInErrorDefinition` で拒否する。primary span は型変数の位置とし、container・tuple・関数型の内部も検査する。構造化された policy data は型変数名と宣言位置の区分（`payload` / `message_constructor_input`）を保持する。message は両宣言位置で総称型を使えないことを伝え、具体型の指定と呼び出し元での前処理を help に示す。未知の通常型名は既存診断を維持する。
@@ -358,9 +360,9 @@ cargo nextest run --workspace
 
 ### Result / MatchResult の型表示
 
-値の型名、期待型、実際の型、関連する source fact は `Result<T>` / `MatchResult<T>` を使い、内部の Error 型を第二型引数として表示しない。変数、引数、field、関数型、入れ子の型注釈でも型定義どおりの型引数数を受理する。`Result<T, NoneError>` の例外は設けない。
+値の型名、期待型、実際の型、関連する source fact では、共通 Error を持つ Result を `Result<T>`、EnumError を持つ Result を `Result<T, E>` と表示する。関数型と入れ子でも実際の E を保持する。`Result<T>` の省略された Error 位置は内部で共通 Error を導出する。ソース上の `Result<T, _>` と `ResultT<M, T, _>` は拒否し、明示した `_` を診断の修正箇所として示す。MatchResult の実型表示は `MatchResult<T>` に揃える。
 
-第二引数の補助表記は、関数定義の直接の戻り値と named `defextractor` 定義の直接の戻り値に限る。REPL コマンドによる定義の照会では、定義に記載された Error 位置を保持する。省略された Error を補わない。補完候補とシグネチャヘルプには値の型と同じ正規表記を使う。
+具象 Error 名による説明用の第二引数は、関数定義の直接の Result 戻り値に限る。named `defextractor` の直接の戻り値では `MatchResult<T, Error>` も記述できる。REPL コマンドによる定義の照会では、定義に記載された Error 位置を保持する。省略された Error を補わない。補完候補とシグネチャヘルプには値の型と同じ正規表記を使う。
 
 ### MatchResult の Extractor 境界
 

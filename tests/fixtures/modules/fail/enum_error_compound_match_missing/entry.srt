@@ -1,0 +1,3 @@
+first: ClosedFailures = FirstFailure()
+second: ClosedFailures = SecondFailure()
+print(to_string(match match True { True => first, False => second } { FirstFailure => 1 }))

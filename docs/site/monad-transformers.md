@@ -35,8 +35,8 @@ Transformerは通常のnominal型なので、field、関数引数、戻り値、
 
 ### 失敗を保持するMonadFail
 
-`ResultT<M, A>`と`EitherT<Error, M, A>`は、Errorを内側の`Err`と`Left`に保持します。
-baseがResultでも、`fail`の結果はそれぞれ`Ok(Err(error))`と`Ok(Left(error))`です。
+`ResultT<M, A, E>`と`EitherT<Error, M, A>`は、Errorを内側の`Err`と`Left`に保持します。
+EがErrorまたはOtherを持つEnumErrorのときにfailを利用できます。OtherのないEnumErrorへのfailはコンパイルエラーです。baseがResultでも、`fail`の結果はそれぞれ`Ok(Err(error))`と`Ok(Left(error))`です。
 `ReaderT`と`StateT`は、baseがMonadFailを実装するとき、run時にbaseの`fail`を返します。
 StateTの失敗は成功値と状態のpairを生成しません。
 
@@ -208,15 +208,17 @@ baseの空List `[]`ではありません。`OptionT::choose`はbase由来のmult
 
 ## ResultT
 
-`ResultT<M, A>`は`M<Result<A>>`を保持するstructです。baseにはMonadが必要です。
+`ResultT<M, A, E>`は`M<Result<A, E>>`を保持するstructです。EにはErrorまたはEnumErrorを指定し、baseにはMonadが必要です。旧二引数の型注釈は拒否します。共通 Error を使う場合は `ResultT<M, A, Error>` と明示します。Error 位置に `_` は書けません。
 
 | API | 入力と結果 |
 |---|---|
-| `new` | `M<Result<A>> -> ResultT<M, A>` |
-| `run` | `ResultT<M, A> -> M<Result<A>>` |
-| `ok` | `A -> ResultT<M, A>` |
-| `err` | `Error -> ResultT<M, A>` |
-| `from_result` | `Result<A> -> ResultT<M, A>` |
+| `new` | `M<Result<A>> -> ResultT<M, A, Error>` |
+| `run` | `ResultT<M, A, Error> -> M<Result<A>>` |
+| `ok` | `A -> ResultT<M, A, Error>` |
+| `err` | `Error -> ResultT<M, A, Error>` |
+| `from_result` | `Result<A> -> ResultT<M, A, Error>` |
+
+`new` と `run` も標準関数として共通 Error を扱います。明示した EnumError の保存型とは区別し、集合型を保って取り出す利用者関数では `value.inner` を使います。
 
 `ok`、`err`、`from_result`はbaseのpureで値を包みます。FunctorはOkだけを変換し、
 Monadは内側のErrで後続を実行しません。MonadTのliftはbaseのpayloadをOkに写します。

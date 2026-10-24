@@ -196,6 +196,7 @@ impl Checker {
             TypedInner::Bind(_, rhs)
             | TypedInner::ApplyPattern { value: rhs, .. }
             | TypedInner::SafeBind(_, rhs, _, _)
+            | TypedInner::ErrorCoerce { value: rhs, .. }
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _)
             | TypedInner::EagerBoundary(rhs) => recurse(rhs),
@@ -213,14 +214,17 @@ impl Checker {
             TypedInner::If(condition, then_branch, else_branch) => recurse(condition)
                 .or_else(|| recurse(then_branch))
                 .or_else(|| else_branch.as_deref().and_then(recurse)),
-            TypedInner::Match(scrutinee, arms) | TypedInner::AssertErrorMatches(scrutinee, arms, _) => recurse(scrutinee).or_else(|| {
-                arms.iter().find_map(|arm| {
-                    arm.guard
-                        .as_ref()
-                        .and_then(recurse)
-                        .or_else(|| recurse(&arm.body))
+            TypedInner::Match(scrutinee, arms)
+            | TypedInner::AssertErrorMatches(scrutinee, arms, _) => {
+                recurse(scrutinee).or_else(|| {
+                    arms.iter().find_map(|arm| {
+                        arm.guard
+                            .as_ref()
+                            .and_then(recurse)
+                            .or_else(|| recurse(&arm.body))
+                    })
                 })
-            }),
+            }
             TypedInner::InterpolatedStr(parts) => parts.iter().find_map(|part| match part {
                 TypedInterpolatedPart::Text(_) => None,
                 TypedInterpolatedPart::Expr(expr) => recurse(expr),
@@ -377,6 +381,7 @@ impl Checker {
             TypedInner::Bind(_, rhs)
             | TypedInner::ApplyPattern { value: rhs, .. }
             | TypedInner::SafeBind(_, rhs, _, _)
+            | TypedInner::ErrorCoerce { value: rhs, .. }
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _) => self.find_typed_node(rhs, inspect),
             TypedInner::DoSafeBind(control) => {
@@ -407,7 +412,8 @@ impl Checker {
             TypedInner::Cause(value, err) => self
                 .find_typed_node(value, inspect)
                 .or_else(|| self.find_typed_node(err, inspect)),
-            TypedInner::Match(scrutinee, arms) | TypedInner::AssertErrorMatches(scrutinee, arms, _) => {
+            TypedInner::Match(scrutinee, arms)
+            | TypedInner::AssertErrorMatches(scrutinee, arms, _) => {
                 self.find_typed_node(scrutinee, inspect).or_else(|| {
                     arms.iter().find_map(|arm| {
                         arm.guard
@@ -549,6 +555,7 @@ impl Checker {
                 TypedInner::Bind(_, rhs)
                 | TypedInner::ApplyPattern { value: rhs, .. }
                 | TypedInner::SafeBind(_, rhs, _, _)
+                | TypedInner::ErrorCoerce { value: rhs, .. }
                 | TypedInner::Semi(rhs)
                 | TypedInner::FieldAccess(rhs, _)
                 | TypedInner::EagerBoundary(rhs) => collect(rhs, obligations),
@@ -567,7 +574,8 @@ impl Checker {
                         collect(branch, obligations);
                     }
                 }
-                TypedInner::Match(scrutinee, arms) | TypedInner::AssertErrorMatches(scrutinee, arms, _) => {
+                TypedInner::Match(scrutinee, arms)
+                | TypedInner::AssertErrorMatches(scrutinee, arms, _) => {
                     collect(scrutinee, obligations);
                     for arm in arms {
                         if let Some(guard) = &arm.guard {
@@ -807,6 +815,7 @@ impl Checker {
             TypedInner::Bind(_, rhs)
             | TypedInner::ApplyPattern { value: rhs, .. }
             | TypedInner::SafeBind(_, rhs, _, _)
+            | TypedInner::ErrorCoerce { value: rhs, .. }
             | TypedInner::Semi(rhs)
             | TypedInner::EagerBoundary(rhs)
             | TypedInner::FieldAccess(rhs, _) => visit(rhs),
@@ -824,14 +833,17 @@ impl Checker {
             TypedInner::If(cond, then_branch, else_branch) => visit(cond)
                 .or_else(|| visit(then_branch))
                 .or_else(|| else_branch.as_deref().and_then(visit)),
-            TypedInner::Match(scrutinee, arms) | TypedInner::AssertErrorMatches(scrutinee, arms, _) => visit(scrutinee).or_else(|| {
-                arms.iter().find_map(|arm| {
-                    arm.guard
-                        .as_ref()
-                        .and_then(visit)
-                        .or_else(|| visit(&arm.body))
+            TypedInner::Match(scrutinee, arms)
+            | TypedInner::AssertErrorMatches(scrutinee, arms, _) => {
+                visit(scrutinee).or_else(|| {
+                    arms.iter().find_map(|arm| {
+                        arm.guard
+                            .as_ref()
+                            .and_then(visit)
+                            .or_else(|| visit(&arm.body))
+                    })
                 })
-            }),
+            }
             TypedInner::InterpolatedStr(parts) => parts.iter().find_map(|part| match part {
                 TypedInterpolatedPart::Text(_) => None,
                 TypedInterpolatedPart::Expr(expr) => visit(expr),
@@ -958,7 +970,9 @@ impl Checker {
                     TraitDispatch::Pending | TraitDispatch::Selected(_)
                 )
             }
-            TypedMatchPattern::Located(_, _, inner) | TypedMatchPattern::As(inner, _) => {
+            TypedMatchPattern::Located(_, _, inner)
+            | TypedMatchPattern::ErrorOther { inner, .. }
+            | TypedMatchPattern::As(inner, _) => {
                 Self::typed_match_pattern_has_pending_dispatch(inner)
             }
             TypedMatchPattern::Or(items)
@@ -1065,7 +1079,9 @@ impl Checker {
                     }
                     || Self::typed_node_has_pending_trait_call(&control.continuation)
             }
-            TypedInner::Semi(rhs) => Self::typed_node_has_pending_trait_call(rhs),
+            TypedInner::ErrorCoerce { value: rhs, .. } | TypedInner::Semi(rhs) => {
+                Self::typed_node_has_pending_trait_call(rhs)
+            }
             TypedInner::BinOp(_, left, right)
             | TypedInner::Pipe(left, right)
             | TypedInner::Compose(_, left, right) => {
@@ -1108,7 +1124,8 @@ impl Checker {
                 Self::typed_node_has_pending_trait_call(value)
                     || Self::typed_node_has_pending_trait_call(err)
             }
-            TypedInner::Match(scrutinee, arms) | TypedInner::AssertErrorMatches(scrutinee, arms, _) => {
+            TypedInner::Match(scrutinee, arms)
+            | TypedInner::AssertErrorMatches(scrutinee, arms, _) => {
                 Self::typed_node_has_pending_trait_call(scrutinee)
                     || arms.iter().any(|arm| {
                         Self::typed_match_pattern_has_pending_dispatch(&arm.pattern)

@@ -1,0 +1,2 @@
+phase: typecheck
+contains: forbidden by the type's trait policy

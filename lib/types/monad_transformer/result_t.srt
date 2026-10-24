@@ -1,12 +1,18 @@
 @doc """
 A base Monad computation producing a Result. Inner errors remain in Result;
 base failures remain in the base carrier. No implicit unwrap is performed.
+`ResultT<$M, $A, $E>` stores `$M<Result<$A, $E>>`; E must be Error or an EnumError.
+The third type argument is required; use Error for the common error type.
+An explicit `_` is not permitted in this Error position.
+Standard functions, including `new` and `run`, use common Error contracts.
+Explicit EnumError storage belongs to the field type and user functions that
+name that error type in their signatures.
 """
-defstruct ResultT<$M, $A>
+defstruct ResultT<$M, $A, $E>
 where
   $M: Monad
 {
-  inner: $M<Result<$A>>,
+  inner: $M<Result<$A, $E>>,
 }
 
 impl ResultT {
@@ -18,7 +24,7 @@ impl ResultT {
   xldr(2)> Identity::run(ResultT::run(value))
   Ok(3)
   """
-  def new(inner: $M<Result<$A>>) -> ResultT<$M, $A>
+  def new(inner: $M<Result<$A>>) -> ResultT<$M, $A, Error>
   where
     $M: Monad
   {
@@ -32,7 +38,7 @@ impl ResultT {
   xldr(1)> Identity::run(ResultT::run(ResultT::ok::<Identity>(3)))
   Ok(3)
   """
-  def run(self: ResultT<$M, $A>) -> $M<Result<$A>>
+  def run(self: ResultT<$M, $A, Error>) -> $M<Result<$A>>
   where
     $M: Monad
   {
@@ -46,7 +52,7 @@ impl ResultT {
   xldr(1)> Identity::run(ResultT::run(ResultT::ok::<Identity>(3)))
   Ok(3)
   """
-  def ok::<$M>(value: $A) -> ResultT<$M, $A>
+  def ok::<$M>(value: $A) -> ResultT<$M, $A, Error>
   where
     $M: Monad
   {
@@ -61,7 +67,7 @@ impl ResultT {
   xldr(2)> Result::is_err(Identity::run(ResultT::run(value)))
   True
   """
-  def err::<$M, $A>(error: Error) -> ResultT<$M, $A>
+  def err::<$M, $A>(error: Error) -> ResultT<$M, $A, Error>
   where
     $M: Monad
   {
@@ -75,7 +81,7 @@ impl ResultT {
   xldr(1)> Identity::run(ResultT::run(ResultT::from_result::<Identity>(Ok(3))))
   Ok(3)
   """
-  def from_result::<$M>(value: Result<$A>) -> ResultT<$M, $A>
+  def from_result::<$M>(value: Result<$A>) -> ResultT<$M, $A, Error>
   where
     $M: Monad
   {
@@ -83,27 +89,27 @@ impl ResultT {
   }
 }
 
-impl Functor for ResultT<$M, $T>
+impl Functor for ResultT<$M, $T, Error>
 where
   $M: Monad
   $T: Functor.$A
 {
-  def fmap(self: ResultT<$M, $A>, mapper: ($A -> $B)) -> ResultT<$M, $B> {
+  def fmap(self: ResultT<$M, $A, Error>, mapper: ($A -> $B)) -> ResultT<$M, $B, Error> {
     ResultT::new(Functor::fmap(self.inner, &Functor::fmap(&1, mapper)))
   }
 }
 
-impl Applicative for ResultT<$M, $T>
+impl Applicative for ResultT<$M, $T, Error>
 where
   $M: Monad
 {
-  def pure::<ResultT<$M, $T>>(value: $A) -> ResultT<$M, $A> {
+  def pure::<ResultT<$M, $T, Error>>(value: $A) -> ResultT<$M, $A, Error> {
     ResultT::ok(value)
   }
 
   # The base sequences mapper first. An inner Err skips the value computation;
   # ordinary arguments to ap still evaluate strictly before this function.
-  def ap(mapper: ResultT<$M, ($A -> $B)>, value: ResultT<$M, $A>) -> ResultT<$M, $B> {
+  def ap(mapper: ResultT<$M, ($A -> $B), Error>, value: ResultT<$M, $A, Error>) -> ResultT<$M, $B, Error> {
     ResultT::new(Monad::bind(mapper.inner, {|inner_mapper|
       match inner_mapper {
         Ok(function) => Functor::fmap(value.inner, &Functor::fmap(&1, function)),
@@ -113,15 +119,15 @@ where
   }
 }
 
-impl Monad for ResultT<$M, $T>
+impl Monad for ResultT<$M, $T, Error>
 where
   $M: Monad
 {
-  def return::<ResultT<$M, $T>>(value: $A) -> ResultT<$M, $A> {
+  def return::<ResultT<$M, $T, Error>>(value: $A) -> ResultT<$M, $A, Error> {
     ResultT::ok(value)
   }
 
-  def bind(self: ResultT<$M, $A>, mapper: ($A -> ResultT<$M, $B>)) -> ResultT<$M, $B> {
+  def bind(self: ResultT<$M, $A, Error>, mapper: ($A -> ResultT<$M, $B, Error>)) -> ResultT<$M, $B, Error> {
     ResultT::new(Monad::bind(self.inner, {|result|
       match result {
         Ok(value) => mapper(value).inner,
@@ -131,25 +137,25 @@ where
   }
 }
 
-impl MonadT<$M> for ResultT<$M, $T>
+impl MonadT<$M> for ResultT<$M, $T, Error>
 where
   $M: Monad
 {
-  def lift::<ResultT<$M, $T>>(value: $M<$A>) -> ResultT<$M, $A> {
+  def lift::<ResultT<$M, $T, Error>>(value: $M<$A>) -> ResultT<$M, $A, Error> {
     ResultT::new(Functor::fmap(value, {|item| Ok(item)}))
   }
 }
 
-impl MonadFail for ResultT<$M, $T>
+impl MonadFail for ResultT<$M, $T, Error>
 where
   $M: Monad
 {
-  def fail::<ResultT<$M, $T>>(error: Error) -> ResultT<$M, $T> {
+  def fail::<ResultT<$M, $T, Error>>(error: Error) -> ResultT<$M, $T, Error> {
     ResultT::err(error)
   }
 }
 
-impl Convert<EitherT<Error, $M, $A>> for ResultT<$M, $A>
+impl Convert<EitherT<Error, $M, $A>> for ResultT<$M, $A, Error>
 where
   $M: Monad
 {

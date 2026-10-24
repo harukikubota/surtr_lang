@@ -173,7 +173,11 @@ impl Checker {
                 Resolved::EnumDef(_, id, type_params, _, attrs) => Some((
                     &id.name,
                     &id.span,
-                    TypeKind::Enum,
+                    if attrs.enum_error {
+                        TypeKind::EnumError
+                    } else {
+                        TypeKind::Enum
+                    },
                     type_params
                         .iter()
                         .map(|param| param.name.clone())
@@ -241,6 +245,28 @@ impl Checker {
                 .lookup_type_def_mut(name)
                 .expect("reserved nominal identity remains registered")
                 .type_param_vars = formal_variables;
+            // Error collection identity and membership are declaration headers.
+            // Every schema in the stage must see them before reading any field.
+            if let Resolved::EnumDef(_, id, _, variants, attrs) = stmt {
+                if attrs.enum_error {
+                    self.env
+                        .enum_error_declaration_spans
+                        .insert(id.name.clone(), id.span.clone());
+                    self.env.enum_error_members.insert(
+                        id.name.clone(),
+                        variants
+                            .iter()
+                            .filter_map(|variant| variant.error_identity.clone())
+                            .collect(),
+                    );
+                    if variants
+                        .iter()
+                        .any(|variant| variant.error_identity.is_none())
+                    {
+                        self.env.enum_error_other.insert(id.name.clone());
+                    }
+                }
+            }
         }
 
         self.ensure_no_type_cycles(stmts)?;
@@ -264,7 +290,7 @@ impl Checker {
                 if let Some(bound) = bound {
                     self.register_tyvar_bound(*variable, bound);
                     if let Some(trait_key) = self.declaration_constructor_trait_key(bound) {
-                        self.constructor_witness_traits.insert(*variable, trait_key);
+                        self.register_constructor_witness_trait(*variable, trait_key);
                     }
                 }
             }
@@ -586,6 +612,8 @@ impl Checker {
                             _ => self.env.reserve_tag(),
                         };
                         let info = crate::env::EnumVariantInfo {
+                            enum_error: attrs.enum_error,
+                            error_identity: variant.error_identity.clone(),
                             special_variant,
                             constructor_name: variant.id.name.clone(),
                             short_name,
@@ -619,6 +647,10 @@ impl Checker {
             }
         }
 
+        if let Some(statement) = stmts.first() {
+            let span = self.resolved_span(statement).clone();
+            self.refresh_nominal_error_slot_roles(&span)?;
+        }
         Ok(())
     }
 
@@ -935,7 +967,7 @@ impl Checker {
                 .collect::<HashMap<_, _>>();
             for (variable, (_, bound)) in &parameters {
                 if let Some(trait_key) = self.declaration_constructor_trait_key(bound) {
-                    self.constructor_witness_traits.insert(*variable, trait_key);
+                    self.register_constructor_witness_trait(*variable, trait_key);
                 }
             }
             for (_, field) in &def.fields {
@@ -947,7 +979,7 @@ impl Checker {
                 )?;
                 self.validate_nominal_type_well_formed(field, &span, false)?;
             }
-            if matches!(def.kind, TypeKind::Enum) {
+            if matches!(def.kind, TypeKind::Enum | TypeKind::EnumError) {
                 if let Some(variants) = self.lookup_enum_variants_of(&name).cloned() {
                     for variant in variants {
                         for payload in &variant.payload {

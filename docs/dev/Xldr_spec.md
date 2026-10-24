@@ -92,7 +92,9 @@ aggregate であり、Eldr の runtime append policy とは別責務である。
 - internal module path は `Global::Name` または `Namespace::Name` の canonical string を使うが、user-facing 表示では `Global::` を省略する
 - 標準定義の semantic cache は、標準ソース、builtin metadata、semantic schema に加え、コンパイル時に確定した compiler source / build identity を鍵に含める。実装が変われば古い snapshot を拒否し、現在のコンパイラで再構築する
 - Trait も所属 namespace の canonical identity を保持する。callable の表示では所属 path を保ち、暗黙の `Global::` を省略する。`Global::Function` は `Function`、`Global::Add` は `Add`、`Math::Add` は `Math::Add` と表示する
-- `Result<T>` を正規表記とし、`Result<T, E>` は関数定義の直接の戻り値位置だけで許可するドキュメント用の補助表記とする。指定したエラー名の存在と記述位置は検査するが、返す kind の静的制限・網羅検査は行わない。値の推論型と callable 値の signature では `Result<T>` / `MatchResult<T>` と表示し、内部のエラー型を型引数として表示しない。束縛、型照会と入れ子の型にも適用する。`:sig` / `:doc` などの REPL コマンドによる宣言シグネチャの表示では、関数宣言の戻り値に明示した `Result<T, E>` と named `defextractor` の戻り値に明示した `MatchResult<T, Error>` を保持する。`ExtractorClosure` の型注釈では `MatchResult<T>` のみを受理する。定義で省略された Error 位置を補わない。値の型エラー診断と補完候補・シグネチャヘルプにも正規表記を使う。ExtractorClosure の値表示は束縛専用の特例を設けず、Eldr の共通 inspect 処理を使う。
+- 共通 Error の Result は `Result<T>`、EnumError を持つ Result は `Result<T, E>` と表示し、関数型と入れ子でも集合型を保持する。具象 Error 名を第二引数に書けるのは関数定義の直接の戻り値だけであり、説明用 metadata として存在を検査するが kind の制限・網羅性は検査しない。
+- Error 位置の宣言表記を保持するのは `:sig` / `:doc` による定義照会である。binding の型照会、補完候補、signature help には実型の表記を使う。戻り値に EnumError があれば `Result<T, E>` と明示し、具象 Error 名の説明用 metadata や Error 位置の省略は共通 Error として `Result<T>` に揃える。MatchResult も共通 Error を省略した `MatchResult<T>` と表示する。宣言種別と実型を使って区別し、表示文字列から推測しない。未確定の型変数 E と ResultT の三つの型引数は保持する。
+- named `defextractor` の直接の戻り値でのみ `MatchResult<T, Error>` を許可する。ExtractorClosure の値表示には Eldr の共通 inspect 処理を使う。
 - constructor capture は `Capture` origin、canonical constructor 名、capture site で具体化した signature を保持し、bare capture と partial capture、再 capture、nominal/container 内の表示で同じ metadata を使う
 - `Ok` / `Err` / `True` / `False` は通常 Enum 宣言へ解決する。`:sig` / `:doc`、constructor capture の表示・定義参照は canonical 名を使う。chunk 追加・rollback・bytecode 復元後も既存 ID を保持し、新規 compiler symbol と callable は各 allocator の追加順で割り当てる。`Ok` / `Err` / `print` の固定 ID 枠は設けない。
 - REPL user chunk は標準定義ソース読み込み後に `SourceKind::ReplChunk` として追加される

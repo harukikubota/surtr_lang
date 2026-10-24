@@ -1,0 +1,6 @@
+selected: Result<Int, Failures> = Err(SavedFailure(5))
+base = ResultT::ok::<Identity>(0)
+value: ResultT<Identity, Int, Failures> =? Facet::set(ResultT.inner, base, Identity::new(selected))
+retained = Stored::retain(value)
+restored: Result<Int, Failures> = Identity::run(Stored::inner(retained))
+print(match restored { Ok(_) => "wrong", Err(error) => Error::message(error) })

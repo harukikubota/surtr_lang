@@ -94,6 +94,57 @@ impl Checker {
         (inputs.len() == 1).then(|| expected.clone())
     }
 
+    pub(super) fn error_positions_agree(&self, expected: &Ty, actual: &Ty) -> bool {
+        let expected = self.resolve_ty(expected);
+        let actual = self.resolve_ty(actual);
+        let inferable =
+            |ty: &Ty| matches!(ty, Ty::Var(variable) if !self.rigid_tyvars.contains(variable));
+        if self.is_error_slot_ty(&expected) && self.is_error_slot_ty(&actual) {
+            return inferable(&expected) || inferable(&actual) || expected == actual;
+        }
+        let function = |ty: Ty| match ty {
+            Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
+                Ty::Func(params, ret)
+            }
+            other => other,
+        };
+        let expected = function(expected);
+        let actual = function(actual);
+        match (&expected, &actual) {
+            (Ty::Result(a, e), Ty::Result(b, f)) => {
+                self.error_positions_agree(a, b) && self.error_positions_agree(e, f)
+            }
+            (Ty::List(a), Ty::List(b))
+            | (Ty::Lazy(a), Ty::Lazy(b))
+            | (Ty::MatchResult(a), Ty::MatchResult(b))
+            | (Ty::ExtractorClosure(a), Ty::ExtractorClosure(b))
+            | (Ty::Pid(a), Ty::Pid(b)) => self.error_positions_agree(a, b),
+            (Ty::Tuple(a), Ty::Tuple(b))
+            | (Ty::Enum(_, a), Ty::Enum(_, b))
+            | (Ty::SelfApp(a), Ty::SelfApp(b)) => a
+                .iter()
+                .zip(b)
+                .all(|(a, b)| self.error_positions_agree(a, b)),
+            (Ty::Struct(_, a), Ty::Struct(_, b)) | (Ty::Record(_, a), Ty::Record(_, b)) => a
+                .arguments
+                .iter()
+                .zip(&b.arguments)
+                .all(|(a, b)| self.error_positions_agree(a, b)),
+            (Ty::Func(a, r), Ty::Func(b, s)) => {
+                a.iter()
+                    .zip(b)
+                    .all(|(a, b)| self.error_positions_agree(a, b))
+                    && self.error_positions_agree(r, s)
+            }
+            (Ty::Facet(_, s, f, u, v), Ty::Facet(_, t, g, w, x)) => {
+                [(&**s, &**t), (&**f, &**g), (&**u, &**w), (&**v, &**x)]
+                    .into_iter()
+                    .all(|(a, b)| self.error_positions_agree(a, b))
+            }
+            _ => true,
+        }
+    }
+
     pub(super) fn types_compatible(&mut self, expected: &Ty, got: &Ty) -> Result<bool, TypeError> {
         let profile = self.profiler.start();
         let result = (|| -> Result<bool, TypeError> {
@@ -111,6 +162,17 @@ impl Checker {
             let got = self.resolve_ty(got);
             let result = match (&expected, &got) {
                 (Ty::Hole, Ty::Hole) => true,
+                (Ty::Error, Ty::Var(var))
+                    if self.error_slot_tyvars.contains(var) && self.rigid_tyvars.contains(var) =>
+                {
+                    true
+                }
+                (Ty::Var(var), Ty::Error)
+                    if self.error_slot_tyvars.contains(var) && self.rigid_tyvars.contains(var) =>
+                {
+                    true
+                }
+
                 (Ty::Var(left), Ty::Var(right)) => match (
                     self.rigid_tyvars.contains(left),
                     self.rigid_tyvars.contains(right),
@@ -129,6 +191,16 @@ impl Checker {
                 | (Ty::Bool, Ty::Bool)
                 | (Ty::Unit, Ty::Unit)
                 | (Ty::Error, Ty::Error) => true,
+                (Ty::Error, ty) if self.enum_error_name(ty).is_some() => true,
+                (ty, got)
+                    if self.enum_error_name(ty).is_some()
+                        && self.is_error_value_ty(got)
+                        && ty != got =>
+                {
+                    self.env
+                        .enum_error_other
+                        .contains(&self.enum_error_name(ty).expect("guarded EnumError"))
+                }
                 (Ty::MatchResult(a), Ty::MatchResult(b))
                 | (Ty::ExtractorClosure(a), Ty::ExtractorClosure(b))
                 | (Ty::List(a), Ty::List(b)) => self.types_compatible(a, b)?,
@@ -247,10 +319,18 @@ impl Checker {
                     let (b_params, b_ret) =
                         got_function.unwrap_or((b_params.as_slice(), b_ret.as_ref()));
                     a_params.len() == b_params.len()
+                        && self.error_positions_agree(
+                            &Ty::Func(a_params.to_vec(), Box::new(a_ret.clone())),
+                            &Ty::Func(b_params.to_vec(), Box::new(b_ret.clone())),
+                        )
                         && try_all(a_params.iter().zip(b_params.iter()), |(a, b)| {
                             self.types_compatible(a, b)
                         })?
                         && self.types_compatible(a_ret, b_ret)?
+                        && self.error_positions_agree(
+                            &Ty::Func(a_params.to_vec(), Box::new(a_ret.clone())),
+                            &Ty::Func(b_params.to_vec(), Box::new(b_ret.clone())),
+                        )
                 }
                 (Ty::Result(ok1, err1), Ty::Result(ok2, err2)) => {
                     self.types_compatible(ok1, ok2)? && self.types_compatible(err1, err2)?
@@ -350,6 +430,9 @@ impl Checker {
         let profile = self.profiler.start();
         let result = (|| -> Result<bool, TypeError> {
             let ty = self.resolve_ty(ty);
+            if !self.validate_error_slot_binding(var, &ty)? {
+                return Ok(false);
+            }
             if self.process_marker_tyvars.contains(&var)
                 && !matches!(ty, Ty::Var(_) | Ty::ProcessMarker(_))
             {
@@ -528,6 +611,11 @@ impl Checker {
             return Ok(());
         }
 
+        for (variable, argument) in def.type_param_vars.iter().zip(arguments) {
+            if self.error_slot_tyvars.contains(variable) {
+                self.require_error_slot(argument, span)?;
+            }
+        }
         for ((parameter, bound), argument) in def
             .type_params
             .iter()
@@ -916,6 +1004,7 @@ impl Checker {
                 } else {
                     let instantiated = self.env.fresh_tyvar();
                     if let Ty::Var(new_var) = instantiated {
+                        self.inherit_error_slot_variable(*var, new_var);
                         let bounds = self.tyvar_bound_names(*var);
                         self.register_tyvar_bounds(new_var, &bounds);
                         if self.process_marker_tyvars.contains(var) {
@@ -1202,6 +1291,8 @@ impl Checker {
         let profile = self.profiler.start();
         let mut fresh = HashMap::new();
         let instantiated = crate::env::EnumVariantInfo {
+            enum_error: variant.enum_error,
+            error_identity: variant.error_identity.clone(),
             special_variant: variant.special_variant,
             constructor_name: variant.constructor_name.clone(),
             short_name: variant.short_name.clone(),

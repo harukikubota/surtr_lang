@@ -1,0 +1,2 @@
+source: OpenFailures = AlphaFailure(1)
+rejected: ClosedFailures = source

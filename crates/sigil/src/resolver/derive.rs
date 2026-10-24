@@ -10,6 +10,17 @@ pub(super) fn expand_derive_annotations(stmts: Vec<Ast>) -> Result<Vec<Ast>, Res
     let mut expanded = Vec::with_capacity(stmts.len());
     for stmt in stmts {
         let (base, derives) = match &stmt {
+            Ast::EnumDef(span, _, _, _, attrs) if attrs.enum_error && !attrs.derives.is_empty() => {
+                return Err(ResolveError {
+                    message: "DeriveNotAllowed: @derive is not allowed on EnumError".into(),
+                    span: span.clone(),
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::Declaration,
+                        subject: None,
+                    },
+                    related_labels: Vec::new(),
+                });
+            }
             Ast::StructDef(_, _, _, _, attrs)
             | Ast::RecordDef(_, _, _, attrs)
             | Ast::EnumDef(_, _, _, _, attrs) => (stmt.clone(), attrs.derives.clone()),

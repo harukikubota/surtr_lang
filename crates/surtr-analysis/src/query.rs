@@ -178,11 +178,17 @@ pub fn parse_binding_query_type(input: &str) -> Option<AstTy> {
 fn normalize_binding_query_type(ty: &AstTy) -> AstTy {
     match ty {
         AstTy::Named(_, _) | AstTy::ImplTrait(_, _) => ty.clone(),
-        AstTy::Generic(span, name, args) if name == "Result" && args.len() == 2 => AstTy::Generic(
-            span.clone(),
-            name.clone(),
-            vec![normalize_binding_query_type(&args[0])],
-        ),
+        AstTy::Generic(span, name, args)
+            if matches!(name.as_str(), "Result" | "Global::Result")
+                && args.len() == 2
+                && matches!(&args[1], AstTy::Named(_, error) if is_common_error_position(error)) =>
+        {
+            AstTy::Generic(
+                span.clone(),
+                name.clone(),
+                vec![normalize_binding_query_type(&args[0])],
+            )
+        }
         AstTy::Generic(span, name, args) => AstTy::Generic(
             span.clone(),
             name.clone(),
@@ -200,12 +206,31 @@ fn normalize_binding_query_type(ty: &AstTy) -> AstTy {
     }
 }
 
-/// Render completion signatures without declaration-only error contracts.
-/// The stored declaration text remains available to REPL commands.
+#[derive(Clone, Copy)]
+enum CompletionErrorPosition {
+    Result,
+    MatchResult,
+}
+
+fn is_common_error_position(name: &str) -> bool {
+    matches!(name, "Error" | "Global::Error")
+}
+
+/// Render runtime Error positions for completion, preserving named Result sets.
+/// Without declaration context, a named Result Error position is retained.
 pub fn format_completion_signature(signature: &str) -> String {
+    format_completion_signature_with_error_classifier(signature, |_| false)
+}
+
+/// Declaration-only concrete Error metadata is erased in completion snapshots.
+/// The caller supplies canonical declaration classification; names are not guessed.
+pub fn format_completion_signature_with_error_classifier(
+    signature: &str,
+    is_concrete_error: impl Fn(&str) -> bool,
+) -> String {
     let chars = signature.chars().collect::<Vec<_>>();
     let mut hidden = vec![false; chars.len()];
-    let mut delimiters: Vec<(char, bool, Option<usize>)> = Vec::new();
+    let mut delimiters: Vec<(char, Option<CompletionErrorPosition>, Option<usize>)> = Vec::new();
     for (index, &ch) in chars.iter().enumerate() {
         match ch {
             '<' => {
@@ -214,22 +239,44 @@ pub fn format_completion_signature(signature: &str) -> String {
                     end -= 1;
                 }
                 let mut start = end;
-                while start > 0 && (chars[start - 1].is_alphanumeric() || chars[start - 1] == '_') {
-                    start -= 1;
+                while start > 0 {
+                    if chars[start - 1].is_alphanumeric() || chars[start - 1] == '_' {
+                        start -= 1;
+                    } else if start >= 2 && chars[start - 2..start] == [':', ':'] {
+                        start -= 2;
+                    } else {
+                        break;
+                    }
                 }
                 let name = chars[start..end].iter().collect::<String>();
-                delimiters.push(('<', matches!(name.as_str(), "Result" | "MatchResult"), None));
+                delimiters.push((
+                    '<',
+                    match name.as_str() {
+                        "Result" | "Global::Result" => Some(CompletionErrorPosition::Result),
+                        "MatchResult" | "Global::MatchResult" => {
+                            Some(CompletionErrorPosition::MatchResult)
+                        }
+                        _ => None,
+                    },
+                    None,
+                ));
             }
-            '(' | '[' | '{' => delimiters.push((ch, false, None)),
+            '(' | '[' | '{' => delimiters.push((ch, None, None)),
             ',' => {
-                if let Some(('<', true, error_start)) = delimiters.last_mut() {
+                if let Some(('<', Some(_), error_start)) = delimiters.last_mut() {
                     error_start.get_or_insert(index);
                 }
             }
             '>' if index == 0 || chars[index - 1] != '-' => {
                 if matches!(delimiters.last(), Some(('<', _, _))) {
-                    if let Some(('<', true, Some(start))) = delimiters.pop() {
-                        hidden[start..index].fill(true);
+                    if let Some(('<', Some(position), Some(start))) = delimiters.pop() {
+                        let error = chars[start + 1..index].iter().collect::<String>();
+                        if matches!(position, CompletionErrorPosition::MatchResult)
+                            || is_common_error_position(error.trim())
+                            || is_concrete_error(error.trim())
+                        {
+                            hidden[start..index].fill(true);
+                        }
                     }
                 }
             }
@@ -348,14 +395,165 @@ mod tests {
     #[test]
     fn completion_signature_normalizes_nested_carriers_without_changing_declarations() {
         for (source, expected) in [
-            ("read(value: Int) -> Result<Int, NoneError>", "read(value: Int) -> Result<Int>"),
-            ("extract(value: Int) -> MatchResult<(Int, Int), Error>", "extract(value: Int) -> MatchResult<(Int, Int)>"),
-            ("make() -> Result<(Int -> Result<String, Error>), NoneError>", "make() -> Result<(Int -> Result<String>)>"),
-            ("型(value: List<Result<Int, Error>>) -> ExtractorClosure<(Int -> MatchResult<(Int, String), Error>)>", "型(value: List<Result<Int>>) -> ExtractorClosure<(Int -> MatchResult<(Int, String)>)>"),
+            (
+                "read(value: Int) -> Result<Int, NoneError>",
+                "read(value: Int) -> Result<Int, NoneError>",
+            ),
+            (
+                "extract(value: Int) -> MatchResult<(Int, Int), Error>",
+                "extract(value: Int) -> MatchResult<(Int, Int)>",
+            ),
+            (
+                "make() -> Result<(Int -> Result<String, Error>), NoneError>",
+                "make() -> Result<(Int -> Result<String>), NoneError>",
+            ),
+            (
+                "型(value: List<Result<Int, Error>>) -> ExtractorClosure<(Int -> MatchResult<(Int, String), Error>)>",
+                "型(value: List<Result<Int>>) -> ExtractorClosure<(Int -> MatchResult<(Int, String)>)>",
+            ),
+            (
+                "keep(value: Result<Int, Failures>) -> Result<String, Namespace::Failures>",
+                "keep(value: Result<Int, Failures>) -> Result<String, Namespace::Failures>",
+            ),
+            (
+                "generic(value: Result<$A, $E>) -> Result<$B, $E>",
+                "generic(value: Result<$A, $E>) -> Result<$B, $E>",
+            ),
+            (
+                "nested() -> Result<Result<Int, Namespace::Failures>, Error>",
+                "nested() -> Result<Result<Int, Namespace::Failures>>",
+            ),
+            (
+                "common(value: Result<Int, Error>) -> Result<Int, Error>",
+                "common(value: Result<Int>) -> Result<Int>",
+            ),
+            (
+                "ResultT<Identity, Int, Error>",
+                "ResultT<Identity, Int, Error>",
+            ),
+            (
+                "Result<Int, Namespace::Error>",
+                "Result<Int, Namespace::Error>",
+            ),
+            ("Global::Result<Int, Global::Error>", "Global::Result<Int>"),
+            (
+                "compact(value:Result<Int, Error>)",
+                "compact(value:Result<Int>)",
+            ),
+            (
+                "Namespace::Result<Int, Error>",
+                "Namespace::Result<Int, Error>",
+            ),
+            ("MatchResult<Int, Failure>", "MatchResult<Int>"),
             ("OtherResult<Int, Error>", "OtherResult<Int, Error>"),
         ] {
             assert_eq!(format_completion_signature(source), expected);
         }
+    }
+
+    #[test]
+    fn completion_formatter_does_not_reinterpret_error_holes() {
+        // This text renderer does not validate types. A forbidden Error-slot
+        // hole must remain visible rather than turn into accepted shorthand.
+        for source in ["Result<Int, _>", "ResultT<Identity, Int, _>"] {
+            assert_eq!(format_completion_signature(source), source);
+        }
+    }
+
+    #[test]
+    fn completion_error_positions_follow_the_supplied_declaration_identity() {
+        let is_concrete_error = |name: &str| matches!(name, "Concrete" | "Namespace::Concrete");
+        for (source, expected) in [
+            ("make() -> Result<Int, Concrete>", "make() -> Result<Int>"),
+            (
+                "make() -> Result<Int, Namespace::Concrete>",
+                "make() -> Result<Int>",
+            ),
+            (
+                "make() -> Result<Int, LooksLikeError>",
+                "make() -> Result<Int, LooksLikeError>",
+            ),
+            (
+                "keep(value: Result<Int, Closed>) -> Result<Int, $E>",
+                "keep(value: Result<Int, Closed>) -> Result<Int, $E>",
+            ),
+            (
+                "extract() -> MatchResult<Int, Closed>",
+                "extract() -> MatchResult<Int>",
+            ),
+            (
+                "extract() -> MatchResult<Int, $E>",
+                "extract() -> MatchResult<Int>",
+            ),
+            (
+                "make() -> Namespace::Result<Int, Concrete>",
+                "make() -> Namespace::Result<Int, Concrete>",
+            ),
+        ] {
+            assert_eq!(
+                format_completion_signature_with_error_classifier(source, is_concrete_error),
+                expected
+            );
+        }
+        assert_eq!(
+            format_completion_signature_with_error_classifier(
+                "make() -> Result<Int, Concrete>",
+                |name| name == "Namespace::Concrete"
+            ),
+            "make() -> Result<Int, Concrete>",
+            "a registered namespaced Error does not classify a different bare name"
+        );
+    }
+
+    #[test]
+    fn binding_query_preserves_explicit_error_positions() {
+        for (source, expected) in [
+            ("Result<Int, Error>", "Result<Int>"),
+            ("Result<Int, Failures>", "Result<Int, Failures>"),
+            (
+                "Result<Int, Namespace::Failures>",
+                "Result<Int, Namespace::Failures>",
+            ),
+            ("Result<$A, $E>", "Result<$A, $E>"),
+            ("Result<Int, NoneError>", "Result<Int, NoneError>"),
+            (
+                "List<Result<Result<Int, Namespace::Failures>, Error>>",
+                "List<Result<Result<Int, Namespace::Failures>>>",
+            ),
+            (
+                "(Result<Int, Failures> -> Result<String, Error>)",
+                "(Result<Int, Failures> -> Result<String>)",
+            ),
+            (
+                "ResultT<Identity, Int, Error>",
+                "ResultT<Identity, Int, Error>",
+            ),
+            (
+                "Namespace::Result<Int, Error>",
+                "Namespace::Result<Int, Error>",
+            ),
+        ] {
+            let parsed = parse_binding_query_type(source)
+                .unwrap_or_else(|| panic!("binding query type: {source}"));
+            assert_eq!(format_query_ty(&parsed), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn binding_query_normalizes_known_canonical_error_slot() {
+        let span = Span { start: 0, end: 0 };
+        let ty = AstTy::Generic(
+            span.clone(),
+            "Global::Result".into(),
+            vec![
+                AstTy::Named(span.clone(), "Int".into()),
+                AstTy::Named(span, "Global::Error".into()),
+            ],
+        );
+        assert_eq!(
+            format_query_ty(&normalize_binding_query_type(&ty)),
+            "Global::Result<Int>"
+        );
     }
 
     #[test]

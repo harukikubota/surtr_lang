@@ -1,0 +1,6 @@
+selected: OpenFailures = AlphaFailure(7)
+closed: ClosedFailures = AlphaFailure(8)
+named = OpenFailures::BetaFailure()
+print(Error::message(selected))
+print(to_string(Error::same_kind(selected, closed)))
+print(match named { AlphaFailure => "wrong", Other(error) => Error::message(error) })

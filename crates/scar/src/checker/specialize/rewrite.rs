@@ -194,6 +194,8 @@ impl Checker {
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
         generated_defs: &mut Vec<TypedNode>,
     ) -> Result<Box<TypedNode>, Box<TypeError>> {
+        self.validate_error_positions_in_type(&node.ty, &node.span)?;
+        self.validate_error_coercion_node(&node)?;
         match &node.node {
             TypedInner::App(..) => self.rewrite_app_specializations_in_node(
                 node,
@@ -264,6 +266,7 @@ impl Checker {
             | TypedInner::TupleLiteral(..)
             | TypedInner::InterpolatedStr(..)
             | TypedInner::Dbg(..)
+            | TypedInner::ErrorCoerce { .. }
             | TypedInner::EagerBoundary(..)
             | TypedInner::If(..)
             | TypedInner::Cause(..)
@@ -368,7 +371,7 @@ impl Checker {
                         // still waiting for a later type witness. This keeps a
                         // valid function-table entry instead of leaking the
                         // pre-normalization generic index into Forge.
-                        if fully_concrete || !requirements.requires_concrete {
+                        if Self::specialization_requirements_are_met(requirements, &mapping) {
                             let concrete_tys = bound_tyvars
                                 .iter()
                                 .map(|var| mapping.get(var).cloned().unwrap_or(Ty::Var(*var)))
@@ -839,7 +842,16 @@ impl Checker {
                 for argument in &mut args {
                     argument.ty = self.normalize_executable_constructor_identities(&argument.ty);
                 }
-                let receiver_ty = self.resolve_ty(&receiver_ty);
+                let mut receiver_ty = self.resolve_ty(&receiver_ty);
+                self.validate_monad_fail_receiver(&trait_name, &receiver_ty, &span)?;
+                let original_receiver = receiver_ty.clone();
+                self.normalize_ordinary_error_trait_call(
+                    &obligation.trait_id,
+                    &method_name,
+                    &mut receiver_ty,
+                    &mut args,
+                )?;
+                let boundary_changed = receiver_ty != original_receiver;
                 let obligation = TraitObligation {
                     trait_id: obligation.trait_id,
                     trait_args: obligation
@@ -847,11 +859,18 @@ impl Checker {
                         .iter()
                         .map(|arg| self.resolve_ty(arg))
                         .collect(),
-                    receiver: self.resolve_ty(&obligation.receiver),
+                    receiver: if boundary_changed {
+                        receiver_ty.clone()
+                    } else {
+                        self.resolve_ty(&obligation.receiver)
+                    },
                 };
-                let instantiation = if let TraitDispatch::Selected(instantiation) = &dispatch {
+                let instantiation = if let (TraitDispatch::Selected(instantiation), false) =
+                    (&dispatch, boundary_changed)
+                {
                     Some(instantiation.as_ref().clone())
-                } else if matches!(dispatch, TraitDispatch::Pending)
+                } else if boundary_changed
+                    || matches!(dispatch, TraitDispatch::Pending)
                     || matches!(&dispatch,
                         TraitDispatch::Static(TraitDispatchTarget::UserFunction { fun_idx, .. })
                             if needs_specialization.contains(fun_idx))
@@ -1258,6 +1277,20 @@ impl Checker {
                     })
                     .collect::<Result<Vec<_>, Box<TypeError>>>()?,
             ),
+            TypedInner::ErrorCoerce {
+                value,
+                concrete_kind,
+            } => TypedInner::ErrorCoerce {
+                value: self.rewrite_specializations_in_node(
+                    *value,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?,
+                concrete_kind,
+            },
             TypedInner::EagerBoundary(inner) => {
                 TypedInner::EagerBoundary(self.rewrite_specializations_in_node(
                     *inner,
@@ -1775,7 +1808,7 @@ impl Checker {
                             .get(var)
                             .is_some_and(Self::specialization_type_is_concrete)
                     });
-                if fully_concrete || !requirements.requires_concrete {
+                if Self::specialization_requirements_are_met(requirements, &mapping) {
                     let concrete_tys = bound_tyvars
                         .iter()
                         .map(|var| mapping.get(var).cloned().unwrap_or(Ty::Var(*var)))

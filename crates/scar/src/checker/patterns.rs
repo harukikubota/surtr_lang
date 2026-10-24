@@ -229,6 +229,16 @@ impl Checker {
                     .map(|item| self.select_application_pattern(item))
                     .collect::<Result<_, _>>()?,
             ),
+            ResolvedPattern::EnumErrorOther(span, candidates, items) => {
+                ResolvedPattern::EnumErrorOther(
+                    span.clone(),
+                    candidates.clone(),
+                    items
+                        .iter()
+                        .map(|item| self.select_application_pattern(item))
+                        .collect::<Result<_, _>>()?,
+                )
+            }
             ResolvedPattern::Constructor(id, items) => ResolvedPattern::Constructor(
                 id.clone(),
                 items
@@ -329,6 +339,16 @@ impl Checker {
                     .map(|item| self.lower_pattern_projections(item, slots))
                     .collect::<Result<_, _>>()?,
             ),
+            ResolvedPattern::EnumErrorOther(span, candidates, items) => {
+                ResolvedPattern::EnumErrorOther(
+                    span,
+                    candidates,
+                    items
+                        .into_iter()
+                        .map(|item| self.lower_pattern_projections(item, slots))
+                        .collect::<Result<_, _>>()?,
+                )
+            }
             ResolvedPattern::Constructor(id, items) => ResolvedPattern::Constructor(
                 id,
                 items
@@ -452,7 +472,9 @@ impl Checker {
                     }
                 }
             }
-            let input_hint = self.apply_pattern_input_hint(&selected, &projection_types);
+            let input_hint = self
+                .apply_pattern_input_hint(&selected, &projection_types)
+                .filter(|hint| !self.type_contains_error_position(hint));
             let source = value;
             let mut value = self.check_node_with_expected(source, input_hint.as_ref())?;
             if Self::is_lazy_placeholder(source) {
@@ -751,13 +773,18 @@ impl Checker {
         out: &mut HashSet<u32>,
     ) -> Result<(), TypeError> {
         match pattern {
-            TypedMatchPattern::Located(_, _, inner) => Self::typed_match_pattern_bindings(inner, out)?,
+            TypedMatchPattern::Located(_, _, inner) => {
+                Self::typed_match_pattern_bindings(inner, out)?
+            }
             TypedMatchPattern::HashMap(entries) => {
                 for entry in entries {
                     Self::typed_match_pattern_bindings(&entry.pattern, out)?;
                 }
             }
             TypedMatchPattern::Binding(id) => Self::insert_pattern_binding(out, id)?,
+            TypedMatchPattern::ErrorOther { inner, .. } => {
+                Self::typed_match_pattern_bindings(inner, out)?;
+            }
             TypedMatchPattern::As(inner, id) => {
                 Self::typed_match_pattern_bindings(inner, out)?;
                 Self::insert_pattern_binding(out, id)?;
@@ -823,7 +850,9 @@ impl Checker {
         }
         fn matching<'a>(pattern: &'a TypedMatchPattern, out: &mut Vec<(&'a Ty, &'a Span)>) {
             match pattern {
-                TypedMatchPattern::Located(_, _, inner) | TypedMatchPattern::As(inner, _) => matching(inner, out),
+                TypedMatchPattern::Located(_, _, inner)
+                | TypedMatchPattern::ErrorOther { inner, .. }
+                | TypedMatchPattern::As(inner, _) => matching(inner, out),
                 TypedMatchPattern::HashMap(entries) => {
                     for entry in entries {
                         matching(&entry.pattern, out);
@@ -921,7 +950,9 @@ impl Checker {
                         matching(item, out);
                     }
                 }
-                TypedMatchPattern::Located(_, _, inner) | TypedMatchPattern::As(inner, _) => matching(inner, out),
+                TypedMatchPattern::Located(_, _, inner)
+                | TypedMatchPattern::ErrorOther { inner, .. }
+                | TypedMatchPattern::As(inner, _) => matching(inner, out),
                 TypedMatchPattern::ListCons(head, tail) => {
                     matching(head, out);
                     matching(tail, out);
@@ -1003,7 +1034,9 @@ impl Checker {
                         matching(item, out);
                     }
                 }
-                TypedMatchPattern::Located(_, _, inner) | TypedMatchPattern::As(inner, _) => matching(inner, out),
+                TypedMatchPattern::Located(_, _, inner)
+                | TypedMatchPattern::ErrorOther { inner, .. }
+                | TypedMatchPattern::As(inner, _) => matching(inner, out),
                 TypedMatchPattern::ListCons(head, tail) => {
                     matching(head, out);
                     matching(tail, out);
@@ -1139,6 +1172,7 @@ impl Checker {
             | ResolvedPattern::BoolLit(_, _)
             | ResolvedPattern::DurationLit(_, _)
             | ResolvedPattern::Constructor(_, _)
+            | ResolvedPattern::EnumErrorOther(_, _, _)
             | ResolvedPattern::Extractor(_, _, _) => false,
         }
     }
@@ -1208,6 +1242,10 @@ impl Checker {
                 self.check_pattern_with_whole_input(&selected, rhs_ty, span, whole_input)
             }
 
+            ResolvedPattern::EnumErrorOther(source, _, _) => Err(TypeError::new(
+                "EnumError item patterns require match or if_let",
+                source.clone(),
+            )),
             ResolvedPattern::Var(id) => {
                 let rhs_ty = self.resolve_ty(rhs_ty);
                 Ok((TypedPattern::Var(rhs_ty.clone(), id.clone()), rhs_ty))
@@ -1556,6 +1594,15 @@ impl Checker {
                 Ok((TypedPattern::DurationLit(rhs_ty.clone(), n.clone()), rhs_ty))
             }
             ResolvedPattern::Constructor(ctor_id, inners) => {
+                if self
+                    .lookup_enum_variant_by_constructor_id(ctor_id.unique_id)
+                    .is_some_and(|variant| variant.enum_error)
+                {
+                    return Err(TypeError::new(
+                        "EnumError item patterns require match or if_let",
+                        ctor_id.span.clone(),
+                    ));
+                }
                 let rhs_ty = self.resolve_ty(rhs_ty);
                 if matches!(rhs_ty, Ty::Bool) {
                     let variant = self

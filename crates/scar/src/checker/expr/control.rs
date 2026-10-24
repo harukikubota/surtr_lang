@@ -74,7 +74,10 @@ impl Checker {
         if self.branch_tail_is_return_type_argument_call(node) {
             let checkpoint = self.candidate_probe_checkpoint();
             match self.check_node(node) {
-                Ok(typed) => return Ok(typed),
+                Ok(mut typed) => {
+                    self.coerce_enum_error_receiver(node, &mut typed, expected)?;
+                    return Ok(typed);
+                }
                 Err(error)
                     if error.reason()
                         == Some(TypeDiagnosticReason::AmbiguousReturnTypeArgument) =>

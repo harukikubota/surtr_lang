@@ -1,0 +1,5 @@
+selected: Result<Int, ClosedFailures> = Factory::selected()
+plain = Result::map_err(selected, BetaFailure())
+received: Result<Int, OpenFailures> = plain
+print(to_string(Result::is_err(received)))
+print(match received { Ok(_) => "wrong", Err(error) => Error::message(error) })

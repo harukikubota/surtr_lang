@@ -25,6 +25,8 @@ pub enum Visibility {
 /// Attributes attached to a declaration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeclAttrs {
+    /// This enum declares a named set of canonical concrete errors.
+    pub enum_error: bool,
     pub doc: Option<String>,
     pub builtin: bool,
     pub compiler_generated: bool,
@@ -46,6 +48,7 @@ pub struct DeclAttrs {
 impl Default for DeclAttrs {
     fn default() -> Self {
         Self {
+            enum_error: false,
             doc: None,
             builtin: false,
             compiler_generated: false,

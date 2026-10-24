@@ -122,6 +122,26 @@ pub fn structured_type_error_spec(input: &StructuredDiagnostic) -> DiagnosticSpe
         spec.help =
             Some("Add `;` or bind the value with `_ = expr` to discard it explicitly.".into());
     }
+    if let DiagnosticData::ErrorCollection(value) = &input.data {
+        spec.labels[0].message = match value.operation {
+            crate::ErrorCollectionOperation::MonadFail => {
+                "This failure route stores a common Error".into()
+            }
+            crate::ErrorCollectionOperation::Conversion => match &value.concrete_kind {
+                Some(kind) => format!("This value has concrete Error kind {kind}"),
+                None => format!("This value carries {}", value.source_type),
+            },
+        };
+        for (fact, label) in input.related.iter().zip(spec.labels.iter_mut().skip(1)) {
+            if fact.role == crate::SourceRole::Declaration {
+                label.message = format!(
+                    "{} declares [{}] and has no Other",
+                    value.target,
+                    value.members.join(", ")
+                );
+            }
+        }
+    }
     if let DiagnosticData::PatternFailure(value) = &input.data {
         let template = pattern_failure_template(value.context);
         spec.labels[0].message = template.primary_caption.into();
@@ -216,6 +236,26 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
         .type_reason()
         .expect("typecheck renderer requires a type diagnostic reason");
     match reason {
+        TypeDiagnosticReason::EnumErrorPolicyViolation => {
+            if let DiagnosticData::ErrorCollection(value) = &input.data {
+                return match value.operation {
+                    crate::ErrorCollectionOperation::MonadFail => format!(
+                        "MonadFail requires Other in EnumError {} to store a common Error",
+                        value.target
+                    ),
+                    crate::ErrorCollectionOperation::Conversion => match &value.concrete_kind {
+                        Some(kind) => format!(
+                            "EnumError {} does not contain {}; Other is required",
+                            value.target, kind
+                        ),
+                        None => format!(
+                            "EnumError {} requires Other for an Error or another EnumError value",
+                            value.target
+                        ),
+                    },
+                };
+            }
+        }
         TypeDiagnosticReason::ConstValueForbidden => {
             return "const value must be a primitive literal or a facet path".into();
         }

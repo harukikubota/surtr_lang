@@ -161,9 +161,14 @@ fn format_deferror_signature(name: &str, fields: &[RecordField], body: &Ast) -> 
     format!("{header} {{ |{inputs}| ... }}")
 }
 
-fn format_defenum_signature(name: &str, variants: &[EnumVariant]) -> String {
+fn format_defenum_signature(name: &str, variants: &[EnumVariant], enum_error: bool) -> String {
+    let keyword = if enum_error {
+        "defenumerror"
+    } else {
+        "defenum"
+    };
     if variants.is_empty() {
-        return format!("defenum {}", surface_path_name(name));
+        return format!("{keyword} {}", surface_path_name(name));
     }
     let variants = variants
         .iter()
@@ -182,7 +187,7 @@ fn format_defenum_signature(name: &str, variants: &[EnumVariant]) -> String {
         })
         .collect::<Vec<_>>()
         .join(", ");
-    format!("defenum {} {{ {variants} }}", surface_path_name(name))
+    format!("{keyword} {} {{ {variants} }}", surface_path_name(name))
 }
 
 fn builtin_special_enum_variant_signature(
@@ -674,7 +679,7 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
                         qualified_name: qualified_name(module_path, name),
                         kind: DocKind::Type,
                         module_path: surface_path_name(module_path).to_string(),
-                        signature: Some(format_defenum_signature(name, variants)),
+                        signature: Some(format_defenum_signature(name, variants, attrs.enum_error)),
                         doc: doc.clone(),
                     });
                 }
@@ -969,7 +974,7 @@ fn collect_signature_entries_for_ast(
                     module_path,
                     qualified_name(module_path, name),
                     DocKind::Type,
-                    format_defenum_signature(name, variants),
+                    format_defenum_signature(name, variants, attrs.enum_error),
                 );
                 if attrs.builtin {
                     for variant in variants {

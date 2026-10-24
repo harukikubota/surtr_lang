@@ -157,7 +157,7 @@ impl Checker {
                 def.name.clone(),
                 NominalType::new(def.type_param_vars.iter().copied().map(Ty::Var).collect()),
             )),
-            TypeKind::Enum => Some(Ty::Enum(def.name.clone(), Vec::new())),
+            TypeKind::Enum | TypeKind::EnumError => Some(Ty::Enum(def.name.clone(), Vec::new())),
             TypeKind::Record | TypeKind::ConcreteError => None,
         }
     }

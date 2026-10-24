@@ -174,11 +174,13 @@ impl<'a, 'env> BuiltinSignatureParser<'a, 'env> {
                     NominalType::new(def.type_param_vars.iter().copied().map(Ty::Var).collect()),
                 ),
                 crate::env::TypeKind::ConcreteError => Ty::Error,
-                crate::env::TypeKind::Enum => Self::builtin_special_enum_ty_for_query(
-                    def.name.strip_prefix("Global::").unwrap_or(&def.name),
-                    &[],
-                )
-                .unwrap_or_else(|| Ty::Enum(def.name.clone(), Vec::new())),
+                crate::env::TypeKind::Enum | crate::env::TypeKind::EnumError => {
+                    Self::builtin_special_enum_ty_for_query(
+                        def.name.strip_prefix("Global::").unwrap_or(&def.name),
+                        &[],
+                    )
+                    .unwrap_or_else(|| Ty::Enum(def.name.clone(), Vec::new()))
+                }
             });
         }
 

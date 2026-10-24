@@ -31,6 +31,7 @@ pub enum TypeKind {
     Record,
     ConcreteError,
     Enum,
+    EnumError,
 }
 
 impl TypeKind {
@@ -40,6 +41,7 @@ impl TypeKind {
             Self::Record => TypeIdentity::Record,
             Self::ConcreteError => TypeIdentity::Error,
             Self::Enum => TypeIdentity::Enum,
+            Self::EnumError => TypeIdentity::EnumError,
         }
     }
 }
@@ -79,6 +81,8 @@ pub enum TypeDefState {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EnumVariantInfo {
+    pub enum_error: bool,
+    pub error_identity: Option<String>,
     pub special_variant: Option<sindr::names::SpecialEnumVariantLowering>,
     pub constructor_name: Symbol,
     pub short_name: Symbol,
@@ -113,6 +117,9 @@ pub struct TypeEnv {
     pub next_tyvar: u32,
     /// Declared `deferror` type names, available before full type registration
     pub error_type_names: HashSet<Symbol>,
+    pub enum_error_members: HashMap<Symbol, Vec<String>>,
+    pub enum_error_other: HashSet<Symbol>,
+    pub enum_error_declaration_spans: HashMap<Symbol, spire::ast::Span>,
     /// `deferror` constructor bindings by unique_id
     pub error_constructor_ids: HashSet<u32>,
     pub error_constructor_inputs: HashMap<u32, Vec<(String, Ty)>>,
@@ -146,6 +153,9 @@ impl TypeEnv {
             next_fun_idx: 0,
             next_tyvar: 0,
             error_type_names: HashSet::new(),
+            enum_error_members: HashMap::new(),
+            enum_error_other: HashSet::new(),
+            enum_error_declaration_spans: HashMap::new(),
             error_constructor_ids: HashSet::new(),
             error_constructor_inputs: HashMap::new(),
             concrete_error_bindings: HashMap::new(),
@@ -417,6 +427,18 @@ impl TypeEnv {
             .find_map(|candidate| self.enum_variants_by_enum.get(&candidate).map(Arc::as_ref))
     }
 
+    pub fn typed_enum_error_definitions(&self) -> HashMap<String, (Vec<String>, bool)> {
+        self.enum_error_members
+            .iter()
+            .map(|(name, members)| {
+                (
+                    name.clone(),
+                    (members.clone(), self.enum_error_other.contains(name)),
+                )
+            })
+            .collect()
+    }
+
     pub fn typed_enum_definitions(
         &self,
     ) -> HashMap<String, Vec<crate::typed::TypedEnumVariantDef>> {
@@ -667,6 +689,8 @@ mod tests {
 
     fn shared_variant(tag: u32, short_name: &str) -> EnumVariantInfo {
         EnumVariantInfo {
+            enum_error: false,
+            error_identity: None,
             special_variant: None,
             constructor_name: format!("Global::Choice::{short_name}"),
             short_name: short_name.into(),

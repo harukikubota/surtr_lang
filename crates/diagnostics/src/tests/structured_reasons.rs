@@ -348,6 +348,13 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
             stage: Some("OptionT".into()),
             entrypoint: None,
         }),
+        EnumErrorPolicyViolation => DiagnosticData::ErrorCollection(ErrorCollectionData {
+            operation: ErrorCollectionOperation::Conversion,
+            target: "ClosedFailures".into(),
+            members: vec!["Global::SavedFailure".into()],
+            source_type: "Error".into(),
+            concrete_kind: None,
+        }),
         TraitImplementationForbidden => DiagnosticData::Policy(PolicyData {
             policy: TypePolicy::TraitImplementation,
             subject: Some("Error".into()),
@@ -410,16 +417,32 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
         origin,
         data,
         primary: SourceFact::typed(
-            SourceRole::RightValue,
+            if reason == EnumErrorPolicyViolation {
+                SourceRole::Value
+            } else {
+                SourceRole::RightValue
+            },
             SourceId(0),
             Span { start: 4, end: 8 },
-            "Either<Error, Boolean>",
+            if reason == EnumErrorPolicyViolation {
+                "Error"
+            } else {
+                "Either<Error, Boolean>"
+            },
         ),
         related: vec![SourceFact::typed(
-            SourceRole::LeftValue,
+            if reason == EnumErrorPolicyViolation {
+                SourceRole::Declaration
+            } else {
+                SourceRole::LeftValue
+            },
             SourceId(0),
             Span { start: 0, end: 4 },
-            "Either<String, Int>",
+            if reason == EnumErrorPolicyViolation {
+                "ClosedFailures"
+            } else {
+                "Either<String, Int>"
+            },
         )],
         remediation: None,
     }
@@ -496,6 +519,7 @@ fn every_common_reason_has_a_typed_template_and_schema() {
         SourcePolicyViolation,
         CompilePolicyViolation,
         TraitImplementationForbidden,
+        EnumErrorPolicyViolation,
         ReservedIntrinsicMarkerUsage,
         TypecheckInvariantViolation,
         ProcessPolicyViolation,
@@ -593,6 +617,13 @@ fn every_common_reason_has_a_typed_template_and_schema() {
                 "expected_count",
                 "actual_count",
                 "details",
+            ],
+            "ErrorCollection" => &[
+                "operation",
+                "target",
+                "members",
+                "source_type",
+                "concrete_kind",
             ],
             "Policy" => &[
                 "policy",

@@ -1,0 +1,4 @@
+deferror FirstFailure { "first" }
+deferror SecondFailure { "second" }
+defenumerror Failures { FirstFailure, SecondFailure, Other(Error) }
+defmod Factory { def make() -> Failures { FirstFailure() } }

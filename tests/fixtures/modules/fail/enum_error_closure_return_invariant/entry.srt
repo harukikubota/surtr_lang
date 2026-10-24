@@ -1,0 +1,2 @@
+plain: (-> Error) = {|| Failure()}
+factory: (-> OpenFailures) = plain

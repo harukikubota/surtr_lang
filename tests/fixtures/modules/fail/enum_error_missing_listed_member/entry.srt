@@ -1,0 +1,2 @@
+value: Failures = FirstFailure()
+print(to_string(match value { FirstFailure => 1, Other(_) => 2 }))

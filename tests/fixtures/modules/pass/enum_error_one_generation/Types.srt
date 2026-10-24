@@ -1,0 +1,4 @@
+deferror ObservedFailure { print("constructed")
+"observed" }
+defenumerror ClosedFailures { ObservedFailure }
+defenumerror OpenFailures { Other(Error) }

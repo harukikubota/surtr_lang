@@ -116,6 +116,10 @@ Spire は式位置の map literal と Pattern 位置を区別し、キー式・�
 
 ## Error Pattern
 
+EnumError の match は宣言項目と Other の網羅性を検査し、Other が列挙項目を覆うとは扱わない。列挙項目への照合済み alias は元 Error の局所具象束縛、Other の単純な取り出しは共通 Error になる。EnumError の期待型がある branch・クロージャは返却地点で消去前の所属を検査する。子 Pattern の被覆解析には既存の規則を使い、一般的な入れ子の網羅性推論は追加しない。
+
+
+
 Error 名だけの Pattern は kind を照合し、子 Pattern を指定すると kind 一致後に保存 Payload を分解する。外部コンストラクタの入力は分解しない。宣言・名前付きフィールド・局所具象束縛・readonly Facet の規則は [Error spec](Error_spec.md) を正本とする。
 
 Error 定義 Pattern を使える consumer は `match`、`if_let`、`if_let_then`、束縛なしの `is_match` と `Test::assert_error_matches` である。通常 Bind、SafeBind、do partial `<-`、`apply_pattern` では拒否する。一般 Extractor と Error 全体の通常値運搬は既存の consumer 規則に従う。OR の許可対象・束縛 Set・評価順は本書の [予約語・OR・pipe](#予約語・or・pipe) に従う。

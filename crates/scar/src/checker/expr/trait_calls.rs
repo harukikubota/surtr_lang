@@ -26,6 +26,7 @@ pub(super) struct PreparedTraitInvocation {
     declared_param_tys: Vec<Ty>,
     constructor_receiver_index: Option<usize>,
     prepared_args: Vec<Option<TypedNode>>,
+    error_carrier_target: Option<Ty>,
 }
 
 pub(super) enum TraitInvocationPreparation {
@@ -179,6 +180,17 @@ impl Checker {
                 for arg in args.iter_mut() {
                     self.concretize_pending_trait_calls_in_place(arg)?;
                 }
+                let original_receiver = obligation.receiver.clone();
+                self.normalize_ordinary_error_trait_call(
+                    &obligation.trait_id,
+                    method_name,
+                    &mut obligation.receiver,
+                    args,
+                )?;
+                if obligation.receiver != original_receiver {
+                    *dispatch = TraitDispatch::Pending;
+                }
+                *receiver_ty = obligation.receiver.clone();
                 self.concretize_trait_dispatch(
                     &node.span,
                     &node.ty,
@@ -210,6 +222,7 @@ impl Checker {
             | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::EagerBoundary(rhs)
             | TypedInner::FieldAccess(rhs, _)
+            | TypedInner::ErrorCoerce { value: rhs, .. }
             | TypedInner::Semi(rhs)
             | TypedInner::SupervisorSpawn { init: rhs, .. }
             | TypedInner::SupervisorAdopt { pid: rhs, .. }
@@ -288,7 +301,8 @@ impl Checker {
                     self.concretize_pending_trait_calls_in_place(branch)?;
                 }
             }
-            TypedInner::Match(scrutinee, arms) | TypedInner::AssertErrorMatches(scrutinee, arms, _) => {
+            TypedInner::Match(scrutinee, arms)
+            | TypedInner::AssertErrorMatches(scrutinee, arms, _) => {
                 self.concretize_pending_trait_calls_in_place(scrutinee)?;
                 for arm in arms {
                     if let Some(guard) = &mut arm.guard {
@@ -1098,6 +1112,30 @@ impl Checker {
                 hint: None,
             })?;
 
+        // Standard constructor traits receive Result carriers through the
+        // common Error boundary. Their implementation evidence is proved for
+        // this boundary type, while the outer receiver keeps its own contract.
+        let standard_carrier_boundary = !trait_info.constructor_slots.is_empty();
+        let direct_receiver = method.value_parameters.iter().any(|parameter| {
+            matches!(parameter.ty.syntax(), AstTy::Generic(_, name, _) if name == "Self")
+        });
+        if let Some(expected) = expected_ret_ty {
+            self.validate_monad_fail_receiver(trait_name, expected, span)?;
+        }
+        let boundary_expected = if standard_carrier_boundary && !direct_receiver {
+            expected_ret_ty
+                .and_then(|expected| self.standard_error_carrier_boundary(trait_name, expected))
+        } else {
+            None
+        };
+        let mut error_carrier_target = boundary_expected
+            .as_ref()
+            .filter(|boundary| {
+                expected_ret_ty.is_some_and(|expected| self.resolve_ty(expected) != **boundary)
+            })
+            .and_then(|_| expected_ret_ty.cloned());
+        let expected_ret_ty = boundary_expected.as_ref().or(expected_ret_ty);
+
         let positional_args = args
             .iter()
             .filter_map(|arg| match arg {
@@ -1311,11 +1349,23 @@ impl Checker {
         }
         if let Some(explicit_args) = explicit_type_args {
             for (ordinal, (slot, arg)) in explicit_slots.iter().zip(explicit_args).enumerate() {
-                let explicit_ty = if slot == &self_ty && !trait_info.constructor_slots.is_empty() {
-                    self.resolve_type_constructor_return_type_argument(arg)?
-                } else {
-                    self.resolve_trait_call_site_return_type_argument(slot, arg)?
-                };
+                let mut explicit_ty =
+                    if slot == &self_ty && !trait_info.constructor_slots.is_empty() {
+                        self.resolve_type_constructor_return_type_argument(arg)?
+                    } else {
+                        self.resolve_trait_call_site_return_type_argument(slot, arg)?
+                    };
+                if standard_carrier_boundary && slot == &self_ty {
+                    self.validate_monad_fail_receiver(trait_name, &explicit_ty, span)?;
+                    if let Some(boundary) =
+                        self.standard_error_carrier_boundary(trait_name, &explicit_ty)
+                    {
+                        if boundary != self.resolve_ty(&explicit_ty) {
+                            error_carrier_target = Some(explicit_ty.clone());
+                        }
+                        explicit_ty = boundary;
+                    }
+                }
                 if self
                     .assert_type_relation(
                         slot,
@@ -1533,7 +1583,7 @@ impl Checker {
             && !receiverless_head_input
         {
             let receiver_index = declared_receiver_index;
-            let typed_receiver = if let Some(index) = receiver_index {
+            let mut typed_receiver = if let Some(index) = receiver_index {
                 constructor_receiver_index = Some(index);
                 if receiver_hint.is_none() {
                     if let Some(typed) = self.try_constructor_invocation_from_arguments(
@@ -1557,6 +1607,15 @@ impl Checker {
             } else {
                 None
             };
+            if standard_carrier_boundary {
+                if let Some(typed) = &mut typed_receiver {
+                    if let Some(boundary) =
+                        self.standard_error_carrier_boundary(trait_name, &typed.ty)
+                    {
+                        self.coerce_error_carrier_boundary(typed, &boundary)?;
+                    }
+                }
+            }
             let receiver_ty = if let Some(typed) = &typed_receiver {
                 self.resolve_ty(&typed.ty)
             } else if receiverless_head_input {
@@ -1809,8 +1868,61 @@ impl Checker {
                 declared_param_tys,
                 constructor_receiver_index,
                 prepared_args,
+                error_carrier_target,
             },
         ))
+    }
+
+    #[inline(never)]
+    fn prepare_ordinary_self_argument(
+        &mut self,
+        call: &TraitInvocationContext<'_>,
+        prepared: &mut PreparedTraitInvocation,
+    ) -> Result<(), TypeError> {
+        // Ordinary Trait Self parameters are full value types, not constructor
+        // slots. Establish their common Error boundary before later Self inputs
+        // are contextually checked, preserving each source expression once.
+        let ordinary_self_input = self
+            .traits
+            .get(call.trait_name)
+            .filter(|info| info.constructor_slots.is_empty() && info.type_params.is_empty())
+            .and_then(|info| info.methods.get(call.method_name))
+            .and_then(|method| {
+                method.value_parameters.iter().position(|parameter|
+                matches!(parameter.ty.syntax(), AstTy::Named(_, name) if name == "Self"))
+            });
+        if let Some(index) = ordinary_self_input.filter(|index| *index < call.args.len()) {
+            if prepared.prepared_args[index].is_none() {
+                let ResolvedRecordLitArg::Positional(expression) = &call.args[index] else {
+                    unreachable!("named arguments rejected");
+                };
+                let mut typed = self.check_invocation_argument(
+                    expression,
+                    &prepared.param_tys[index],
+                    call.operator.clone(),
+                    index,
+                    None,
+                )?;
+                let boundary = self.ordinary_error_carrier_boundary(call.trait_name, &typed.ty)?;
+                if let Some(boundary) = boundary {
+                    self.coerce_error_carrier_boundary(&mut typed, &boundary)?;
+                }
+                if self.common_error_carrier_ty(&typed.ty).is_some() {
+                    self.assert_type_relation(
+                        &prepared.self_ty,
+                        &typed.ty,
+                        self.type_fact(SourceRole::Expected, call.span, &prepared.self_ty),
+                        self.type_fact(SourceRole::Value, &typed.span, &typed.ty),
+                        TypeDiagnosticReason::ArgumentTypeMismatch,
+                        DiagnosticOrigin::TraitCall,
+                        &format!("{}::{}", call.trait_name, call.method_name),
+                        index as u32,
+                    )?;
+                }
+                prepared.prepared_args[index] = Some(typed);
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn check_prepared_trait_arguments(
@@ -1818,6 +1930,7 @@ impl Checker {
         call: &TraitInvocationContext<'_>,
         prepared: &mut PreparedTraitInvocation,
     ) -> Result<Vec<TypedNode>, TypeError> {
+        self.prepare_ordinary_self_argument(call, prepared)?;
         let mut remaining = prepared
             .prepared_args
             .iter()
@@ -1967,9 +2080,11 @@ impl Checker {
             self_ty,
             declared_param_tys,
             constructor_receiver_index,
+            error_carrier_target,
             ..
         } = prepared;
         self.ensure_no_runtime_facet_args(&typed_args, span, "Trait method call")?;
+        self.validate_monad_fail_receiver(trait_name, &self_ty, span)?;
 
         self.check_trait_method_constructor_capabilities(
             trait_name,
@@ -2218,7 +2333,7 @@ impl Checker {
             error
         })?;
 
-        Ok(TypedNode {
+        let mut result = TypedNode {
             ty: self.resolve_ty(&ret_ty),
             span: span.clone(),
             node: TypedInner::TraitCall {
@@ -2234,6 +2349,10 @@ impl Checker {
                 origin: TraitCallOrigin::Explicit,
                 args: typed_args,
             },
-        })
+        };
+        if let Some(target) = error_carrier_target {
+            self.coerce_error_carrier_boundary(&mut result, &target)?;
+        }
+        Ok(result)
     }
 }

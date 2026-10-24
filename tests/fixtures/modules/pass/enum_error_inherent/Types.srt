@@ -1,0 +1,3 @@
+deferror Failure { "failure" }
+defenumerror Failures { Failure }
+impl Failures { def label(value: Failures) -> String { Error::message(value) } }

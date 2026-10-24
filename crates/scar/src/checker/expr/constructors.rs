@@ -91,7 +91,7 @@ impl Checker {
                     span: span.clone(),
                     hint: None,
                 })?;
-            let typed_val = self.check_node(resolved_val)?;
+            let typed_val = self.check_node_with_expected(resolved_val, Some(def_ty))?;
             if self.ty_contains_facet(&typed_val.ty) {
                 return Err(TypeError {
                     structured: None,
@@ -283,17 +283,20 @@ impl Checker {
                     ResolvedRecordLitArg::Positional(expr) => {
                         // Only the success payload receives the owner's success
                         // type. Err stores a concrete Error at the current layer.
-                        let inner_expected = (variant.special_variant
-                            == Some(sindr::names::SpecialEnumVariantLowering::ResultOk))
-                        .then(|| {
-                            expected
-                                .as_ref()
-                                .and_then(|expected| match self.resolve_ty(expected) {
-                                    Ty::Result(ok, _) => Some(ok.as_ref().clone()),
-                                    _ => None,
-                                })
-                        })
-                        .flatten();
+                        let inner_expected = expected.as_ref().and_then(|expected| {
+                            match self.resolve_ty(expected) {
+                                Ty::Result(ok, err) => Some(
+                                    if variant.special_variant
+                                        == Some(sindr::names::SpecialEnumVariantLowering::ResultOk)
+                                    {
+                                        *ok
+                                    } else {
+                                        *err
+                                    },
+                                ),
+                                _ => None,
+                            }
+                        });
                         let typed = self.check_node_with_expected(expr, inner_expected.as_ref())?;
                         self.ensure_no_match_result_value(&typed.ty, &typed.span)?;
                         if self.ty_contains_facet(&typed.ty) {
@@ -338,7 +341,9 @@ impl Checker {
                             ),
                         });
                     }
-                    if !matches!(inner.ty, Ty::Error) {
+                    if !self.is_error_value_ty(&inner.ty)
+                        && !matches!(self.resolve_ty(&inner.ty), Ty::Var(_))
+                    {
                         return Err(TypeError {
                             structured: None,
                             message: "Err(...) requires an Error value.".into(),
@@ -360,7 +365,18 @@ impl Checker {
                 let result_ty = if variant.special_variant
                     == Some(sindr::names::SpecialEnumVariantLowering::ResultOk)
                 {
-                    Ty::Result(Box::new(inner.ty.clone()), Box::new(Ty::Error))
+                    Ty::Result(
+                        Box::new(inner.ty.clone()),
+                        Box::new(
+                            expected
+                                .as_ref()
+                                .and_then(|expected| match self.resolve_ty(expected) {
+                                    Ty::Result(_, err) => Some(*err),
+                                    _ => None,
+                                })
+                                .unwrap_or(Ty::Error),
+                        ),
+                    )
                 } else {
                     expected
                         .as_ref()
@@ -368,7 +384,7 @@ impl Checker {
                         .map(|ty| self.resolve_ty(ty))
                         .unwrap_or_else(|| {
                             let ok_var = self.env.fresh_tyvar();
-                            Ty::Result(Box::new(ok_var), Box::new(Ty::Error))
+                            Ty::Result(Box::new(ok_var), Box::new(inner.ty.clone()))
                         })
                 };
                 return Ok(TypedNode {
@@ -383,6 +399,10 @@ impl Checker {
             ) && !self.stop_constructor_allowed()
             {
                 return Err(self.stop_constructor_error(span, &variant.enum_name));
+            }
+            if let Some(expected) = expected.as_ref() {
+                // Receiver constraints reach generic payloads before their constructors erase Error identity.
+                self.types_compatible(expected, &variant.enum_ty)?;
             }
             let payload_values = self.typecheck_positional_call_args(
                 span,
@@ -743,6 +763,7 @@ impl Checker {
             crate::env::TypeKind::Record => Ty::Record(id.name.clone(), NominalType::monomorphic()),
             crate::env::TypeKind::Struct
             | crate::env::TypeKind::Enum
+            | crate::env::TypeKind::EnumError
             | crate::env::TypeKind::ConcreteError => {
                 unreachable!("validated above")
             }

@@ -1,0 +1,2 @@
+source: Result<ClosedFailures> = Ok(ClosedFailures::Failure())
+converted: Result<Error, OpenFailures> = source

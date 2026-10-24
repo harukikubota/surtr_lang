@@ -739,6 +739,8 @@ well-formedness診断は少なくとも次のmessage、label、helpを構築で�
 
 通常の enum の `Eq` は、payload の有無によらず明示 impl または `@derive Eq` で提供する。enum 宣言だけで compiler が証明や dispatch を補うことはない。`@derive Eq` は各 payload の `Eq` を要求し、variant tag だけの比較を payload を持つ値の Eq として公開しない。
 
+EnumError の固有 impl は許可し、Trait impl と Trait を生成する derive は禁止する。
+
 Trait impl target の権限は inherent impl の可否と独立して Sindr の型ポリシーに置く。Error・関数型・Facet・構文／プロトコル用 marker・未確定の opaque/handle 型はユーザ impl を拒否する。PID は singleton / worker に compiler-owned Eq だけを提供し、ユーザ impl と他の Trait capability を拒否する。通常型と Tuple / List / HashMap / Result は通常の coherence 規則に従う。
 
 Sindr の `TraitImplPolicy` は通常実装可能・compiler 所有・実装禁止を区別する。Scar は解決済みの型 identity と Trait identity を使って宣言登録前に検査し、表示名や型引数に禁止型が含まれるという理由だけで外側の通常型を拒否しない。compiler が暗黙に提供する Eq は信頼済みの標準 `Eq` に限り、有効な singleton / worker PID にだけ証明と dispatch を一致させる。未登録の管理型には通常実装へ戻す経路を設けない。

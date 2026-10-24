@@ -1617,11 +1617,29 @@ impl ReplInputSupportContext {
                 AstTy::Named(spire::ast::Span { start: 0, end: 0 }, "_".to_string())
             }
             AstTy::Named(_, _) | AstTy::ImplTrait(_, _) => ty.clone(),
-            AstTy::Generic(span, name, args) if name == "Result" && args.len() > 1 => {
+            AstTy::Generic(span, name, args)
+                if matches!(name.as_str(), "Result" | "Global::Result") && args.len() == 2 =>
+            {
+                let mut normalized = vec![Self::unknown_generics_to_hole(&args[0])];
+                if !matches!(&args[1], AstTy::Named(_, error) if matches!(error.as_str(), "Error" | "Global::Error"))
+                {
+                    // An unknown Error-slot parameter remains its declared name.
+                    // An explicit `_` in this position is forbidden.
+                    normalized.push(args[1].clone());
+                }
+                AstTy::Generic(span.clone(), name.clone(), normalized)
+            }
+            AstTy::Generic(span, name, args)
+                if matches!(name.as_str(), "ResultT" | "Global::ResultT") && args.len() == 3 =>
+            {
                 AstTy::Generic(
                     span.clone(),
                     name.clone(),
-                    vec![Self::unknown_generics_to_hole(&args[0])],
+                    vec![
+                        Self::unknown_generics_to_hole(&args[0]),
+                        Self::unknown_generics_to_hole(&args[1]),
+                        args[2].clone(),
+                    ],
                 )
             }
             AstTy::Generic(span, name, args) => AstTy::Generic(
@@ -3155,9 +3173,11 @@ fn completion_kind_for_owner(kind: OwnerKind) -> CompletionKind {
         | OwnerKind::Record
         | OwnerKind::Enum
         | OwnerKind::Error => CompletionKind::TypeConstructor,
-        OwnerKind::Trait | OwnerKind::Sig | OwnerKind::Mod | OwnerKind::Supervisor => {
-            CompletionKind::TypePath
-        }
+        OwnerKind::EnumError
+        | OwnerKind::Trait
+        | OwnerKind::Sig
+        | OwnerKind::Mod
+        | OwnerKind::Supervisor => CompletionKind::TypePath,
         OwnerKind::Const => CompletionKind::Variable,
     }
 }
@@ -3176,7 +3196,7 @@ fn completion_kind_for_declaration_kind(kind: &DeclarationKind) -> Option<Comple
         | DeclarationKind::EnumVariant
         | DeclarationKind::BuiltinType => Some(CompletionKind::TypeConstructor),
         DeclarationKind::Const => Some(CompletionKind::Variable),
-        DeclarationKind::Trait => Some(CompletionKind::TypePath),
+        DeclarationKind::EnumError | DeclarationKind::Trait => Some(CompletionKind::TypePath),
     }
 }
 
@@ -3212,4 +3232,56 @@ fn surface_name(name: &str) -> String {
 
 fn is_builtin_special_variant_symbol(name: &str) -> bool {
     sindr::names::special_enum_variant_meta(name).is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn predicted_completion_keeps_explicit_error_positions() {
+        for (error, expected) in [
+            ("Error", "Result<_>"),
+            ("Global::Error", "Result<_>"),
+            ("Namespace::Failures", "Result<_, Namespace::Failures>"),
+            ("$E", "Result<_, $E>"),
+        ] {
+            let span = spire::ast::Span { start: 0, end: 0 };
+            let ty = AstTy::Generic(
+                span.clone(),
+                "Result".into(),
+                vec![
+                    AstTy::Named(span.clone(), "$A".into()),
+                    AstTy::Named(span, error.into()),
+                ],
+            );
+            assert_eq!(
+                ReplInputSupportContext::display_ast_ty_for_completion(&ty),
+                expected
+            );
+        }
+        for (error, expected) in [
+            ("Error", "ResultT<List, _, Error>"),
+            ("$E", "ResultT<List, _, $E>"),
+            (
+                "Namespace::Failures",
+                "ResultT<List, _, Namespace::Failures>",
+            ),
+        ] {
+            let span = spire::ast::Span { start: 0, end: 0 };
+            let ty = AstTy::Generic(
+                span.clone(),
+                "ResultT".into(),
+                vec![
+                    AstTy::Named(span.clone(), "List".into()),
+                    AstTy::Named(span.clone(), "$A".into()),
+                    AstTy::Named(span, error.into()),
+                ],
+            );
+            assert_eq!(
+                ReplInputSupportContext::display_ast_ty_for_completion(&ty),
+                expected
+            );
+        }
+    }
 }

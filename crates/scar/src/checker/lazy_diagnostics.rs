@@ -218,7 +218,9 @@ impl Checker {
         let output = match metadata.kind {
             LazyCaptureKind::And | LazyCaptureKind::Or => Ty::Bool,
             LazyCaptureKind::IfThen | LazyCaptureKind::IfLetThen => Ty::Unit,
-            LazyCaptureKind::Require | LazyCaptureKind::AssertErrorMatches => Ty::Result(Box::new(Ty::Unit), Box::new(Ty::Error)),
+            LazyCaptureKind::Require | LazyCaptureKind::AssertErrorMatches => {
+                Ty::Result(Box::new(Ty::Unit), Box::new(Ty::Error))
+            }
             LazyCaptureKind::If | LazyCaptureKind::IfLet => match self.resolve_ty(required) {
                 Ty::Func(_, ret) => *ret,
                 _ => Ty::Hole,

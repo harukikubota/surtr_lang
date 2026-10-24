@@ -63,7 +63,12 @@ value: OptionT<Result, Int> = OptionT(Ok(Option::Some(1)))
 使えません。genericな`OptionT<$M, $A>`では、宣言側と同じTypeCtorTrait constraintを`where`へ明示します。
 
 一方、call-site ReturnTypeArgumentの一項では、TypeCtorTraitのcarrierを完全・部分型applicationで指定できます。
-この位置の`_`はその型引数だけを推論へ残すもので、通常型注釈の`Hole`とは別です。
+この位置の`_`はその型引数だけを推論へ残すもので、通常型注釈の`Hole`とは別です。ただし Result / ResultT の Error 位置には `_` を書けません。Result の共通 Error は `Result<T>`、ResultT は `ResultT<M, T, Error>` と書きます。
+
+```surtr
+value = pure::<Result<Int>>(10)                  # Result<Int>
+wrapped = pure::<ResultT<Identity, Int, Error>>(10)
+```
 
 ```surtr
 v = pure::<Either<String, _>>(10)       # Either<String, Int>
@@ -85,15 +90,18 @@ def parse_bool(text: String) -> Result<Boolean> {
 }
 ```
 
-`Result<T>` が正規表記です。補助表記 `Result<T, E>` は関数定義の直接の戻り値位置だけに書け、返すエラーの種類を説明するドキュメント用の情報です。`E` に指定したエラー名の存在は確認しますが、実際に返すエラーの種類は静的に制限せず、網羅検査もしません。別の種類のエラーを返しても、その違いだけでは拒否しません。値、引数、field、関数型、入れ子の型注釈では `Result<T>` を使います。`NoneError` も例外にはなりません。
+`Result<T>` は省略した Error 位置を内部で導出し、共通 `Error` を持ちます。この内部規則を `Result<T, _>` と書くことはできません。変数、field、引数、戻り値、関数型、入れ子でも同じ制限を適用します。`Result<T, Error>` と書くこともできます。`defenumerror` で宣言した集合型は、変数、引数、field、関数型、入れ子の Error 位置にも指定できます。集合型を返す関数は、戻り値の所属も検査します。
 
 ```surtr
-def fetch() -> Result<Int, NoneError> { Ok(1) }
-ret: Result<Int> = Ok(1)
-reader: (-> Result<Int>) = &fetch
+defenumerror Failures { NoneError, Other(Error) }
+def fetch() -> Result<Int, Failures> { Err(NoneError()) }
+ret: Result<Int, Failures> = fetch()
+reader: (-> Result<Int, Failures>) = &fetch
 ```
 
-`ret: Result<Int, NoneError>` や `(Int -> Result<Int, Error>)` は拒否します。REPL の値表示、型エラー診断、補完候補とシグネチャヘルプは `Result<T>` を使います。`:sig` / `:doc` などのコマンドで定義を照会したときだけ、定義に書かれた Error 位置を表示します。
+具象 Error 名を指定する `Result<Int, NoneError>` は、関数定義の直接の戻り値だけに書ける説明用 metadata です。名前の存在は検査しますが、返す kind の制限や網羅性の保証はありません。`ret: Result<Int, NoneError>` のように変数や通常の型位置へ具象名を書く形は拒否します。
+
+通常の標準 helper の `Result<T> -> Result<U>` は、入力の集合型を出力へ継承せず、共通 Error を返します。集合として受け取るには、その集合に `Other(Error)` が必要です。詳しい構築・変換規則は[エラー処理](./error-handling.md)を参照してください。
 
 ## Trait 制約
 
@@ -209,7 +217,7 @@ keep_one: (_ -> Int) = always(1)
 `(_ -> Int)` の値を `(Int -> Int)` の引数・注釈・戻り値・分岐・container に渡すことはできません。
 入力型を指定した関数値が必要な場合は、`{|value: Int| 1}` のような closure を使います。
 `keep_one("ignored")` のような直接呼出しでは、入力を使わずに結果を返します。
-ただし、call-site ReturnTypeArgument内の`_`は推論変数であり、`Hole` markerではありません。
+ただし、call-site ReturnTypeArgument内の`_`は推論変数であり、`Hole` markerではありません。Result / ResultT の Error 位置だけは、call-site ReturnTypeArgument 内でも明示した `_` を拒否します。
 
 - callable input を 1 つ受ける
 - その入力値は観測しない

@@ -1,0 +1,2 @@
+plain = BetaFailure()
+rejected: ClosedFailures = match plain { BetaFailure @ error => error, _ => AlphaFailure(1) }

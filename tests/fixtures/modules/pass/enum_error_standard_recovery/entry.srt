@@ -1,0 +1,7 @@
+selected: Result<Int, ClosedFailures> = Err(Failure())
+recovered: Result<Int> = Result::recover(selected, {|_| Ok(8)})
+matched: Result<Int> = Result::recover_kind(selected, Failure, {|_| Ok(9)})
+kept: Result<Int> = Result::recover_kind(selected, OtherFailure, {|_| Ok(10)})
+print(to_string(match recovered { Ok(value) => value, Err(_) => 0 }))
+print(to_string(match matched { Ok(value) => value, Err(_) => 0 }))
+print(match kept { Ok(_) => "wrong", Err(error) => Error::message(error) })

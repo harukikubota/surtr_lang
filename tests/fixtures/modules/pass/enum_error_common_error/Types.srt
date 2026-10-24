@@ -1,0 +1,7 @@
+deferror Failure { "failure" }
+defenumerror ClosedFailures { Failure }
+defenumerror OpenFailures { Failure, Other(Error) }
+defmod Transport {
+  def relay(value: Result<Int>) -> Result<Int> { value }
+  def preserve(value: ResultT<Identity, Int, ClosedFailures>) -> Identity<Result<Int, ClosedFailures>> { value.inner }
+}

@@ -1,0 +1,6 @@
+deferror Failure { "failure" }
+defenumerror ClosedFailures { Failure }
+defenumerror OpenFailures { Failure, Other(Error) }
+defmod Transport {
+  def relay(value: Result<Int>) -> Result<Int> { value }
+}

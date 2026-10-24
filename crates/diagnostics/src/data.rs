@@ -78,6 +78,7 @@ pub enum TypeDiagnosticReason {
     ReservedIntrinsicMarkerUsage,
     TypecheckInvariantViolation,
     TraitImplementationForbidden,
+    EnumErrorPolicyViolation,
     CyclicTraitObligation,
     ConstValueForbidden,
     ConstDynamicBracket,
@@ -163,6 +164,7 @@ impl TypeDiagnosticReason {
             Self::ReservedIntrinsicMarkerUsage => "ReservedIntrinsicMarkerUsage",
             Self::TypecheckInvariantViolation => "TypecheckInvariantViolation",
             Self::TraitImplementationForbidden => "TraitImplementationForbidden",
+            Self::EnumErrorPolicyViolation => "EnumErrorPolicyViolation",
         }
     }
 }
@@ -903,6 +905,23 @@ pub struct PolicyData {
     pub entrypoint: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorCollectionOperation {
+    Conversion,
+    MonadFail,
+}
+
+/// Declared closed-collection facts; messages and labels never infer membership.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ErrorCollectionData {
+    pub operation: ErrorCollectionOperation,
+    pub target: String,
+    pub members: Vec<String>,
+    pub source_type: String,
+    pub concrete_kind: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RuntimeData {
     pub detail: String,
@@ -955,6 +974,7 @@ pub enum DiagnosticData {
     PatternFailure(PatternFailureData),
     Pattern(PatternDiagnosticData),
     Policy(PolicyData),
+    ErrorCollection(ErrorCollectionData),
     Runtime(RuntimeData),
     Parse(ParseDiagnosticData),
     Resolve(ResolveDiagnosticData),
@@ -999,6 +1019,7 @@ impl DiagnosticData {
             Self::PatternFailure(value) => ("PatternFailure", serde_json::to_value(value)),
             Self::Pattern(value) => ("Pattern", serde_json::to_value(value)),
             Self::Policy(value) => ("Policy", serde_json::to_value(value)),
+            Self::ErrorCollection(value) => ("ErrorCollection", serde_json::to_value(value)),
             Self::Runtime(value) => ("Runtime", serde_json::to_value(value)),
             Self::Parse(value) => ("Parse", serde_json::to_value(value)),
             Self::Resolve(value) => ("Resolve", serde_json::to_value(value)),

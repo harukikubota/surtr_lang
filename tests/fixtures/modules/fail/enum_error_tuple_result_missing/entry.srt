@@ -1,0 +1,2 @@
+pair: (Result<Int, ClosedFailures>, Int) = (Err(FirstFailure()), 7)
+print(to_string(match pair { (Ok(_), _) => 0, (Err(error), number) => match error { FirstFailure => number }, _ => 0 }))

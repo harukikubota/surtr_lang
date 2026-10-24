@@ -14,6 +14,8 @@ pub(in crate::checker) struct CandidateProbeCheckpoint {
     explicit_closure_parameters: HashMap<u32, Ty>,
     constructor_witness_traits: HashMap<u32, String>,
     process_marker_tyvars: HashSet<u32>,
+    error_slot_tyvars: HashSet<u32>,
+    failure_error_slot_tyvars: HashSet<u32>,
     safe_operator_results: HashMap<(usize, usize), SourceFact>,
     warnings: WarningBuffer,
     pattern_binding_aliases: HashMap<u32, Option<ResolvedId>>,
@@ -36,6 +38,8 @@ impl Checker {
             explicit_closure_parameters: self.explicit_closure_parameters.clone(),
             constructor_witness_traits: self.constructor_witness_traits.clone(),
             process_marker_tyvars: self.process_marker_tyvars.clone(),
+            error_slot_tyvars: self.error_slot_tyvars.clone(),
+            failure_error_slot_tyvars: self.failure_error_slot_tyvars.clone(),
             safe_operator_results: self.safe_operator_results.clone(),
             warnings: self.warnings.clone(),
             pattern_binding_aliases: self.pattern_binding_aliases.clone(),
@@ -57,6 +61,8 @@ impl Checker {
         self.explicit_closure_parameters = checkpoint.explicit_closure_parameters;
         self.constructor_witness_traits = checkpoint.constructor_witness_traits;
         self.process_marker_tyvars = checkpoint.process_marker_tyvars;
+        self.error_slot_tyvars = checkpoint.error_slot_tyvars;
+        self.failure_error_slot_tyvars = checkpoint.failure_error_slot_tyvars;
         self.safe_operator_results = checkpoint.safe_operator_results;
         self.warnings = checkpoint.warnings;
         self.pattern_binding_aliases = checkpoint.pattern_binding_aliases;

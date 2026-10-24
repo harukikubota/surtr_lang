@@ -795,6 +795,7 @@ fn keyword_token(text: &str) -> (Token, SyntaxTokenKind) {
         "defstruct" => Some(Token::Defstruct),
         "defrecord" => Some(Token::Defrecord),
         "deferror" => Some(Token::Deferror),
+        "defenumerror" => Some(Token::Defenumerror),
         "defenum" => Some(Token::Defenum),
         "defextractor" => Some(Token::Defextractor),
         "impl" => Some(Token::Impl),

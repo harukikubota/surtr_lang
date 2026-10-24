@@ -1,0 +1,3 @@
+deferror Failure { "failure" }
+deferror OtherFailure { "other" }
+defenumerror ClosedFailures { Failure }

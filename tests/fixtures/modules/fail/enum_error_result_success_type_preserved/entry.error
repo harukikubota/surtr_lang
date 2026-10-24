@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Result conversion must preserve the success type
