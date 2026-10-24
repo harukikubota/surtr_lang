@@ -36,7 +36,7 @@ defgenserver MyWorker {
   def delayed(state: Int) -> Result<CallResult<Int, Int>> {
     next = state + 1
     Ok(CallResult::ReplyLater(next, {||
-      Process::sleep(100ms)
+      Process::sleep(100ms);
       Ok(next)
     }))
   }

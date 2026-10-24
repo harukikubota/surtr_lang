@@ -3277,10 +3277,10 @@ fn record_positional_facet_resolves_to_named_field() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(name: String, age: Int)
 user = User("alice", 42)
-Facet::view(User._1, user)
+view = Facet::view(User._1, user)
 user._0"#,
     );
-    let view = &typed[typed.len() - 2];
+    let view = typed_bind_rhs(&typed, "view");
     let TypedInner::FacetView { path, .. } = &view.node else {
         panic!("expected positional record Facet view");
     };
@@ -11419,9 +11419,9 @@ fn match_result_extractor_contract_boundaries() {
   defextractor value(value: Int) -> MatchResult<Int, Error> { MatchResult::Ok(value) }
   defextractor unit(value: Int) -> MatchResult<Unit> { MatchResult::Ok(()) }
 }
-match 1 { Int::value(value) => value, _ => 0 }
+match 1 { Int::value(value) => value, _ => 0 };
 match 1 { Int::unit(value: Unit) => value, _ => () }
-match 1 { Int::unit(_: Unit) => 1, _ => 0 }
+match 1 { Int::unit(_: Unit) => 1, _ => 0 };
 match 1 { Int::unit() => 1, _ => 0 }
 "#;
     typecheck(resolve_with_builtin_prelude(source)).expect("MatchResult and UnitOnly contract");
@@ -11519,8 +11519,8 @@ fn extractor_prearguments_follow_signature_and_infer_payload_shape() {
   defextractor check(limit: Int, value: Int) -> MatchResult<Unit> { MatchResult::Ok(()) }
 }
 limit = 10
-match 5 { Int::choose((1, "one"), limit + 1, number: Int, text: String) => text, _ => "miss" }
-match 5 { Int::check(limit) => 1, _ => 0 }
+match 5 { Int::choose((1, "one"), limit + 1, number: Int, text: String) => text, _ => "miss" };
+match 5 { Int::check(limit) => 1, _ => 0 };
 match 5 { Int::check(limit, _: Unit) => 1, _ => 0 }
 "#;
     typecheck(resolve_with_builtin_prelude(source))
@@ -11532,7 +11532,7 @@ match 5 { Int::check(limit, _: Unit) => 1, _ => 0 }
 def doubled(value: $N) -> Boolean where $N: Add {
   is_match(1, Int::accept(value + value, _))
 }
-doubled(21)
+doubled(21);
 doubled(1.5)
 "#;
     let typed = typecheck(resolve_with_builtin_prelude(source))
@@ -11593,7 +11593,7 @@ def use(ext: ExtractorClosure<(Int -> MatchResult<Int>)>, value: Int) -> Int {
 use(make(2), 3)"#,
         r#"value = 9
 ext = *{|pre: Int, input: Int| MatchResult::Ok(input)}
-match 5 { ext(value, n) => value + n, _ => 0 }
+match 5 { ext(value, n) => value + n, _ => 0 };
 is_match(5, ext(value, _))"#,
         r#"ext = *{|input: Int| MatchResult::Ok(input)}
 match 1 { ext(value) | ext(value) => value, _ => 0 }"#,
@@ -12301,8 +12301,8 @@ defrecord Box(values: List<Int>)
 def outer(source: Result<$A>, next: ($A -> Result<Int>), values: {values_ty}) -> {result_ty} {{
   {body}
 }}
-outer(Ok(1), {{|x: Int| Ok(x)}}, {values})
-outer(Ok("hello"), {{|x: String| Ok(0)}}, {values})
+outer(Ok(1), {{|x: Int| Ok(x)}}, {values});
+outer(Ok("hello"), {{|x: String| Ok(0)}}, {values});
 outer(Ok(1), {{|x: Int| Ok(x)}}, {values})
 "#
     );

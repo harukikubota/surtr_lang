@@ -150,9 +150,9 @@ impl SessionApi {
 
 #[test]
 fn failed_suffix_preserves_transactional_state_and_explicit_rollback_allows_retry() {
-    let good = "defenum SessionBox<$T> { Box($T), }\ndeferror SessionError(detail: Int) { |value: Int| Self(message: \"session\", detail: value) }\ndef identity(value: $T) -> $T { value }\nSessionError(7)\nidentity(1)\nidentity(\"ok\")";
+    let good = "defenum SessionBox<$T> { Box($T), }\ndeferror SessionError(detail: Int) { |value: Int| Self(message: \"session\", detail: value) }\ndef identity(value: $T) -> $T { value }\nSessionError(7);\nidentity(1);\nidentity(\"ok\")";
     let good_resolved = resolved_suffix(good, None).resolved;
-    let bad = format!("{good}\nbad: Int = \"wrong\"");
+    let bad = format!("{good};\nbad: Int = \"wrong\"");
     let bad_resolved = resolved_suffix(&bad, None).resolved;
     for api in [SessionApi::Transactional, SessionApi::InPlace] {
         let mut failed = prefix_session();
@@ -175,7 +175,10 @@ fn failed_suffix_preserves_transactional_state_and_explicit_rollback_allows_retr
             .iter()
             .rev()
             .take(2)
-            .map(|node| node.ty.clone())
+            .map(|node| match &node.node {
+                TypedInner::Semi(value) => value.ty.clone(),
+                _ => node.ty.clone(),
+            })
             .collect::<Vec<_>>();
         assert_eq!(result_types, vec![Ty::Str, Ty::Int]);
         failed.rollback(checkpoint);
@@ -202,9 +205,9 @@ defenum SessionOption<$T> { Some($T), None, }
 defstruct SessionRecord { value: Int }
 impl SessionRecord { def new(value: Int) -> SessionRecord { SessionRecord { value: value } } }
 def session_identity(value: $T) -> $T { value }
-session_identity(1)
-session_identity("ok")
-SessionOption::Some(1)
+session_identity(1);
+session_identity("ok");
+SessionOption::Some(1);
 SessionRecord::new(1)
 "#;
 

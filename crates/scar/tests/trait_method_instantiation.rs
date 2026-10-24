@@ -322,14 +322,14 @@ deftrait Echo { def echo(self: Self, value: $T) -> $T }
 impl Echo for Boolean { def echo(self: Self, value: $T) -> $T { value } }
 impl Echo for Int { def echo(self: Self, value: $T) -> $T { value } }
 def wrap(value: $T) -> $T { Echo::echo(1, value) }
-wrap(1)
-wrap("left")
-wrap(2)
+wrap(1);
+wrap("left");
+wrap(2);
 keep_int: (Int -> Int) = &wrap(&1)
 keep_string: (String -> String) = &wrap(&1)
 keep_int_again: (Int -> Int) = &wrap(&1)
-keep_int(3)
-keep_string("right")
+keep_int(3);
+keep_string("right");
 keep_int_again(4)
 "#,
     );
@@ -398,6 +398,10 @@ keep_int_again(4)
 
     let direct_calls = nodes
         .iter()
+        .map(|node| match &node.node {
+            TypedInner::Semi(value) => value.as_ref(),
+            _ => node,
+        })
         .filter_map(|node| match &node.node {
             TypedInner::App(fun, _) => match &fun.ty {
                 Ty::UserFunc { fun_idx, .. } if wrapper_indices.contains(fun_idx) => {
@@ -482,7 +486,7 @@ fn generated_boolean_eq_uses_canonical_builtin_dispatch() {
     let stages = support::std_module_stages_with_overrides(&[("Boolean", &boolean_source)]);
     let index = sigil::precollect_declaration_index(&stages).expect("precollect");
     let ast = spire::parse_with_context(
-        "Eq::eq(True, False)\nEq::neq(True, False)\n",
+        "equal = Eq::eq(True, False)\nEq::neq(True, False)\n",
         spire::ParserContext::project(0),
     )
     .expect("parse");
@@ -508,11 +512,17 @@ fn generated_boolean_eq_uses_canonical_builtin_dispatch() {
             })
             .expect("canonical Boolean equality metadata")
             .builtin_id;
-        assert!(nodes.iter().any(|node| matches!(&node.node,
-            TypedInner::TraitCall {
-                method_name, dispatch: TraitDispatch::Static(TraitDispatchTarget::Builtin(actual)), ..
-            } if method_name == method && *actual == expected
-        )), "generated Boolean {method} must use its canonical builtin");
+        assert!(nodes.iter().any(|node| {
+            let expression = match &node.node {
+                TypedInner::Bind(_, value) => value.as_ref(),
+                _ => node,
+            };
+            matches!(&expression.node,
+                TypedInner::TraitCall {
+                    method_name, dispatch: TraitDispatch::Static(TraitDispatchTarget::Builtin(actual)), ..
+                } if method_name == method && *actual == expected
+            )
+        }), "generated Boolean {method} must use its canonical builtin");
     }
 }
 

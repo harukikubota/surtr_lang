@@ -220,7 +220,7 @@ def identity(value: $T) -> $T { value }
 def divide(value: $T) -> Result<$T> where $T: Div {
   identity(value) / identity(value)
 }
-divide(Number::new(7))
+divide(Number::new(7));
 divide(Number::new("seven"))"#;
     let nodes = support::typecheck(support::resolve_with_builtin_prelude(source))
         .expect("compatible Result context is preserved");

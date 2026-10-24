@@ -21,6 +21,14 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
                 actual_type: Some("Either<Error, Boolean>".into()),
             })
         }
+        NonUnitStatement => DiagnosticData::Policy(PolicyData {
+            policy: TypePolicy::NonFinalStatementUnit,
+            subject: None,
+            expected_type: Some("Unit".into()),
+            actual_type: Some("Result<Unit>".into()),
+            stage: None,
+            entrypoint: None,
+        }),
         NotCallable | CallableShapeMismatch => DiagnosticData::CallableShape(CallableShapeData {
             callable: "mapper".into(),
             actual_type: Some("Int".into()),
@@ -406,6 +414,7 @@ fn every_common_reason_has_a_typed_template_and_schema() {
         ArgumentTypeMismatch,
         ReturnTypeMismatch,
         AnnotationTypeMismatch,
+        NonUnitStatement,
         NotCallable,
         CallableShapeMismatch,
         CallableSignatureMetadataMismatch,
@@ -707,4 +716,36 @@ fn missing_extractor_diagnostic_limits_its_promise_to_the_input() {
         .as_deref()
         .unwrap()
         .contains("checked against the Pattern separately"));
+}
+
+#[test]
+fn non_unit_statement_has_explicit_discard_guidance() {
+    let reason: TypeDiagnosticReason =
+        serde_json::from_str("\"NonUnitStatement\"").expect("stable statement reason");
+    let mut diagnostic = input(reason);
+    diagnostic.primary = SourceFact::typed(
+        SourceRole::Value,
+        SourceId(0),
+        Span { start: 0, end: 8 },
+        "Result<Unit>",
+    );
+    diagnostic.related.clear();
+    let spec = structured_type_error_spec(&diagnostic);
+    let mut sources = SourceRegistry::new();
+    let source_id = sources.register("main.srt", "validate");
+    let error = serializable_report_by_id(&sources, source_id, "typecheck", &spec)
+        .errors
+        .remove(0);
+    assert_eq!(error.reason.as_deref(), Some("NonUnitStatement"));
+    assert_eq!(error.data["policy"], "non_final_statement_unit");
+    assert_eq!(error.data["expected_type"], "Unit");
+    assert_eq!(error.data["actual_type"], "Result<Unit>");
+    assert_eq!(
+        spec.message,
+        "Implicit discard of a non-Unit return value is not allowed."
+    );
+    assert_eq!(
+        spec.help.as_deref(),
+        Some("Add `;` or bind the value with `_ = expr` to discard it explicitly.")
+    );
 }

@@ -270,14 +270,14 @@ impl Int {
   }
 }
 def outer(source: Result<$A>) -> Result<Int> { apply_pattern(source, Int::fixed(_1)) }
-outer(Ok(7))
+outer(Ok(7));
 outer(Ok("x"))
 "#,
         2,
     );
 }
 fn named_generic_extractor_separates_instantiations() {
-    assert_eq!(check_heads(&format!("{RELAY}\napply_pattern(Ok(7), Int::relay(_1))\napply_pattern(Ok(\"x\"), Int::relay(_1))\napply_pattern(Ok(7), Int::relay(_1))"), 3), 2);
+    assert_eq!(check_heads(&format!("{RELAY}\napply_pattern(Ok(7), Int::relay(_1));\napply_pattern(Ok(\"x\"), Int::relay(_1));\napply_pattern(Ok(7), Int::relay(_1))"), 3), 2);
 }
 fn unused_named_generic_extractor_is_not_executable() {
     let nodes = support::typecheck_with_builtin_prelude(RELAY);
@@ -306,7 +306,7 @@ impl Int {
     MatchResult::Ok(value)
   }
 }
-outer(Ok("x"))
+outer(Ok("x"));
 outer(Ok(7))
 "#,
         2,
@@ -331,7 +331,7 @@ def outer(source: Result<$A>) -> Int {
     _ => 0,
   }
 }
-outer(Ok(7))
+outer(Ok(7));
 outer(Ok("x"))
 "#,
         2,

@@ -373,7 +373,23 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
     repl_core_case!(core_error_kinds_survive_chunks_and_rollback),
     repl_core_case!(core_monad_extractor_signatures_docs_and_import),
     repl_core_case!(core_statement_question_nested_error_keeps_session_alive),
+    repl_core_case!(core_non_final_values_require_explicit_discard_within_each_chunk),
 ];
+
+fn core_non_final_values_require_explicit_discard_within_each_chunk() {
+    let mut engine = engine();
+    for input in ["1", "2"] {
+        let result = engine.handle_line(input);
+        assert_eq!(rendered_text(&result), input);
+    }
+    let rejected = engine.handle_line("1\n2");
+    assert!(matches!(rejected.output, ReplOutput::EvalError { .. }));
+    assert!(rendered_text(&rejected).contains("Implicit discard"));
+    let explicit = engine.handle_line("1;\n2");
+    assert_eq!(rendered_text(&explicit), "2");
+    let next = engine.handle_line("3");
+    assert_eq!(rendered_text(&next), "3");
+}
 
 fn core_error_kinds_survive_chunks_and_rollback() {
     let mut engine = ReplEngine::from_module_source(
@@ -3880,7 +3896,7 @@ fn core_flat_map_builder_survives_runtime_error_rollback() {
 
     // The checkpoint now holds a Builder containing [1]. Let the live copy
     // finish before failing, then resume the checkpoint after rollback.
-    let failed = engine.handle_line("Task::await(pending)\nProcess::self()");
+    let failed = engine.handle_line("Task::await(pending);\nProcess::self()");
     assert!(
         matches!(failed.output, ReplOutput::EvalError { .. }),
         "{}",

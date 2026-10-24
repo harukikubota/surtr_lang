@@ -867,7 +867,7 @@ def fail_later() -> Result<Int> {
   Err(NoneError())
 }
 
-spin(3)
+spin(3);
 fail_later()
 "#,
     );

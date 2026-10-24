@@ -94,6 +94,10 @@ pub fn structured_type_error_spec(input: &StructuredDiagnostic) -> DiagnosticSpe
         }
         _ => {}
     }
+    if input.reason.type_reason() == Some(TypeDiagnosticReason::NonUnitStatement) {
+        spec.help =
+            Some("Add `;` or bind the value with `_ = expr` to discard it explicitly.".into());
+    }
     if let DiagnosticData::PatternFailure(value) = &input.data {
         let template = pattern_failure_template(value.context);
         spec.labels[0].message = template.primary_caption.into();
@@ -203,6 +207,9 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
                     value.rhs_type, value.lhs_input, value.payload_type
                 );
             }
+        }
+        TypeDiagnosticReason::NonUnitStatement => {
+            return "Implicit discard of a non-Unit return value is not allowed.".into();
         }
         TypeDiagnosticReason::ConcreteReturnTypeArgumentInDefinition => {
             return "Definition return type arguments must introduce type inputs".into();

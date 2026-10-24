@@ -54,9 +54,9 @@ fn mutually_recursive_relay() {
 }
 
 fn composite_slots() {
-    check(&format!("{INNER}{OUTER}outer(Ok([1,2]), {{|x: List<Int>| Ok((x,True))}})\nouter(Ok([1,2]), {{|x: List<Int>| Ok(inspect(x))}})"));
+    check(&format!("{INNER}{OUTER}outer(Ok([1,2]), {{|x: List<Int>| Ok((x,True))}});\nouter(Ok([1,2]), {{|x: List<Int>| Ok(inspect(x))}})"));
 }
 
 fn ordinary_erasure() {
-    check("def identity(x: $A) -> $A { x }\ndef relay(x: $A) -> $A { identity(x) }\nrelay(7)\nrelay(\"x\")");
+    check("def identity(x: $A) -> $A { x }\ndef relay(x: $A) -> $A { identity(x) }\nrelay(7);\nrelay(\"x\")");
 }

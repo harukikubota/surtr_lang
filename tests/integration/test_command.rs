@@ -996,7 +996,7 @@ test("Beta") {
 test("Capture stdout") {
   it("asserts captured print lines") {
     print("first")
-    assert_eq(["first"], capture_stdout())
+    assert_eq(["first"], capture_stdout())?
 
     print("second")
     print("third")
@@ -1012,14 +1012,14 @@ import Test;
 
 test("Stdin") {
   it("reads pushed stdin lines through IO") {
-    push_stdin("alpha\nbeta\n")
-    assert_ok_eq("alpha", IO::get_line(""))
+    push_stdin("alpha\nbeta\n")?
+    assert_ok_eq("alpha", IO::get_line(""))?
     assert_ok_eq("beta", IO::get_line(""))
   }
 
   it("reads pushed stdin chars through IO") {
-    push_stdin("xy")
-    assert_ok_eq("x", IO::get(""))
+    push_stdin("xy")?
+    assert_ok_eq("x", IO::get(""))?
     assert_ok_eq("y", IO::get(""))
   }
 }
@@ -1058,9 +1058,9 @@ test("IO isolation") {
   }
 
   it("starts with fresh io buffers") {
-    assert_stdout_eq([])
-    assert_stderr_eq([])
-    push_stdin("fresh\n")
+    assert_stdout_eq([])?
+    assert_stderr_eq([])?
+    push_stdin("fresh\n")?
     assert_ok_eq("fresh", IO::get_line(""))
   }
 }

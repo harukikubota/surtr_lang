@@ -7,7 +7,7 @@ def inner(source: Result<$A>, next: ($A -> Result<$B>)) -> Result<$B> { Monad::b
 def outer(source: Result<$A>, next: ($A -> Result<$B>)) -> Result<$B> { inner(source, next) }
 def relay(source: Result<$A>, next: ($A -> Result<$B>)) -> Result<$B> { outer(source, next) }
 def with_bound(value: $A, next: ($A -> Result<$B>)) -> Result<$B> where $A: Show {
-  Show::to_string(value)
+  Show::to_string(value);
   inner(Ok(value), next)
 }
 def partial::<$B>(source: Result<$A>) -> (($A -> Result<$B>) -> Result<$B>) { &inner(source, &1) }

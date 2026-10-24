@@ -46,7 +46,7 @@ defgenserver Worker {
   def outer_later(state: Int) -> Result<CallResult<Int, Int>> {
     _ =? Worker::stop(Process::self())
     Ok(CallResult::ReplyLater(state + 1, {||
-      Process::sleep(1ms)
+      Process::sleep(1ms);
       print("callback finished")
       Ok(state + 2)
     }))

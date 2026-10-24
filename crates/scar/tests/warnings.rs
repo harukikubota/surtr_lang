@@ -86,6 +86,37 @@ fn empty_new_def(struct_name: &str, uid: u32) -> Resolved {
 }
 
 #[test]
+fn non_tail_non_unit_block_value_is_rejected() {
+    let error = typecheck_with_warnings(vec![Resolved::Block(
+        span(0, 8),
+        vec![
+            Resolved::Lit(span(1, 2), Lit::Int(int(1))),
+            Resolved::Lit(span(4, 6), Lit::Unit),
+        ],
+    )])
+    .expect_err("non-Unit statement must not be implicitly discarded");
+
+    assert!(error.message.contains("Implicit discard"), "{error:?}");
+    assert_eq!(error.span, span(1, 2));
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::NonUnitStatement)
+    );
+    let structured = error
+        .structured
+        .as_ref()
+        .expect("structured statement error");
+    let diagnostics::DiagnosticData::Policy(data) = &structured.data else {
+        panic!("statement constraint must retain typed policy data");
+    };
+    assert_eq!(data.expected_type.as_deref(), Some("Unit"));
+    assert_eq!(data.actual_type.as_deref(), Some("Int"));
+    let hint = error.hint.expect("explicit discard guidance");
+    assert!(hint.contains(";"));
+    assert!(hint.contains("_ ="));
+}
+
+#[test]
 fn unit_and_explicit_semicolon_values_do_not_warn() {
     let output = typecheck_with_warnings(vec![Resolved::Block(
         span(0, 12),
@@ -101,6 +132,31 @@ fn unit_and_explicit_semicolon_values_do_not_warn() {
     .expect("block should typecheck");
 
     assert!(output.warnings.is_empty(), "{:?}", output.warnings);
+}
+
+#[test]
+fn top_level_non_unit_statements_are_rejected() {
+    for source in ["1\n()", "Ok(())\n()"] {
+        let error = support::session_from_cached_std_prelude()
+            .typecheck_with_warnings(support::resolve_with_builtin_prelude(source))
+            .expect_err("top-level non-final values must not be implicitly discarded");
+        assert_eq!(
+            error.reason(),
+            Some(diagnostics::TypeDiagnosticReason::NonUnitStatement)
+        );
+        assert_eq!(error.span.start, 0);
+    }
+    for source in [
+        "1; _ = Ok(())\n()",
+        "bound = 1\n()\n bound",
+        "Ok(())",
+        "def tail_identity(value: $T) -> $T { value }\ntail_identity(1)",
+    ] {
+        let output = support::session_from_cached_std_prelude()
+            .typecheck_with_warnings(support::resolve_with_builtin_prelude(source))
+            .expect("explicit discards, bindings and tail values remain valid");
+        assert!(output.warnings.is_empty(), "{:?}", output.warnings);
+    }
 }
 
 #[test]
@@ -189,4 +245,30 @@ fn trait_head_type_parameter_unused_by_methods_warns_even_with_bound() {
 
     assert_eq!(output.warnings.len(), 1);
     assert_eq!(output.warnings[0].kind, WarningKind::UnusedTypeParameter);
+}
+
+#[test]
+fn callable_blocks_reject_implicit_discard_and_preserve_explicit_boundaries() {
+    for source in [
+        "def bad() -> Int { 1\n 2 }",
+        "def bad() -> Int { Ok(())\n 2 }",
+        "def bad(value: $T) -> Int { value\n 2 }",
+        "handler: (Int -> Int) = {|value| value\n 2 }",
+        "def bad() -> Int { if(True, { 1\n 2 }, { 3 }) }",
+    ] {
+        let error =
+            support::typecheck(support::resolve_with_builtin_prelude(source)).expect_err(source);
+        assert!(
+            error.message.contains("Implicit discard"),
+            "{source}: {error:?}"
+        );
+    }
+    support::typecheck_with_builtin_prelude(
+        "def good() -> Int { ()\n 1; _ = Ok(())\n bound = 3\n bound }\nhandler: (Int -> Int) = {|value| value; value }\nresult = do { Ok(1)\n Ok(2) }",
+    );
+    let error = support::typecheck(support::resolve_with_builtin_prelude(
+        "def bad() -> Unit { 1 }",
+    ))
+    .expect_err("tail still follows declared return type");
+    assert!(!error.message.contains("Implicit discard"), "{error:?}");
 }

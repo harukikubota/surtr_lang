@@ -24,12 +24,15 @@ impl Checker {
                         stmt,
                         Some(expected_ty),
                         expected_relation,
-                    )?,
-                    None => self.check_node(stmt)?,
+                    ),
+                    None => self.check_node(stmt),
                 }
             } else {
-                self.check_node(stmt)?
-            };
+                self.check_node(stmt)
+            }?;
+            if !is_last {
+                self.ensure_unit_statement(&typed)?;
+            }
             last_ty = typed.ty.clone();
             typed_stmts.push(typed);
         }
@@ -41,6 +44,26 @@ impl Checker {
             span: span.clone(),
             node: TypedInner::Block(typed_stmts),
         })
+    }
+
+    pub(in crate::checker) fn ensure_unit_statement(
+        &self,
+        typed: &TypedNode,
+    ) -> Result<(), TypeError> {
+        if self.resolve_ty(&typed.ty) == Ty::Unit {
+            return Ok(());
+        }
+        Err(self.policy_error(
+            TypeDiagnosticReason::NonUnitStatement,
+            diagnostics::TypePolicy::NonFinalStatementUnit,
+            None,
+            Some(&Ty::Unit),
+            Some(&typed.ty),
+            None,
+            None,
+            &typed.span,
+            Some("Add `;` or bind the value with `_ = expr` to discard it explicitly.".into()),
+        ))
     }
 
     pub(in crate::checker) fn check_branch_node_with_expected(

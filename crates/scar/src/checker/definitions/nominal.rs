@@ -624,7 +624,7 @@ mod deferror_scope_tests {
                 do::<Option> {
                     ys: List<Int> = xs
                     Option::Some(())
-                }
+                };
                 zs: List<$ELEMENT> = xs"#
                 .replace("$ELEMENT", element);
             let result =
