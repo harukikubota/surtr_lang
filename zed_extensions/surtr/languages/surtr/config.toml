@@ -1,0 +1,6 @@
+name = "Surtr"
+grammar = "surtr"
+path_suffixes = ["srt"]
+line_comments = ["# "]
+tab_size = 2
+hard_tabs = false
