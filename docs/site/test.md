@@ -177,8 +177,8 @@ test("expected failure") {
 }
 ```
 
-`assert_err_kind` には `deferror` で宣言した名前を渡します。
-引数を持つエラーでも `InvalidCount(0)` ではなく `InvalidCount` と書きます。
+`assert_err_kind` の第一引数は ErrorKind です。`deferror` の宣言名はその種類を表し、変数に保存したり、引数として渡したりできます。
+引数を持つエラーでも、種類を指定するときは `InvalidCount(0)` ではなく `InvalidCount` と書きます。明示的な呼び出しは Error を生成します。
 
 `assert_err_message_eq` はメッセージだけを比較します。種類・原因・発生位置は含めません。
 エラー全体の表示を部分一致で調べたい場合は `assert_err_contains` を使います。
@@ -198,8 +198,8 @@ test("cause chain") {
 ```
 
 `assert_cause_chain` は種類・順序・長さを検査し、同じ種類の繰り返しも区別します。
-値・メッセージ・発生位置は比較しません。期待列には宣言名を直接書き、変数・文字列・
-エラーを生成する式・spread は使いません。空の列は一致せず、Ok も失敗です。
+値・メッセージ・発生位置は比較しません。期待列は通常の `List<ErrorKind>` であり、変数や計算結果、spread、キャプチャを使えます。
+String や Error は ErrorKind の代わりには渡せません。空の列は一致せず、Ok も失敗です。
 `assert_err_kind(OuterError, result)` は原因の有無を問いませんが、
 `assert_cause_chain([OuterError], result)` は原因がないことも確かめます。
 
