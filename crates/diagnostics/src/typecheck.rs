@@ -415,6 +415,20 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
                 );
             }
         }
+        TypeDiagnosticReason::TestScriptErrorPropagation => {
+            return "Test scripts return Unit and cannot receive propagated errors.".into();
+        }
+        TypeDiagnosticReason::TestScriptReturnType => {
+            if let DiagnosticData::Policy(value) = &input.data {
+                return format!(
+                    "Test scripts must return Unit, got {}.",
+                    value
+                        .actual_type
+                        .as_deref()
+                        .expect("test script result type")
+                );
+            }
+        }
         TypeDiagnosticReason::FacetSafeBindForbidden => {
             return "Facet values cannot be bound with `=?`".into();
         }

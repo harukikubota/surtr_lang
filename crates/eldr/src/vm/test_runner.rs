@@ -104,6 +104,7 @@ impl VM {
         self
     }
     pub(crate) fn push_test_scope(&mut self, kind: &str, name: String) -> Result<(), RuntimeError> {
+        self.check_test_declaration_allowed()?;
         let kind = match kind {
             "test" => VmTestScopeKind::Test,
             "describe" => VmTestScopeKind::Describe,
@@ -125,11 +126,7 @@ impl VM {
         name: String,
         reason: String,
     ) -> Result<bool, RuntimeError> {
-        if self.test_runner.active.is_some() {
-            return Err(RuntimeError::new(
-                "test cases cannot be declared inside a test case",
-            ));
-        }
+        self.check_test_declaration_allowed()?;
         let declaration = match declaration {
             "it" => VmTestDeclaration::It,
             "xit" => VmTestDeclaration::Xit,
@@ -263,20 +260,55 @@ impl VM {
                 .expect("active case must finish exactly once");
         }
     }
-    pub(crate) fn record_current_scope_fail(&mut self, detail: String) {
-        self.test_events.push(VmTestEvent {
-            path: self
-                .test_runner
-                .scopes
-                .iter()
-                .map(|scope| scope.name.clone())
-                .collect(),
-            detail: Some(detail),
-            kind: VmTestEventKind::ScopeFailed,
-            io: None,
-            diagnostic: None,
-            case: None,
+    pub(crate) fn test_declaration_error(&self, mut error: RuntimeError) -> RuntimeError {
+        let trace = match self.builtin_caller_stack_trace() {
+            Ok(trace) => trace,
+            Err(origin_error) => {
+                error.retain_secondary_failure(&origin_error, "test declaration origin");
+                return error;
+            }
+        };
+        // Resolve the actual function identity, never the displayed trace name or
+        // a source-file path. The first public DSL frame is the violating call;
+        // an outer case further down the trace is unrelated to its origin.
+        let declaration = trace.iter().find(|frame| {
+            frame
+                .fun_idx
+                .and_then(|id| self.bytecode.functions.get(id as usize))
+                .and_then(|entry| entry.qualified_name.as_deref())
+                .is_some_and(|name| {
+                    matches!(
+                        sindr::names::surface_path_name(name),
+                        "Test::test" | "Test::describe" | "Test::it" | "Test::xit" | "Test::pend"
+                    )
+                })
         });
+        let Some(declaration) = declaration else {
+            error.retain_secondary_failure(
+                &RuntimeError::new("test declaration builtin has no public caller origin"),
+                "test declaration origin",
+            );
+            return error;
+        };
+        let Some(location) = declaration.location.clone() else {
+            error.retain_secondary_failure(
+                &RuntimeError::new("test declaration caller has no source origin"),
+                "test declaration origin",
+            );
+            return error;
+        };
+        error.context.call_site = Some(location);
+        error.context.stack_trace = trace;
+        error
+    }
+
+    fn check_test_declaration_allowed(&self) -> Result<(), RuntimeError> {
+        if self.test_runner.active.is_some() {
+            return Err(RuntimeError::new(
+                "Test cases and groups cannot be declared while a test case is running.",
+            ));
+        }
+        Ok(())
     }
 }
 fn case_event(
@@ -376,6 +408,35 @@ mod tests {
     }
 
     #[test]
+    fn active_case_rejects_all_declarations_before_validation_or_scope_changes() {
+        let mut vm = VM::new(Bytecode::default()).with_test_policy(VmTestPolicy {
+            it_filter: Some("selected".into()),
+            ..VmTestPolicy::default()
+        });
+        vm.push_test_scope("test", "outer".into()).unwrap();
+        assert!(vm
+            .begin_test_case("it", "selected".into(), "".into())
+            .unwrap());
+        let expected = "Test cases and groups cannot be declared while a test case is running.";
+        for kind in ["test", "describe", "invalid"] {
+            let error = vm.push_test_scope(kind, "nested".into()).unwrap_err();
+            assert_eq!(error.message, expected);
+        }
+        for kind in ["it", "xit", "pend", "invalid"] {
+            let error = vm
+                .begin_test_case(kind, "filtered".into(), " \t\n".into())
+                .unwrap_err();
+            assert_eq!(error.message, expected);
+        }
+        assert_eq!(vm.test_runner.scopes.len(), 1);
+        assert_eq!(vm.test_runner.next_index, 1);
+        assert!(vm.test_events().is_empty());
+        vm.record_test_pass("selected".into()).unwrap();
+        vm.push_test_scope("describe", "later".into()).unwrap();
+        assert_eq!(vm.test_runner.scopes.len(), 2);
+    }
+
+    #[test]
     fn nonexecuted_cases_preserve_io_and_have_no_timing() {
         let mut vm = VM::new(Bytecode::default())
             .with_output_capture()
@@ -418,6 +479,38 @@ mod tests {
             .unwrap()
             .duration_ns
             .is_some());
+    }
+
+    #[test]
+    fn aborted_case_records_one_failure_and_restores_surrounding_io() {
+        let mut vm = VM::new(Bytecode::default())
+            .with_output_capture()
+            .with_error_capture();
+        vm.output.as_mut().unwrap().push("outer output".into());
+        vm.error_output.as_mut().unwrap().push("outer error".into());
+        vm.push_stdin_input("outer input");
+        assert_eq!(vm.read_injected_char().as_deref(), Some("o"));
+        vm.push_test_scope("test", "suite".into()).unwrap();
+        assert!(vm.begin_test_case("it", "case".into(), "".into()).unwrap());
+        vm.output.as_mut().unwrap().push("case output".into());
+        vm.error_output.as_mut().unwrap().push("case error".into());
+        vm.push_stdin_input("case input");
+        let error = vm
+            .push_test_scope("describe", "forbidden".into())
+            .unwrap_err();
+        vm.abort_test_case(&error);
+        vm.abort_test_case(&error);
+        assert_eq!(vm.test_events().len(), 1);
+        let event = &vm.test_events()[0];
+        assert_eq!(event.kind, VmTestEventKind::Failed);
+        assert_eq!(event.path, ["suite", "case"]);
+        assert!(event.detail.as_deref().unwrap().contains(&error.message));
+        let io = event.io.as_ref().unwrap();
+        assert_eq!(io.stdout, ["case output"]);
+        assert_eq!(io.stderr, ["case error"]);
+        assert_eq!(vm.take_stdout(), ["outer output"]);
+        assert_eq!(vm.take_stderr(), ["outer error"]);
+        assert_eq!(vm.read_injected_line().as_deref(), Some("uter input"));
     }
 
     #[test]

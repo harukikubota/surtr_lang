@@ -245,10 +245,6 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: |vm, args| builtin_test_fail_error(vm, args).map(BuiltinOutcome::Complete),
     },
     BuiltinImpl {
-        name: "__test_fail_current",
-        func: |vm, args| builtin_test_fail_current(vm, args).map(BuiltinOutcome::Complete),
-    },
-    BuiltinImpl {
         name: "group_count",
         func: |vm, args| builtin_list_group_count(vm, args).map(BuiltinOutcome::Complete),
     },
@@ -2411,7 +2407,8 @@ fn builtin_test_push(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErro
     let Value::Str(name) = &args[1] else {
         return Err(RuntimeError::new("__test_push expects String as name"));
     };
-    vm.push_test_scope(kind, name.clone())?;
+    vm.push_test_scope(kind, name.clone())
+        .map_err(|error| vm.test_declaration_error(error))?;
     Ok(Value::Unit)
 }
 
@@ -2454,16 +2451,6 @@ fn builtin_test_fail_error(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runti
     Ok(Value::Unit)
 }
 
-fn builtin_test_fail_current(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let Value::Str(detail) = &args[0] else {
-        return Err(RuntimeError::new(
-            "__test_fail_current expects String as detail",
-        ));
-    };
-    vm.record_current_scope_fail(detail.clone());
-    Ok(Value::Unit)
-}
-
 fn builtin_test_capture_stdout(vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     let items = vm
         .take_stdout()
@@ -2492,11 +2479,10 @@ fn builtin_test_begin_case(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runti
     let kind = decode_string_arg(&args[0], "__test_begin_case", "kind")?;
     let name = decode_string_arg(&args[1], "__test_begin_case", "name")?;
     let reason = decode_string_arg(&args[2], "__test_begin_case", "reason")?;
-    Ok(Value::Bool(vm.begin_test_case(
-        kind,
-        name.to_string(),
-        reason.to_string(),
-    )?))
+    Ok(Value::Bool(
+        vm.begin_test_case(kind, name.to_string(), reason.to_string())
+            .map_err(|error| vm.test_declaration_error(error))?,
+    ))
 }
 
 fn builtin_list_group_count(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {

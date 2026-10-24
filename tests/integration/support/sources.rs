@@ -93,6 +93,7 @@ pub(super) fn typecheck_context_for_mode(mode: TestCompileMode) -> scar::Typeche
         },
         enforce_builtin_type_contracts: true,
         allow_private_facet_inspection: false,
+        test_script: false,
     }
 }
 
@@ -114,6 +115,7 @@ pub(super) fn std_typecheck_context_for_mode(mode: TestCompileMode) -> scar::Typ
         ),
         enforce_builtin_type_contracts: true,
         allow_private_facet_inspection: false,
+        test_script: false,
     }
 }
 

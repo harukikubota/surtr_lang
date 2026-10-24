@@ -141,7 +141,6 @@ struct TestRunSummary {
     pending: usize,
     filtered: usize,
     runnable: usize,
-    scope_failures: usize,
     script_errors: usize,
     policy_errors: usize,
 }
@@ -350,20 +349,13 @@ fn test_command(options: TestOptions, env: ExecutionEnv) -> RuneResult<()> {
         }
         Err(error) => report.script_error(error),
     }
-    if options.has_filters()
-        && report.summary.selected == 0
-        && report.summary.script_errors == 0
-        && report.summary.scope_failures == 0
-    {
+    if options.has_filters() && report.summary.selected == 0 && report.summary.script_errors == 0 {
         report.policy_error("test: no cases matched the specified filters".into());
     }
     progress.clear().map_err(progress_error)?;
     let duration_ns = started.map(|time| time.elapsed().as_nanos());
-    let failed = report.summary.failed
-        + report.summary.scope_failures
-        + report.summary.script_errors
-        + report.summary.policy_errors
-        > 0;
+    let failed =
+        report.summary.failed + report.summary.script_errors + report.summary.policy_errors > 0;
     match options.format {
         TestFormat::Human => render_human_report(&report, &options, duration_ns, failed),
         TestFormat::Json => println!(
@@ -473,21 +465,6 @@ fn execute_test_script(
         .with_test_policy(options.policy());
     let result = vm.run();
     for event in vm.test_events() {
-        if event.kind == VmTestEventKind::ScopeFailed {
-            report.summary.scope_failures += 1;
-            report.errors.push(TestReportError {
-                kind: "scope",
-                message: format!(
-                    "{} ({}): {}",
-                    format_event_path(event),
-                    script.file_path,
-                    event.detail.as_deref().unwrap_or("scope failed")
-                ),
-                source: None,
-                diagnostic: None,
-            });
-            continue;
-        }
         let case = event.case.as_ref().expect("case events have case metadata");
         report.summary.discovered += 1;
         report.summary.selected += usize::from(case.selected);
@@ -508,7 +485,6 @@ fn execute_test_script(
             }
             VmTestEventKind::Filtered => report.summary.filtered += 1,
             VmTestEventKind::Runnable => report.summary.runnable += 1,
-            VmTestEventKind::ScopeFailed => unreachable!(),
         }
         report.cases.push(TestCaseRecord {
             file: script.file_path.clone(),
@@ -560,7 +536,6 @@ fn event_status(kind: &VmTestEventKind) -> &'static str {
         VmTestEventKind::Pending => "pending",
         VmTestEventKind::Filtered => "filtered",
         VmTestEventKind::Runnable => "runnable",
-        VmTestEventKind::ScopeFailed => "scope_failed",
     }
 }
 fn case_json(record: &TestCaseRecord) -> JsonValue {
@@ -582,7 +557,7 @@ fn case_json(record: &TestCaseRecord) -> JsonValue {
 fn summary_json(s: TestRunSummary) -> JsonValue {
     json!({"discovered": s.discovered, "selected": s.selected, "executed": s.executed,
         "passed": s.passed, "failed": s.failed, "skipped": s.skipped, "pending": s.pending,
-        "filtered": s.filtered, "runnable": s.runnable, "scope_failures": s.scope_failures,
+        "filtered": s.filtered, "runnable": s.runnable,
         "script_errors": s.script_errors, "policy_errors": s.policy_errors})
 }
 fn render_human_report(
@@ -662,7 +637,7 @@ fn render_human_report(
         } else {
             summary_line(s, color)
         };
-        line.push_str(&format!(", discovered={}, selected={}, executed={}, skipped={}, pending={}, filtered={}, scope_failures={}, script_errors={}, policy_errors={}", s.discovered, s.selected, s.executed, s.skipped, s.pending, s.filtered, s.scope_failures, s.script_errors, s.policy_errors));
+        line.push_str(&format!(", discovered={}, selected={}, executed={}, skipped={}, pending={}, filtered={}, script_errors={}, policy_errors={}", s.discovered, s.selected, s.executed, s.skipped, s.pending, s.filtered, s.script_errors, s.policy_errors));
         if let Some(ns) = duration_ns {
             line.push_str(&format!(", duration={:.3} ms", ns as f64 / 1_000_000.0));
         }

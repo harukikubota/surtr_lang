@@ -70,6 +70,201 @@ fn write_math_test(temp: &Path, body: &str) {
 }
 
 #[test]
+fn test_command_dsl_returns_unit_and_records_discarded_failures() {
+    let temp = unique_temp_dir("surtr_test_dsl_unit_results");
+    write_math_test(
+        &temp,
+        r#"import Test;
+it("discarded failure") { assert_true(False) };
+test("groups") {
+  describe("first") { it("one") { assert_true(True) } }
+  describe("second") { it("two") { assert_true(True) } }
+}
+selected: (String, (-> Result<Unit>) -> Unit) = &Test::it
+selected("captured case", {|| assert_true(True) })
+"#,
+    );
+    let output = run_surtr(
+        &temp,
+        &["test", "lib/tests/local/math.srt", "--format=json"],
+    );
+    let report = test_json(&output);
+    assert_eq!(output.status.code(), Some(1), "{report}");
+    assert_eq!(report["summary"]["script_errors"], 0, "{report}");
+    assert_eq!(report["summary"]["failed"], 1, "{report}");
+    assert_eq!(report["summary"]["passed"], 3, "{report}");
+    assert_test_counts(&report);
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_dsl_calls_use_normal_functions_and_included_helpers() {
+    let temp = unique_temp_dir("surtr_test_dsl_normal_calls");
+    write_source(
+        &temp.join("lib/tests/local/support/helpers.srt"),
+        r#"import Test;
+defmod Helpers {
+  def declare(name: String) -> Unit { it(name) { assert_eq(3, 1 + 2) } }
+  def apply(action: (String -> Unit), name: String) -> Unit { action(name) }
+}
+"#,
+    );
+    write_math_test(
+        &temp,
+        r#"include "./support/helpers.srt"
+import Test;
+test("outer") {
+  test("inner") { Helpers::declare("nested group") }
+  describe("siblings") { Helpers::declare("included helper") }
+}
+Helpers::apply(&Helpers::declare, "higher order")
+if_then(True, {|| Helpers::declare("branch") })
+List::each(["repeat one", "repeat two"], &Helpers::declare)
+"#,
+    );
+    let output = run_surtr(
+        &temp,
+        &["test", "lib/tests/local/math.srt", "--format=json"],
+    );
+    let report = test_json(&output);
+    assert!(output.status.success(), "{report}");
+    assert_eq!(report["summary"]["passed"], 6, "{report}");
+    assert_test_counts(&report);
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_top_level_requires_unit_and_rejects_error_propagation() {
+    let temp = unique_temp_dir("surtr_test_top_level_unit");
+    for (source, expected) in [
+        ("42", "Test scripts must return Unit, got Int."),
+        ("Ok(())", "Test scripts must return Unit, got Result<Unit>."),
+        (
+            "import Test;\nassert_true(True)?",
+            "Test scripts return Unit and cannot receive propagated errors.",
+        ),
+        (
+            "value =? Ok(1)\n()",
+            "Test scripts return Unit and cannot receive propagated errors.",
+        ),
+    ] {
+        write_math_test(&temp, source);
+        let output = run_surtr(
+            &temp,
+            &["test", "lib/tests/local/math.srt", "--format=json"],
+        );
+        let report = test_json(&output);
+        assert_eq!(output.status.code(), Some(1), "{source}: {report}");
+        assert_eq!(report["summary"]["script_errors"], 1, "{source}: {report}");
+        assert!(
+            report["errors"][0]["message"]
+                .as_str()
+                .unwrap()
+                .contains(expected),
+            "{source}: {report}"
+        );
+    }
+    for source in [
+        "",
+        "import Test;\nit(\"unit\") { assert_true(True) }",
+        "import Test;\nassert_true(True);\n()",
+    ] {
+        write_math_test(&temp, source);
+        let output = run_surtr(
+            &temp,
+            &["test", "lib/tests/local/math.srt", "--format=json"],
+        );
+        let report = test_json(&output);
+        assert!(output.status.success(), "{source}: {report}");
+    }
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_test_module_requires_import_and_hides_internal_functions() {
+    let temp = unique_temp_dir("surtr_test_module_visibility");
+    for source in [
+        "it(\"no import\") { Ok(()) }",
+        "import Test;\n__test_pop()",
+        "Test::__test_pop()",
+        "captured = &Test::__test_pop\n()",
+        "import Test;\ncaptured = &__test_pop\n()",
+    ] {
+        write_math_test(&temp, source);
+        let output = run_surtr(
+            &temp,
+            &["test", "lib/tests/local/math.srt", "--format=json"],
+        );
+        let report = test_json(&output);
+        assert_eq!(output.status.code(), Some(1), "{source}: {report}");
+        assert_eq!(report["summary"]["script_errors"], 1, "{source}: {report}");
+        assert_eq!(report["summary"]["discovered"], 0, "{source}: {report}");
+    }
+    write_math_test(&temp, "Test::it(\"qualified\", {|| Ok(()) })");
+    let output = run_surtr(
+        &temp,
+        &["test", "lib/tests/local/math.srt", "--format=json"],
+    );
+    let report = test_json(&output);
+    assert!(output.status.success(), "{report}");
+    assert_eq!(report["summary"]["passed"], 1);
+    for source in ["import Test;\n()", "Test::it(\"unloaded\", {|| Ok(()) })"] {
+        write_source(&temp.join("normal.srt"), source);
+        let output = run_surtr(&temp, &["run", "normal.srt"]);
+        assert!(!output.status.success(), "{source}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("Test"));
+    }
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_rejects_case_declarations_at_runtime_before_policies() {
+    let temp = unique_temp_dir("surtr_test_runtime_declarations");
+    for declaration in [
+        "test(\"nested group\") { () }",
+        "describe(\"nested description\") { () }",
+        "it(\"nested case\") { Ok(()) }",
+        "xit(\"nested skipped\", \" \" ) { Ok(()) }",
+        "pend(\"nested pending\", \"\")",
+        "captured: (String, (-> Result<Unit>) -> Unit) = &Test::it\n    captured(\"captured\", {|| Ok(()) })",
+        "captured: (String, (-> Unit) -> Unit) = &Test::test\n    captured(\"captured group\", {|| () })",
+        "captured: (String, (-> Unit) -> Unit) = &Test::describe\n    captured(\"captured description\", {|| () })",
+        "captured: (String, String, (-> Result<Unit>) -> Unit) = &Test::xit\n    captured(\"captured skipped\", \" \", {|| Ok(()) })",
+        "captured: (String, String -> Unit) = &Test::pend\n    captured(\"captured pending\", \"\")",
+        "Helpers::declare()",
+    ] {
+        write_source(&temp.join("lib/tests/local/support/helpers.srt"), "import Test;\ndefmod Helpers { def declare() -> Unit { it(\"from helper\") { Ok(()) } } }\n");
+        write_math_test(&temp, &format!("include \"./support/helpers.srt\"\nimport Test;\nit(\"running\") {{\n    {declaration}\n    Ok(())\n}}\nit(\"unreached\") {{ Ok(()) }}\n"));
+        let output = run_surtr(&temp, &["test", "lib/tests/local/math.srt", "--format=json"]);
+        let report = test_json(&output);
+        assert_eq!(output.status.code(), Some(1), "{declaration}: {report}");
+        assert_eq!(report["summary"]["discovered"], 1, "{declaration}: {report}");
+        assert_eq!(report["summary"]["failed"], 1, "{declaration}: {report}");
+        assert_eq!(report["summary"]["script_errors"], 1, "{declaration}: {report}");
+        assert_eq!(report["scripts"][0]["status"], "aborted", "{declaration}: {report}");
+        let site = &report["errors"][0]["diagnostic"]["call_site"];
+        let (file, line) = if declaration == "Helpers::declare()" {
+            ("helpers.srt", 2)
+        } else {
+            ("math.srt", if declaration.starts_with("captured:") { 5 } else { 4 })
+        };
+        assert!(site["file"].as_str().unwrap().ends_with(file), "{declaration}: {report}");
+        assert_eq!(site["line"], line, "{declaration}: {report}");
+        assert!(report["errors"][0]["message"].as_str().unwrap().contains("Test cases and groups cannot be declared while a test case is running."), "{declaration}: {report}");
+    }
+    write_math_test(&temp, "import Test;\nxit(\"skipped\", \"later\") { pend(\"never\", \"\")\nOk(()) }\nit(\"selected\") { Ok(()) }\nit(\"filtered\") { test(\"never\") { () }\nOk(()) }");
+    for options in [vec!["--it=selected"], vec!["--list"]] {
+        let mut args = vec!["test", "lib/tests/local/math.srt", "--format=json"];
+        args.extend(options);
+        let output = run_surtr(&temp, &args);
+        let report = test_json(&output);
+        assert!(output.status.success(), "{report}");
+        assert_eq!(report["summary"]["script_errors"], 0, "{report}");
+    }
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
 fn test_command_runs_actual_test_file_paths() {
     let temp = unique_temp_dir("surtr_test_command_named_scripts");
     write_math_module(&temp);
@@ -1232,7 +1427,9 @@ fn test_command_extension_errors_and_usage_json() {
     write_math_test(
         &temp,
         r#"import Test;
-it("interrupted") { it("nested") { assert_true(True) } }
+it("interrupted") { it("nested") { assert_true(True) }
+  Ok(())
+}
 it("not reached") { assert_true(True) }
 "#,
     );
@@ -1254,7 +1451,7 @@ it("not reached") { assert_true(True) }
     assert!(report["errors"][0]["diagnostic"]["message"]
         .as_str()
         .unwrap()
-        .contains("inside a test case"));
+        .contains("Test cases and groups cannot be declared while a test case is running."));
 
     write_math_test(
         &temp,
@@ -1272,10 +1469,21 @@ it("not reached") { assert_true(True) }
     );
     let report = test_json(&output);
     assert_eq!(output.status.code(), Some(1));
-    assert_eq!(report["summary"]["scope_failures"], 1);
+    assert!(
+        report["summary"].get("scope_failures").is_none(),
+        "{report}"
+    );
+    assert_eq!(report["summary"]["script_errors"], 1);
     assert_eq!(report["summary"]["failed"], 0);
     assert_eq!(report["summary"]["policy_errors"], 0);
-    assert_eq!(report["errors"][0]["kind"], "scope");
+    assert_eq!(report["errors"][0]["kind"], "script");
+    assert!(
+        report["errors"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Return type mismatch: expected Unit, got Result<"),
+        "{report}"
+    );
 
     for args in [
         vec!["test", "--bad", "--format=json"],

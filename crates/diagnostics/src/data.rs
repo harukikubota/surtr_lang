@@ -60,6 +60,8 @@ pub enum TypeDiagnosticReason {
     NonExhaustiveMatch,
     SafeBindErrorTypeMismatch,
     SafeBindRequiresMonadFailTarget,
+    TestScriptErrorPropagation,
+    TestScriptReturnType,
     FacetSafeBindForbidden,
     FacetPatternBindingForbidden,
     FacetOperationPolicyViolation,
@@ -134,6 +136,8 @@ impl TypeDiagnosticReason {
             Self::NonExhaustiveMatch => "NonExhaustiveMatch",
             Self::SafeBindErrorTypeMismatch => "SafeBindErrorTypeMismatch",
             Self::SafeBindRequiresMonadFailTarget => "SafeBindRequiresMonadFailTarget",
+            Self::TestScriptErrorPropagation => "TestScriptErrorPropagation",
+            Self::TestScriptReturnType => "TestScriptReturnType",
             Self::FacetSafeBindForbidden => "FacetSafeBindForbidden",
             Self::FacetPatternBindingForbidden => "FacetPatternBindingForbidden",
             Self::FacetOperationPolicyViolation => "FacetOperationPolicyViolation",
@@ -856,6 +860,7 @@ pub struct PatternDiagnosticData {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TypePolicy {
+    TestScriptReturn,
     SafeBindFacet,
     FacetPatternBinding,
     FacetOperation,

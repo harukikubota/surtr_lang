@@ -1,12 +1,14 @@
 @doc """
 Build named test suites and check values, errors, documents, and captured I/O.
-Available to test files executed by `surtr test`.
+Loaded by `surtr test`; use `import Test` in each file that needs unqualified members.
+This module is unavailable in the ordinary REPL. The examples below are test scripts.
 assert_err_kind and assert_cause_chain accept ordinary opaque ErrorKind values.
 Kinds and lists of kinds can be stored, computed, forwarded and captured.
 
 `test` and `describe` group cases; `it` records each selected case's result.
 `xit(name, reason, body)` pauses a case; `pend(name, reason)` declares an unimplemented case.
-Reasons must be nonblank. Case declarations inside an executing case are rejected.
+Reasons must be nonblank. Case and group declarations inside an executing case are rejected.
+DSL calls return Unit. Suite and group bodies return Unit; case bodies return Result<Unit>.
 Use `--test`, `--describe`, and `--it` for case-sensitive substring filters,
 `--include-xit` to run paused cases, and `--deny-pending` to reject selected pending cases.
 `--list` skips case bodies but still executes top-level and test/describe traversal.
@@ -32,68 +34,47 @@ test("examples") {
 ```
 """
 defmod Test {
-  @builtin def __test_push(kind: String, name: String) -> Unit
-
-  @builtin def __test_pop() -> Unit
-
-  @builtin def __test_pass(name: String) -> Unit
-
-  @builtin def __test_fail(name: String, detail: String) -> Unit
-
-  @builtin def __test_fail_error(name: String, err: Error) -> Unit
-
-  @builtin def __test_fail_current(detail: String) -> Unit
-
-  @builtin def __test_capture_stdout() -> List<String>
-
-  @builtin def __test_capture_stderr() -> List<String>
-
-  @builtin def __test_push_stdin(input: String) -> Unit
-
-  @builtin def __test_begin_case(kind: String, name: String, reason: String) -> Boolean
-
   @doc """
   Run `body` as a named test suite, grouping its case results under `name`.
-  A returned `Err` records a suite failure. Returns `Ok(())` after either outcome.
+  The body and this call return Unit. Cases record their own results.
+  Declaring a suite while a case is running raises a runtime error.
   """
-  def test(name: String, body: (-> Result<()>)) -> Result<()> {
+  def test(name: String, body: (-> Unit)) -> Unit {
     __test_push("test", name)
-    result = body()
-    match result {
-      Ok(_) => _finish_ok(),
-      Err(err) => _finish_unexpected_test_error_rendered(inspect(err)),
-    }
+    body()
+    __test_pop()
   }
 
   @doc """
   Run `body` as a named group within the current suite or group.
-  A returned `Err` records a group failure. Returns `Ok(())` after either outcome.
+  The body and this call return Unit. Groups may be nested.
+  Declaring a group while a case is running raises a runtime error.
   """
-  def describe(name: String, body: (-> Result<()>)) -> Result<()> {
+  def describe(name: String, body: (-> Unit)) -> Unit {
     __test_push("describe", name)
-    result = body()
-    match result {
-      Ok(_) => _finish_ok(),
-      Err(err) => _finish_unexpected_describe_error_rendered(inspect(err)),
-    }
+    body()
+    __test_pop()
   }
 
   @doc """
   Run a selected `body` as one named test case with fresh stdin, stdout, and stderr buffers.
   Filtered cases and list mode do not execute the body or consume I/O buffers.
   Record one pass for `Ok(())` or one failure for `Err(error)`.
-  Returns `Ok(())` after either result so later cases can run.
+  Return Unit after either result so later cases can run.
+  Declaring a case while a case is running raises a runtime error.
   """
-  def it(name: String, body: (-> Result<()>)) -> Result<()> {
+  def it(name: String, body: (-> Result<()>)) -> Unit {
     _case("it", name, "", body)
   }
 
   @doc """
   Declare a paused case with a required nonblank reason.
   The body runs only with `surtr test --include-xit`, subject to name filters.
+  Record the body's Result and return Unit, including when the body is skipped.
+  Declaring a paused case while a case is running raises a runtime error.
   Example: `xit("parser", "repairing nesting") { assert_true(True) }`.
   """
-  def xit(name: String, reason: String, body: (-> Result<()>)) -> Result<()> {
+  def xit(name: String, reason: String, body: (-> Result<()>)) -> Unit {
     _case("xit", name, reason, body)
   }
 
@@ -101,10 +82,11 @@ defmod Test {
   Declare an unimplemented case with a required nonblank reason and no body.
   Example: `pend("parser", "implementation pending")`.
   `--deny-pending` rejects selected pending cases, including in list mode.
+  Record the declaration and return Unit.
+  Declaring a pending case while a case is running raises a runtime error.
   """
-  def pend(name: String, reason: String) -> Result<()> {
-    __test_begin_case("pend", name, reason)
-    Ok(())
+  def pend(name: String, reason: String) -> Unit {
+    __test_begin_case("pend", name, reason);
   }
 
   @doc """
@@ -405,8 +387,6 @@ defmod Test {
     if(String::contains(actual, fragment), Ok(()), Err(TestFragmentMissing(fragment, actual)))
   }
 
-  @builtin def __test_approx_equal(expected: Float, actual: Float, tolerance: Float) -> Boolean
-
   @doc """
   Check absolute Float error against a nonnegative tolerance, including equality at the boundary.
   Negative tolerance is an assertion failure. An overflowing difference also fails without aborting the VM.
@@ -579,32 +559,35 @@ defmod Test {
     assert_eq(expected, __test_capture_stderr())
   }
 
-  defp _finish_ok() -> Result<()> {
-    __test_pop()
-    Ok(())
-  }
+  @hidden
+  @builtin def __test_push(kind: String, name: String) -> Unit
 
-  defp _finish_unexpected_test_error_rendered(rendered: String) -> Result<()> {
-    __test_fail_current("unexpected test error: " ++ rendered)
-    __test_pop()
-    Ok(())
-  }
+  @hidden
+  @builtin def __test_pop() -> Unit
 
-  defp _finish_unexpected_describe_error_rendered(rendered: String) -> Result<()> {
-    __test_fail_current("unexpected describe error: " ++ rendered)
-    __test_pop()
-    Ok(())
-  }
+  @hidden
+  @builtin def __test_pass(name: String) -> Unit
 
-  defp _finish_it_ok(name: String) -> Result<()> {
-    __test_pass(name)
-    Ok(())
-  }
+  @hidden
+  @builtin def __test_fail(name: String, detail: String) -> Unit
 
-  defp _finish_it_err(name: String, err: Error) -> Result<()> {
-    __test_fail_error(name, err)
-    Ok(())
-  }
+  @hidden
+  @builtin def __test_fail_error(name: String, err: Error) -> Unit
+
+  @hidden
+  @builtin def __test_capture_stdout() -> List<String>
+
+  @hidden
+  @builtin def __test_capture_stderr() -> List<String>
+
+  @hidden
+  @builtin def __test_push_stdin(input: String) -> Unit
+
+  @hidden
+  @builtin def __test_begin_case(kind: String, name: String, reason: String) -> Boolean
+
+  @hidden
+  @builtin def __test_approx_equal(expected: Float, actual: Float, tolerance: Float) -> Boolean
 
   defp _assert_err_rendered_contains(fragment: String, rendered: String) -> Result<()> {
     if(
@@ -614,13 +597,13 @@ defmod Test {
     )
   }
 
-  defp _case(kind: String, name: String, reason: String, body: (-> Result<()>)) -> Result<()> {
+  defp _case(kind: String, name: String, reason: String, body: (-> Result<()>)) -> Unit {
     match __test_begin_case(kind, name, reason) {
       True => match body() {
-        Ok(_) => _finish_it_ok(name),
-        Err(err) => _finish_it_err(name, err),
+        Ok(_) => __test_pass(name),
+        Err(err) => __test_fail_error(name, err),
       },
-      False => Ok(()),
+      False => (),
     }
   }
 }

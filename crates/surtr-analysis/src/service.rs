@@ -1890,6 +1890,7 @@ fn standard_typecheck_context() -> scar::TypecheckContext {
             .runtime_policy,
         enforce_builtin_type_contracts: true,
         allow_private_facet_inspection: false,
+        test_script: false,
     }
 }
 

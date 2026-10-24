@@ -245,6 +245,14 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
             stage: None,
             entrypoint: None,
         }),
+        TestScriptErrorPropagation | TestScriptReturnType => DiagnosticData::Policy(PolicyData {
+            policy: TypePolicy::TestScriptReturn,
+            subject: None,
+            expected_type: Some("Unit".into()),
+            actual_type: Some("Int".into()),
+            stage: None,
+            entrypoint: None,
+        }),
         FacetSafeBindForbidden => DiagnosticData::Policy(PolicyData {
             policy: TypePolicy::SafeBindFacet,
             subject: Some("facet path".into()),
@@ -441,6 +449,8 @@ fn every_common_reason_has_a_typed_template_and_schema() {
         NonExhaustiveMatch,
         SafeBindErrorTypeMismatch,
         SafeBindRequiresMonadFailTarget,
+        TestScriptErrorPropagation,
+        TestScriptReturnType,
         FacetSafeBindForbidden,
         FacetPatternBindingForbidden,
         FacetOperationPolicyViolation,

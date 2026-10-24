@@ -15,6 +15,7 @@ fn standard_context() -> TypecheckContext {
         runtime_policy: RuntimeSourcePolicy::std_module(),
         enforce_builtin_type_contracts: true,
         allow_private_facet_inspection: false,
+        test_script: false,
     }
 }
 
@@ -555,4 +556,53 @@ fn full_standard_compile_and_checkpoint_resume_preserve_user_contracts() {
         &bad[resumed_error.span.start..resumed_error.span.end],
         "\"bad\""
     );
+}
+
+#[test]
+fn test_script_checks_unit_result_and_rejects_top_level_propagation() {
+    let context = TypecheckContext {
+        test_script: true,
+        ..TypecheckContext::default()
+    };
+    for source in [
+        "()",
+        "value = 3",
+        "1;",
+        "do {\n Ok(())?\n Ok(())\n};\n()",
+        "closure: (-> Result<Unit>) = {|| Ok(())?\n Ok(())}\n()",
+    ] {
+        prefix_session()
+            .typecheck_staged_program_with_context(resolved_suffix(source, None), context.clone())
+            .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+    }
+    for (source, expected, span) in [
+        (
+            "42",
+            "Test scripts must return Unit, got Int.",
+            Span { start: 0, end: 2 },
+        ),
+        (
+            "Ok(())?",
+            "Test scripts return Unit and cannot receive propagated errors.",
+            Span { start: 6, end: 7 },
+        ),
+        (
+            "value =? Ok(3)",
+            "Test scripts return Unit and cannot receive propagated errors.",
+            Span { start: 6, end: 8 },
+        ),
+        (
+            "Ok(())  ?;",
+            "Test scripts return Unit and cannot receive propagated errors.",
+            Span { start: 8, end: 9 },
+        ),
+    ] {
+        let error = prefix_session()
+            .typecheck_staged_program_with_context(resolved_suffix(source, None), context.clone())
+            .err()
+            .unwrap_or_else(|| panic!("expected rejection: {source}"));
+        assert_eq!(error.message, expected, "{source}");
+        assert_eq!(error.span, span, "{source}");
+        assert!(error.structured.is_some());
+    }
 }

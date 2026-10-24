@@ -1610,6 +1610,13 @@ impl Checker {
                 None,
                 false,
             )?
+        } else if self.test_script {
+            return Err(self.policy_error(
+                TypeDiagnosticReason::TestScriptErrorPropagation,
+                diagnostics::TypePolicy::TestScriptReturn,
+                None, Some(&Ty::Unit), None, None, None, operator_span,
+                Some("Move this operation into an it/xit body or a function or closure whose return type implements MonadFail.".into()),
+            ));
         } else {
             SafeBindFailureTarget::TopLevel
         };

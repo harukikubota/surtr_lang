@@ -79,7 +79,6 @@ pub enum VmTestEventKind {
     Pending,
     Filtered,
     Runnable,
-    ScopeFailed,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

@@ -123,6 +123,8 @@ pub fn type_contains_unresolved_vars(ty: &Ty) -> bool {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypecheckContext {
+    /// Test command scripts have a Unit result and no top-level failure receiver.
+    pub test_script: bool,
     pub runtime_policy: RuntimeSourcePolicy,
     pub enforce_builtin_type_contracts: bool,
     /// REPL `:facet` inspects structurally valid paths even when a private
@@ -133,6 +135,7 @@ pub struct TypecheckContext {
 impl Default for TypecheckContext {
     fn default() -> Self {
         Self {
+            test_script: false,
             runtime_policy: RuntimeSourcePolicy::script(),
             enforce_builtin_type_contracts: false,
             allow_private_facet_inspection: false,
@@ -143,6 +146,7 @@ impl Default for TypecheckContext {
 impl TypecheckContext {
     pub fn from_source_policy(policy: sindr::policy::SourcePolicy) -> Self {
         Self {
+            test_script: false,
             runtime_policy: policy.runtime_policy,
             enforce_builtin_type_contracts: false,
             allow_private_facet_inspection: false,

@@ -88,6 +88,7 @@ pub(crate) fn typecheck_with_rules(
             runtime_policy,
             enforce_builtin_type_contracts: false,
             allow_private_facet_inspection: false,
+            test_script: false,
         },
     )
 }
@@ -173,6 +174,7 @@ pub(crate) fn typecheck_std_modules_with_overrides(
             runtime_policy: RuntimeSourcePolicy::std_module(),
             enforce_builtin_type_contracts: true,
             allow_private_facet_inspection: false,
+            test_script: false,
         },
     )
 }

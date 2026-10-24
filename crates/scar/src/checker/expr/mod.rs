@@ -463,13 +463,17 @@ impl Checker {
 
             Resolved::ApplyPattern(span, value, pattern) => self.check_apply_pattern(span, value, pattern, None),
             Resolved::SafeBind(span, pat, rhs, operator_span) => self.check_safebind(span, operator_span, pat, rhs, false),
-            Resolved::StatementQuestion(span, rhs) => self.check_safebind(
-                span,
-                span,
-                &ResolvedPattern::Wildcard(span.clone()),
-                rhs,
-                true,
-            ),
+            Resolved::StatementQuestion(span, rhs) => {
+                // Spire ends this statement span at the trailing ASCII `?` token.
+                let operator_span = Span { start: span.end - 1, end: span.end };
+                self.check_safebind(
+                    span,
+                    &operator_span,
+                    &ResolvedPattern::Wildcard(span.clone()),
+                    rhs,
+                    true,
+                )
+            },
 
             Resolved::BinOp(span, op, left, right) => self.check_binop(span, op, left, right),
             Resolved::Pipe(span, left, right) => self.check_pipe(span, left, right),

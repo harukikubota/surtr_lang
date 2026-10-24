@@ -119,6 +119,7 @@ fn compile_script(source_name: &str, source: &str) -> Result<Bytecode, String> {
             ),
             enforce_builtin_type_contracts: true,
             allow_private_facet_inspection: false,
+            test_script: false,
         },
     )
     .map_err(|e| format!("phase=typecheck; message={}", e))?;

@@ -960,24 +960,6 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         ],
     },
     BuiltinMeta {
-        name: "__test_fail_current",
-        arity: 1,
-        sig_str: "(String) -> Unit",
-        compiler_generated_surfaces: &[],
-        surfaces: &[
-            builtin_surface_spec(
-                Some("Test"),
-                "__test_fail_current",
-                &[],
-                &[
-                    builtin_surface_parameter("detail", "String"),
-                ],
-                "Unit",
-                &[],
-            ),
-        ],
-    },
-    BuiltinMeta {
         name: "group_count",
         arity: 1,
         sig_str: "(List<$A>) -> List<($A, Int)>",

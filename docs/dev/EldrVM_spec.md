@@ -219,11 +219,11 @@ builtin の内部結果は、完了、継続可能、callback 要求、Future �
 
 VM の実行時設定が test / describe / it の名前フィルター、一覧、xit の有効化、時間計測を保持する。
 スコープは Test / Describe の種類と名前を保持し、ケースは It / Xit / Pend の宣言種別、ファイル内の宣言順 index、理由、選択状態を保持する。
-不正な種類・空白だけの理由・実行中ケース内のケース宣言は VM 実行異常とする。理由はフィルター判定前に検証する。
+不正な種類・空白だけの理由は VM 実行異常とする。実行中ケース内からの test / describe / it / xit / pend の宣言は、スコープ変更・ケース登録・理由検証・フィルター判定より先に拒否する。関数値や helper 経由も、実際の宣言呼び出し時に同じ条件を検査する。
 
 ケース開始処理は選択を判定し、非実行ケースを Filtered / Skipped / Pending / Runnable として記録する。
 実行ケースは一つの active case とし、本文の Ok / Err を Passed / Failed として確定する。
-VM 実行異常で中断した active case も一件の Failed に確定する。スコープの Err は ScopeFailed として別に記録する。
+VM 実行異常で中断した active case も一件の Failed に確定し、当該ファイルの実行を中断する。test / describe の本文と DSL 呼び出し結果は Unit であり、スコープ本文の Err を記録する経路は持たない。it / xit の本文は Result<Unit> を返し、Err のケースを記録した後も次のケースへ進む。内部状態の操作は hidden な __test_* builtin を使い、ユーザーソースからは呼び出せない。
 
 実行するケースの開始時だけ stdout / stderr / stdin を分離し、終了時に走査側のバッファへ戻す。
 ケースのstdinは空の専用バッファから開始する。`push_stdin`で入力を追加する前と、追加した入力を消費した後は、`IO::get` / `IO::get_line`がEOFの `InputCharacterEnd` / `InputLineEnd`を返す。ケース内ではホストstdinを読まず、終了後は走査側の入力元と読み取り位置を復元する。

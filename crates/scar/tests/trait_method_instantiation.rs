@@ -493,6 +493,7 @@ fn generated_boolean_eq_uses_canonical_builtin_dispatch() {
             runtime_policy: sindr::policy::RuntimeSourcePolicy::std_module(),
             enforce_builtin_type_contracts: true,
             allow_private_facet_inspection: false,
+            test_script: false,
         },
     )
     .expect("typecheck");

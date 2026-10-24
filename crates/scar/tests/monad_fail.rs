@@ -105,6 +105,7 @@ fn check_full_program(
             runtime_policy: sindr::policy::RuntimeSourcePolicy::std_module(),
             enforce_builtin_type_contracts: true,
             allow_private_facet_inspection: false,
+            test_script: false,
         },
     )
 }

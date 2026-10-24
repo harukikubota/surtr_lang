@@ -721,6 +721,23 @@ impl Checker {
             }
 
             let t = profile_enabled.then(Instant::now);
+            if self.test_script {
+                if let Some(result) = typed.last() {
+                    if self.resolve_ty(&result.ty) != Ty::Unit {
+                        return Err(self.policy_error(
+                            diagnostics::TypeDiagnosticReason::TestScriptReturnType,
+                            diagnostics::TypePolicy::TestScriptReturn,
+                            None,
+                            Some(&Ty::Unit),
+                            Some(&result.ty),
+                            None,
+                            None,
+                            &result.span,
+                            None,
+                        ));
+                    }
+                }
+            }
             let specialized = self.specialize_program(typed)?;
             if let Some(start) = t {
                 specialize_program_dur = start.elapsed();

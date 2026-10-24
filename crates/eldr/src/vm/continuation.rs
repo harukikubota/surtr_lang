@@ -210,6 +210,27 @@ impl VM {
         Ok((location, trace))
     }
 
+    /// Restore the function frame temporarily replaced by the builtin invocation.
+    pub(super) fn builtin_caller_stack_trace(
+        &self,
+    ) -> Result<Vec<RuntimeStackFrame>, RuntimeError> {
+        let boundary = self
+            .continuations
+            .last()
+            .ok_or_else(|| RuntimeError::new("builtin invocation has no return boundary"))?;
+        let ReturnDestination::Stack { previous_trace, .. } = &boundary.destination else {
+            return Err(RuntimeError::new("builtin invocation has no caller origin"));
+        };
+        let mut trace = self.current_stack_trace_snapshot();
+        if self.current_frame()?.trace_frame.is_some() {
+            trace.remove(0);
+        }
+        if let Some(previous) = previous_trace {
+            trace.insert(0, previous.clone());
+        }
+        Ok(trace)
+    }
+
     pub(super) fn error_construction_source(&self) -> Option<(u32, u32)> {
         self.continuations
             .iter()

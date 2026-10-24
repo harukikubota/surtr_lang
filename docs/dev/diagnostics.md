@@ -131,7 +131,7 @@ placeholderの競合では、その正規化で確定した要求型をまとめ
 | branch | `IfBranchTypeMismatch`, `MatchArmTypeMismatch`, `CondBranchTypeMismatch` |
 | SafeBind input | `SafeBindTotalPatternNonExtractingRhs`, `SafeBindMissingMonadExtractor` |
 | pattern / Extractor | `PatternTypeMismatch`, `PatternShapeMismatch`, `PatternArityMismatch`, `NonTotalBindingPattern`, `NestedResultErrorPattern`, `MatchGuardTypeMismatch`, `ConstructorPatternRequiresEnumOrResultRhs`, `ExtractorInputTypeMismatch`, `ExtractorArityMismatch`, `NonExhaustiveMatch` |
-| policy | `SafeBindErrorTypeMismatch`, `SafeBindRequiresMonadFailTarget`, Facet / Process / source / compile policy reason、`NominalDeclarationConstraintViolation`, `TraitImplementationForbidden`, `TraitHelperCaptureNeedsExpectedType`, `ReservedIntrinsicMarkerUsage` |
+| policy | `TestScriptErrorPropagation`, `TestScriptReturnType`, `SafeBindErrorTypeMismatch`, `SafeBindRequiresMonadFailTarget`, Facet / Process / source / compile policy reason、`NominalDeclarationConstraintViolation`, `TraitImplementationForbidden`, `TraitHelperCaptureNeedsExpectedType`, `ReservedIntrinsicMarkerUsage` |
 | producer contract | `TypecheckInvariantViolation` |
 
 `MissingGenericBound`はrigid genericの宣言済みproof不足、`MissingTraitCapability`は具象subjectの能力不足、
@@ -398,3 +398,12 @@ Scar は解決・正規化した署名の返り型が canonical Boolean でな�
 ## Error Payload の診断
 
 宣言・入力・Payload・内部構築・局所具象型・Facet の成功／拒否条件は [Error spec](Error_spec.md) を正本とする。拒否診断では、可能なら宣言側と指定側の位置を併記し、生成ノードの位置だけを表示しない。runtime Error の主キャプションには、同仕様の生成位置を使う。診断用の source facts を message や Error 名から再構成しない。
+
+## テストスクリプトの戻り値
+
+`surtr test` のユーザースクリプトは Scar の `TypecheckContext.test_script` を指定して検査する。
+標準定義と include のコンパイル済み prefix にはこの制約を適用しない。
+最終値が Unit 以外なら `TestScriptReturnType` とし、最終式を primary、期待型 Unit と実際の型を `Policy` data に保持する。
+トップレベルの `?` / `=?` は `TestScriptErrorPropagation` とし、演算子を primary にする。
+本文が独自の失敗返却先を持つ関数・closure・`do` の通常の検査には、このトップレベルの拒否を適用しない。
+Human / JSON は同じ reason と source fact から診断し、ケース本文や MonadFail を実装する戻り値を持つ関数・closure への移動を案内する。

@@ -82,16 +82,17 @@ stderrが端末で、端末幅を取得できる場合は、Cargo形式の `Prep
 値付き引数は空白・等号の両形式を受理する。各オプションは一度だけ指定でき、`--` 以降は位置引数とする。
 フィルターは大文字小文字を区別する部分一致。種類間は AND、同種の祖先間はいずれか一致とし、名前の結合文字列では比較しない。
 `--list` とフィルターはケース本文だけを抑止する。トップレベルと test/describe の走査は実行する。
-xit は理由付き停止、pend は理由付き未実装項目。理由の空白・空文字列とケース本文中のケース宣言は実行異常とする。
+xit は理由付き停止、pend は理由付き未実装項目。理由の空白・空文字列と、実行中ケース本文からの全ケース・グループ宣言は実行異常とする。入れ子の検査は理由・フィルターの判定より前に行い、違反した公開 DSL の呼び出し位置を示す。
 明示フィルターの全体一致ゼロ、選択された pend に対する `--deny-pending` はポリシー違反とする。
-ケース・スコープ・ファイル・ポリシーの失敗を分離して集計する。JSON は単一文書とし、走査出力を scripts、ケース出力を cases の io に保持する。
+ケース・ファイル・ポリシーの失敗を分離して集計する。JSON は単一文書とし、走査出力を scripts、ケース出力を cases の io に保持する。
 
 ### 件数と終了コード
 
 `discovered = selected + filtered`。実行時は `selected = passed + failed + skipped + pending`、
 一覧時は `selected = runnable + skipped + pending`。`executed = passed + failed`。
 human の `total` は discovered と同じ件数を表示する。
-スコープ本文の Err は scope_failures、読み取り・コンパイル・VM 実行異常は script_errors とする。
+読み取り・コンパイル・VM 実行異常は script_errors とする。`test` / `describe` の本文と全 DSL 呼び出し結果は Unit、`it` / `xit` の本文は Result<Unit> とし、スコープ本文の失敗を集計する経路は持たない。
+テストスクリプトの最終値は Unit とし、トップレベルへの失敗伝播を Scar で拒否する。Test は test コマンドが読み込み、各ファイルで `import Test` を明示する。内部 `__test_*` は hidden 宣言とする。
 VM 異常で実行中ケースが中断した場合だけ、そのケースも Failed に確定する。
 未到達の宣言は discovered に含めない。
 

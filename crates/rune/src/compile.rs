@@ -703,14 +703,13 @@ fn compile_source_with_measurement_inner(
         .unwrap_or_else(|| std_snapshot.compile_prefix());
     let typecheck_start = std::time::Instant::now();
     let mut scar_session = active_prefix.restored_scar_session();
+    let mut typecheck_context = scar::TypecheckContext::from_source_policy(source_kind.policy(
+        compile_unit_kind,
+        compile_plan.normalized_entrypoint.as_ref(),
+    ));
+    typecheck_context.test_script = matches!(env, ExecutionEnv::Test);
     let typed = scar_session
-        .typecheck_staged_program_in_place_with_context(
-            resolved,
-            scar::TypecheckContext::from_source_policy(source_kind.policy(
-                compile_unit_kind,
-                compile_plan.normalized_entrypoint.as_ref(),
-            )),
-        )
+        .typecheck_staged_program_in_place_with_context(resolved, typecheck_context)
         .map_err(|e| {
             let (source_id, span) = diagnostic_location_for_span(compile_sources, &e.span);
             let spec = e
@@ -1046,7 +1045,7 @@ mod tests {
             "captured: (ErrorKind, Result<Int> -> Result<()>) = &Test::assert_err_kind(&1, &2)\ncaptured(PayloadFailure, Err(PayloadFailure(\"capture\")))",
             "captured: (List<ErrorKind>, Result<Int> -> Result<()>) = &Test::assert_cause_chain(&1, &2)\ncaptured([NoneError], Err(NoneError()))",
         ] {
-            let source = format!("import Test;\ndeferror PayloadFailure(detail: String) {{ |detail: String| Self(message: detail, detail) }}\n{body}\n");
+            let source = format!("import Test;\ndeferror PayloadFailure(detail: String) {{ |detail: String| Self(message: detail, detail) }}\nit(\"dynamic ErrorKind\") {{\n{body}\n}}\n");
             let plan = prepare_script_compile_plan(FILE, &source, None).unwrap();
             let compile_sources = xldr::compose_script_compile_sources_with_stdlib_variant(
                 FILE, &plan.source_for_parse, module_sources.clone(), xldr::StdlibVariant::TestEnabled,

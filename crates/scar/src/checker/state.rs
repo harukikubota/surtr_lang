@@ -1,6 +1,7 @@
 use super::*;
 
 pub(super) struct Checker {
+    pub(super) test_script: bool,
     pub(super) active_lazy_capture: Option<ActiveLazyCapture>,
     pub(super) env: TypeEnv,
     pub(super) function_return_ty: Option<Ty>,
@@ -92,6 +93,7 @@ impl Checker {
         context: TypecheckContext,
     ) -> Self {
         Self {
+            test_script: context.test_script,
             env: state.env,
             function_return_ty: None,
             error_definition_uid: None,
@@ -161,6 +163,7 @@ impl Checker {
                 runtime_policy: self.runtime_policy.clone(),
                 enforce_builtin_type_contracts: self.enforce_builtin_type_contracts,
                 allow_private_facet_inspection: self.allow_private_facet_inspection,
+                test_script: self.test_script,
             },
         );
         checker.function_return_ty = self.function_return_ty.clone();
