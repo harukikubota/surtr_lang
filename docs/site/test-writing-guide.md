@@ -453,7 +453,7 @@ import Test;
 it("groups checks with do") {
   do {
     actual: (Int, Int) = (10, 20)
-    assert_eq(10, actual._0)
+    assert_eq(10, actual._0)?
     assert_eq(20, actual._1)
   }
 }
