@@ -30,6 +30,7 @@ const rev = git(['commit-tree', tree], { input: 'Generated Surtr grammar\n' });
 git(['update-ref', 'refs/heads/generated', rev]);
 fs.mkdirSync(extension, { recursive: true });
 fs.cpSync(path.join(root, 'surtr/languages'), path.join(extension, 'languages'), { recursive: true });
+fs.cpSync(path.join(root, 'surtr/snippets'), path.join(extension, 'snippets'), { recursive: true });
 const metadata = fs.readFileSync(path.join(root, 'surtr/extension.toml'), 'utf8');
 fs.writeFileSync(path.join(extension, 'extension.toml'), metadata +
   `\n[grammars.surtr]\nrepository = ${JSON.stringify(pathToFileURL(grammar).href)}\nrev = "${rev}"\n`);

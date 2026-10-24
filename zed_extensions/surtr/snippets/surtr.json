@@ -1,0 +1,67 @@
+{
+  "Test suite": {
+    "prefix": "test",
+    "body": ["import Test;", "", "test(\"${1:suite}\") {", "  it(\"${2:case}\") {", "    assert_eq(${3:3}, ${4:1 + 2})", "  }", "}", "$0"],
+    "description": "Testモジュールをimportし、テストスイートを作成"
+  },
+  "Test group": {
+    "prefix": "describe",
+    "body": ["describe(\"${1:group}\") {", "  it(\"${2:case}\") {", "    assert_eq(${3:3}, ${4:1 + 2})", "  }", "}", "$0"],
+    "description": "関連ケースをまとめる（import Testが必要）"
+  },
+  "Test case": {
+    "prefix": "it",
+    "body": ["it(\"${1:case}\") {", "  assert_eq(${2:3}, ${3:1 + 2})", "}", "$0"],
+    "description": "Result<()>を返すテストケース（import Testが必要）"
+  },
+  "Paused test case": {
+    "prefix": "xit",
+    "body": ["xit(\"${1:case}\", \"${2:implementation pending}\") {", "  assert_eq(${3:3}, ${4:1 + 2})", "}", "$0"],
+    "description": "理由付きの休止ケース（--include-xitで実行）"
+  },
+  "Pending test case": {
+    "prefix": "pend",
+    "body": ["pend(\"${1:case}\", \"${2:implementation pending}\")", "$0"],
+    "description": "本文を持たない未実装ケース（import Testが必要）"
+  },
+  "Assert equality": {
+    "prefix": "assert_eq",
+    "body": ["assert_eq(${1:3}, ${2:1 + 2})$0"],
+    "description": "期待値、実際の値の順で比較（import Testが必要）"
+  },
+  "Assert true": {
+    "prefix": "assert_true",
+    "body": ["assert_true(${1:True})$0"],
+    "description": "Trueであることを検証（import Testが必要）"
+  },
+  "Assert false": {
+    "prefix": "assert_false",
+    "body": ["assert_false(${1:False})$0"],
+    "description": "Falseであることを検証（import Testが必要）"
+  },
+  "Function": {
+    "prefix": "def",
+    "body": ["def ${1:name}(${2:value}: ${3:Int}) -> ${4:Int} {", "  ${5:value}", "}", "$0"],
+    "description": "関数を定義"
+  },
+  "Module": {
+    "prefix": "defmod",
+    "body": ["defmod ${1:Example} {", "  $0", "}"],
+    "description": "モジュールを定義"
+  },
+  "Match": {
+    "prefix": "match",
+    "body": ["match ${1:True} {", "  ${2:True} => ${3:()},", "  ${4:False} => ${5:()},", "}$0"],
+    "description": "パターンで分岐"
+  },
+  "Do": {
+    "prefix": "do",
+    "body": ["do {", "  ${1:Ok(())}", "}$0"],
+    "description": "do式を作成"
+  },
+  "Documentation": {
+    "prefix": "doc",
+    "body": ["@doc \"\"\"", "${1:Description.}", "\"\"\"", "$0"],
+    "description": "宣言のドキュメントを記述"
+  }
+}
