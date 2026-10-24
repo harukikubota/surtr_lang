@@ -131,3 +131,21 @@ test('indent queries follow nested code groups without indenting raw text', () =
   assert.equal((captures.match(/ - start,/g) || []).length, 4, captures);
   assert.equal((captures.match(/ - end,/g) || []).length, 4, captures);
 });
+
+test('declarations retain full bodies for nested outlines and function motions', () => {
+  const source = 'defmod Example {\n  def positive?(value: Int) -> Boolean { value > 0 }\n  def identity(value: Int) -> Int = value\n}\ndeftrait Named {\n  def name(value: Int) -> String\n}';
+  const { tree } = inspect(source);
+  assert.equal((tree.match(/\(function_declaration/g) || []).length, 3, tree);
+  assert.equal((tree.match(/\(container_declaration/g) || []).length, 2, tree);
+  assert.equal((tree.match(/\(expression_body/g) || []).length, 1, tree);
+});
+
+test('outline captures declared names and excludes calls, closures and documentation examples', () => {
+  const source = '@doc """def fake() { () }"""\ndefmod Example {\n  def positive?(value: Int) -> Boolean { value > 0 }\n  def generic::<List<Int>>() -> Int = 1\n  const LIMIT = 3\n  type Count = Int\n}\nExample::positive?(1)\n{|value| value}';
+  const { captures } = inspect(source, 'outline.scm');
+  for (const name of ['Example', 'positive', '?', 'generic', 'LIMIT', 'Count']) {
+    assert.ok(captures.split('\n').some(line => line.includes(' - name,') && line.endsWith(`text: \`${name}\``)), captures);
+  }
+  assert.equal((captures.match(/ - item,/g) || []).length, 5, captures);
+  assert.ok(!captures.includes('text: `fake`'), captures);
+});

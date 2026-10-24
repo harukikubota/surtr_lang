@@ -1,5 +1,5 @@
-// A highlighting grammar: tokens and balanced groups, not a second typechecker
-// or a replacement for Spire's parser. Newlines remain visible to queries.
+// Editor grammar: declaration boundaries, tokens and balanced groups.
+// Spire remains responsible for syntax validation. Newlines stay queryable.
 module.exports = grammar({
   name: 'surtr',
   word: $ => $.identifier,
@@ -7,7 +7,7 @@ module.exports = grammar({
   externals: $ => [$.double_content, $.single_content, $.raw_content, $.annotation],
   rules: {
     source_file: $ => repeat($._item),
-    _item: $ => choice($.annotation, $._expression),
+    _item: $ => choice($.annotation, $.function_declaration, $.container_declaration, $._expression),
     _expression: $ => choice(
       $.keyword, $.boolean, $.identifier, $.type_variable,
       $.number, $.capture_placeholder, $.operator, $.punctuation, $.newline,
@@ -17,11 +17,57 @@ module.exports = grammar({
     parenthesized: $ => seq('(', repeat($._item), ')'),
     bracketed: $ => seq('[', repeat($._item), ']'),
     block: $ => seq('{', repeat($._item), '}'),
+    function_declaration: $ => prec.right(seq(
+      field('kind', alias(choice('def', 'defp', 'defextractor'), $.keyword)),
+      field('name', choice($.identifier, $.operator, alias('(,)', $.operator))),
+      optional(field('suffix', alias(choice('?', '!'), $.operator))),
+      optional($.return_type_arguments),
+      field('parameters', $.parenthesized),
+      optional(seq(alias('->', $.operator), repeat1($._type_item))),
+      repeat($.newline),
+      optional($.where_clause),
+      optional(choice(
+        field('body', $.block),
+        seq(alias('=', $.operator), field('body', $.expression_body))
+      ))
+    )),
+    expression_body: $ => prec.right(repeat1($._line_expression)),
+    return_type_arguments: $ => seq(alias('::', $.punctuation), $.type_arguments),
+    type_arguments: $ => seq(
+      alias('<', $.operator),
+      repeat(choice($.identifier, $.type_variable, $.parenthesized, $.bracketed, $.type_arguments,
+        alias(choice('->', '?', '&', '|'), $.operator), alias(choice('::', ','), $.punctuation))),
+      alias('>', $.operator)
+    ),
+    _line_expression: $ => choice(
+      $.keyword, $.boolean, $.identifier, $.type_variable, $.number,
+      $.capture_placeholder, $.operator, $.punctuation, $.parenthesized,
+      $.bracketed, $.block, $.double_string, $.single_string, $.raw_string,
+      $.function_literal
+    ),
+    _type_item: $ => choice(
+      $.identifier, $.type_variable, $.parenthesized, $.bracketed,
+      alias(choice('Type', 'type'), $.keyword),
+      alias(choice('<', '>', '->', '?', '&', '|'), $.operator),
+      alias(choice('::', ','), $.punctuation)
+    ),
+    where_clause: $ => prec.right(seq(
+      alias('where', $.keyword),
+      repeat1(choice($._type_item, alias(':', $.punctuation), $.newline))
+    )),
+    container_declaration: $ => prec.right(seq(
+      field('kind', alias(choice(
+        'defmod', 'namespace', 'deftrait', 'defstruct', 'defrecord', 'deferror',
+        'defenum', 'defagent', 'defgenserver', 'defsupervisor', 'defdynamic_supervisor', 'impl'
+      ), $.keyword)),
+      field('name', $.container_name),
+      repeat($.newline),
+      optional($.where_clause),
+      optional(field('body', $.block))
+    )),
+    container_name: $ => prec.right(repeat1(choice($._type_item, alias('for', $.keyword)))),
     keyword: _ => choice(
-      'def', 'defp', 'defextractor', 'defmod', 'namespace', 'deftrait',
-      'defstruct', 'defrecord', 'deferror', 'defenum', 'defagent',
-      'defgenserver', 'defsupervisor', 'defdynamic_supervisor', 'supervisor_init',
-      'impl', 'for', 'import', 'include', 'const', 'type', 'Type', 'where',
+      'supervisor_init', 'for', 'import', 'include', 'const', 'type', 'Type', 'where',
       'private', 'public', 'readonly', 'match', 'do', 'when', 'cond', 'bulk_update'
     ),
     boolean: _ => choice('True', 'False'),

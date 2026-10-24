@@ -24,6 +24,8 @@
 
 ; The highlighting tree keeps sibling tokens and groups. Only immediate
 ; siblings match, so declarations and calls cannot cross a newline.
+(function_declaration name: (_) @function)
+(function_declaration suffix: (operator) @function)
 (_ (keyword) @_def . (identifier) @function
   (#match? @_def "^(def|defp|defextractor)$"))
 (_ (identifier) @function . (parenthesized) (#match? @function "^[a-z_]"))
