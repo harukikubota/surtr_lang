@@ -124,3 +124,10 @@ test('autoclose scopes isolate text and escapes from interpolation code', () => 
   assert.ok(captures.includes(' - comment.inclusive,'), captures);
   assert.ok(!captures.includes('text: `f`') && !captures.includes('text: `1`'), captures);
 });
+
+test('indent queries follow nested code groups without indenting raw text', () => {
+  const { captures } = inspect('def f() {\n  [1, (2)]\n}\n"""\nraw { [ text\n"""', 'indents.scm');
+  assert.equal((captures.match(/ - indent,/g) || []).length, 4, captures);
+  assert.equal((captures.match(/ - start,/g) || []).length, 4, captures);
+  assert.equal((captures.match(/ - end,/g) || []).length, 4, captures);
+});
