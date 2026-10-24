@@ -168,6 +168,10 @@ impl DocumentStore {
         self.documents.remove(path)
     }
 
+    pub(crate) fn snapshots(&self) -> impl Iterator<Item = &DocumentSnapshot> {
+        self.documents.values()
+    }
+
     pub fn open_document_versions(&self) -> Vec<DocumentVersion> {
         self.documents
             .values()

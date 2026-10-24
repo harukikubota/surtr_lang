@@ -38,3 +38,13 @@ threads-required = 2
 [[profile.ci.overrides]]
 filter = 'test(/^include_diagnostics::/) | test(/^run_eldr::/) | test(/^error_source_locations::/) | test(/^build_roundtrip::/) | test(/^repl::/) | test(/^test_command::/) | test(/^tui::/)'
 threads-required = 2
+
+# These regressions compare complete semantic results across input changes.
+# Each result rebuilds the standard prefix against the current declaration IDs.
+[[profile.default.overrides]]
+filter = 'package(surtr-analysis) & (test(script_include_stage_uses_updated_unsaved_dependencies) | test(script_include_and_project_paths_share_the_same_module_stage_contract))'
+threads-required = 4
+
+[[profile.ci.overrides]]
+filter = 'package(surtr-analysis) & (test(script_include_stage_uses_updated_unsaved_dependencies) | test(script_include_and_project_paths_share_the_same_module_stage_contract))'
+threads-required = 4

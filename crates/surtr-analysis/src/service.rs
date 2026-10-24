@@ -22,6 +22,12 @@ use crate::{
 pub trait AnalysisHost: std::fmt::Debug + Send + Sync {
     fn read_to_string(&self, path: &Path) -> Option<String>;
 
+    /// Identity used to match open documents with source requests. Virtual hosts
+    /// use lexical paths; filesystem hosts may resolve existing symlink prefixes.
+    fn source_path_identity(&self, path: &Path) -> PathBuf {
+        lexical_source_path(path)
+    }
+
     fn resolve_project_runner(&self, input: ProjectRunnerInput) -> RunnerContext {
         resolve_project_runner_with(input, |path| self.read_to_string(path))
     }
@@ -34,6 +40,44 @@ impl AnalysisHost for FsAnalysisHost {
     fn read_to_string(&self, path: &Path) -> Option<String> {
         std::fs::read_to_string(path).ok()
     }
+
+    fn source_path_identity(&self, path: &Path) -> PathBuf {
+        let mut prefix = path.to_path_buf();
+        let mut suffix = Vec::new();
+        loop {
+            if let Ok(mut identity) = std::fs::canonicalize(&prefix) {
+                for name in suffix.into_iter().rev() {
+                    identity.push(name);
+                }
+                return identity;
+            }
+            let Some(name) = prefix.file_name().map(std::ffi::OsStr::to_os_string) else {
+                return path.to_path_buf();
+            };
+            suffix.push(name);
+            if !prefix.pop() {
+                return path.to_path_buf();
+            }
+        }
+    }
+}
+
+fn lexical_source_path(path: &Path) -> PathBuf {
+    let mut identity = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => match identity.components().next_back() {
+                Some(Component::Normal(_)) => {
+                    identity.pop();
+                }
+                Some(Component::RootDir) | Some(Component::Prefix(_)) => {}
+                _ => identity.push(component.as_os_str()),
+            },
+            component => identity.push(component.as_os_str()),
+        }
+    }
+    identity
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -186,7 +230,7 @@ impl AnalysisService {
                     .filter(|spec| spec.module_path == Some("Facet"))
                     .and_then(|spec| spec.module_path.map(str::to_owned))
             } else {
-                module_path_for_document(context.context.mode.clone(), &context.context.active_file)
+                None
             };
             let compile_unit_kind = compile_unit_kind_for_active_context(&context);
             let parse_input = ParseInput {
@@ -217,7 +261,9 @@ impl AnalysisService {
                     Some(ast)
                 }
                 Err(error) => {
-                    if tolerant.diagnostics.is_empty() {
+                    let analyze_script_entry = context.context.mode == AnalysisMode::Script
+                        && context.context.entry_file.is_some();
+                    if !analyze_script_entry && tolerant.diagnostics.is_empty() {
                         let span = error.span();
                         diagnostics.push(diagnostic_from_span(
                             AnalysisDiagnosticKind::Parse,
@@ -227,7 +273,7 @@ impl AnalysisService {
                             span.end,
                             error.message(),
                         ));
-                    } else {
+                    } else if !analyze_script_entry {
                         diagnostics.extend(tolerant.diagnostics.into_iter().map(|diagnostic| {
                             let span = diagnostic.error.span();
                             diagnostic_from_span(
@@ -240,7 +286,7 @@ impl AnalysisService {
                             )
                         }));
                     }
-                    if should_analyze_project_stages(&context) {
+                    if analyze_script_entry || should_analyze_project_stages(&context) {
                         analyze_stages(
                             self,
                             &context,
@@ -530,11 +576,33 @@ impl AnalysisService {
         ))
     }
 
+    fn open_document_for_path(&self, path: &Path) -> Result<Option<&DocumentSnapshot>, ()> {
+        if let Some(document) = self.documents.get(path) {
+            return Ok(Some(document));
+        }
+        let identity = self.host.source_path_identity(path);
+        let mut aliases = self
+            .documents
+            .snapshots()
+            .filter(|document| self.host.source_path_identity(&document.path) == identity);
+        let document = aliases.next();
+        if aliases.next().is_some() {
+            return Err(());
+        }
+        Ok(document)
+    }
+
+    fn same_source_path(&self, left: &Path, right: &Path) -> bool {
+        left == right
+            || self.host.source_path_identity(left) == self.host.source_path_identity(right)
+    }
+
     fn source_for_path(&self, path: &Path) -> Option<String> {
-        self.documents
-            .get(path)
-            .map(|document| document.text.clone())
-            .or_else(|| self.host.read_to_string(path))
+        match self.open_document_for_path(path) {
+            Ok(Some(document)) => Some(document.text.clone()),
+            Ok(None) => self.host.read_to_string(path),
+            Err(()) => None,
+        }
     }
 }
 
@@ -1057,6 +1125,116 @@ fn standard_environment(
         .as_ref()
 }
 
+struct PreparedAnalysisScript {
+    entry: DocumentSnapshot,
+    ast: Vec<Ast>,
+    include_origins: Vec<crate::script_include::ScriptIncludeOrigin>,
+}
+
+fn prepare_analysis_script(
+    service: &AnalysisService,
+    context: &ResolvedAnalysisContext,
+    source_stages: &mut Vec<crate::ModuleStage>,
+    diagnostics: &mut Vec<AnalysisDiagnostic>,
+) -> Result<Option<PreparedAnalysisScript>, ()> {
+    if context.context.mode != AnalysisMode::Script {
+        return Ok(None);
+    }
+    let Some(entry_path) = context.context.entry_file.as_ref() else {
+        return Ok(None);
+    };
+    let Some(source) = service.source_for_path(entry_path) else {
+        diagnostics.push(AnalysisDiagnostic {
+            kind: AnalysisDiagnosticKind::DocumentMissing,
+            severity: AnalysisSeverity::Error,
+            path: entry_path.clone(),
+            range: None,
+            message: "script entry cannot be read".into(),
+            related: Vec::new(),
+        });
+        return Err(());
+    };
+    let entry = DocumentStore::default().update_document(entry_path.clone(), None, source);
+    let ast = service
+        .parse_cache
+        .strict(
+            entry_path,
+            ParseInput {
+                source: &entry.text,
+                source_id: 0,
+                source_kind: SourceKind::Script,
+                compile_unit_kind: CompileUnitKind::Script,
+                module_path: None,
+            },
+        )
+        .map_err(|error| {
+            diagnostics.push(diagnostic_from_span(
+                AnalysisDiagnosticKind::Parse,
+                AnalysisSeverity::Error,
+                &entry,
+                error.span().start,
+                error.span().end,
+                error.message(),
+            ));
+        })?;
+    let directives = crate::script_include::script_include_directives(&ast);
+    let ast = ast
+        .into_iter()
+        .filter(|stmt| !matches!(stmt, Ast::Include(..)))
+        .collect();
+    let include_origins =
+        crate::script_include::script_include_origins(source_stages.len(), &directives);
+    if !directives.is_empty() {
+        let mut files = Vec::new();
+        for directive in &directives {
+            let requested_path = crate::script_include::resolve_script_include_file_path(
+                entry_path,
+                &directive.file_path,
+            );
+            let path = match service.open_document_for_path(&requested_path) {
+                Ok(Some(document)) => document.path.clone(),
+                Ok(None) => service.host.source_path_identity(&requested_path),
+                Err(()) => {
+                    diagnostics.push(diagnostic_from_span(
+                        AnalysisDiagnosticKind::ContextSelection,
+                        AnalysisSeverity::Error,
+                        &entry,
+                        directive.span.start,
+                        directive.span.end,
+                        format!(
+                            "include target `{}` matches multiple open document aliases",
+                            requested_path.display()
+                        ),
+                    ));
+                    return Err(());
+                }
+            };
+            if service.source_for_path(&path).is_none() {
+                diagnostics.push(diagnostic_from_span(
+                    AnalysisDiagnosticKind::DocumentMissing,
+                    AnalysisSeverity::Error,
+                    &entry,
+                    directive.span.start,
+                    directive.span.end,
+                    format!("include failed to read `{}`", path.display()),
+                ));
+                return Err(());
+            }
+            files.push(crate::ModuleFileFingerprint {
+                path,
+                source_kind: SourceKind::DefinitionSource,
+                content_hash: String::new(),
+            });
+        }
+        source_stages.push(crate::ModuleStage { files });
+    }
+    Ok(Some(PreparedAnalysisScript {
+        entry,
+        ast,
+        include_origins,
+    }))
+}
+
 fn analyze_stages(
     service: &AnalysisService,
     context: &ResolvedAnalysisContext,
@@ -1067,7 +1245,11 @@ fn analyze_stages(
     typed: &mut Option<Vec<scar::typed::TypedNode>>,
     semantic_index: &mut SemanticIndex,
 ) {
-    let source_stages = analysis_source_stages(context);
+    let mut source_stages = analysis_source_stages(context);
+    let script = match prepare_analysis_script(service, context, &mut source_stages, diagnostics) {
+        Ok(script) => script,
+        Err(()) => return,
+    };
     // Bundled syntax is independent of the project's declaration UID space.
     // Standard editing must instead parse the current document sources.
     let prepared_standard = if context.context.source_kind == SourceKind::StdDefinitionSource {
@@ -1113,7 +1295,7 @@ fn analyze_stages(
         context,
         &source_stages,
         prepared_standard,
-        active_document,
+        script.as_ref(),
         diagnostics,
         semantic_index,
     ) else {
@@ -1124,7 +1306,12 @@ fn analyze_stages(
     {
         project_user_ast_for_active_document(context, active_ast)
     } else {
-        active_ast.unwrap_or(&[]).to_vec()
+        active_ast
+            .unwrap_or(&[])
+            .iter()
+            .filter(|stmt| !matches!(stmt, Ast::Include(..)))
+            .cloned()
+            .collect()
     };
     let current_module_path = completion_module_path_for_ast(&visible_ast);
     let docs =
@@ -1138,9 +1325,15 @@ fn analyze_stages(
         stage
             .files
             .iter()
-            .any(|file| file.path == active_document.path)
+            .any(|file| service.same_source_path(&file.path, &active_document.path))
     });
-    let user_ast = if active_is_stage {
+    let mut user_ast = if let Some(script) = &script {
+        if context.script_project.is_some() {
+            project_user_ast_for_active_document(context, Some(&script.ast))
+        } else {
+            script.ast.clone()
+        }
+    } else if active_is_stage {
         Vec::new()
     } else if context.script_project.is_some() {
         project_user_ast_for_active_document(context, active_ast)
@@ -1148,13 +1341,24 @@ fn analyze_stages(
         active_ast.unwrap_or(&[]).to_vec()
     };
 
+    if script.is_some() {
+        let source_id = analysis_source_id(&source_stages, source_stages.len(), 0);
+        user_ast = spire::rebase_ast_spans(
+            user_ast,
+            (source_id as usize + 1) * sindr::ir::MODULE_SPAN_STRIDE,
+        );
+    }
+
     let prefix_declarations = match sigil::precollect_declarations(&module_stages) {
         Ok(precollected) => precollected,
         Err(error) => {
             diagnostics.push(diagnostic_from_project_resolve_error(
                 service,
                 &source_stages,
-                active_document,
+                script
+                    .as_ref()
+                    .map_or(active_document, |script| &script.entry),
+                script.as_ref(),
                 &error,
             ));
             return;
@@ -1171,7 +1375,10 @@ fn analyze_stages(
                     diagnostics.push(diagnostic_from_project_resolve_error(
                         service,
                         &source_stages,
-                        active_document,
+                        script
+                            .as_ref()
+                            .map_or(active_document, |script| &script.entry),
+                        script.as_ref(),
                         &error,
                     ));
                     return;
@@ -1188,7 +1395,7 @@ fn analyze_stages(
         &module_stages,
         &visible_ast,
         current_module_path.as_deref(),
-        active_stage_index_for_document(&source_stages, active_document),
+        active_stage_index_for_document(service, &source_stages, active_document),
     );
 
     // Project declarations extend the global UID space. Rebuild the standard
@@ -1233,12 +1440,14 @@ fn analyze_stages(
         {
             Ok(program) => program.nodes,
             Err(error) => {
-                diagnostics.push(diagnostic_from_span(
+                diagnostics.push(diagnostic_from_analysis_span(
+                    service,
+                    &source_stages,
+                    script
+                        .as_ref()
+                        .map_or(active_document, |script| &script.entry),
                     AnalysisDiagnosticKind::Typecheck,
-                    AnalysisSeverity::Error,
-                    active_document,
-                    error.span.start,
-                    error.span.end,
+                    &error.span,
                     error.message,
                 ));
                 return;
@@ -1269,7 +1478,12 @@ fn analyze_stages(
         Ok(resolved_program) => {
             let mut resolved_nodes =
                 standard.map_or_else(Vec::new, |prefix| prefix.resolved.clone());
-            resolved_nodes.extend(resolved_program.iter_resolved().cloned());
+            resolved_nodes.extend(
+                resolved_program
+                    .iter_resolved()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            );
             let mut scar = scar::ScarSession::new();
             if let Some(prefix) = standard {
                 scar.rollback(prefix.scar_checkpoint.clone());
@@ -1283,23 +1497,27 @@ fn analyze_stages(
                     nodes.extend(typed_program.nodes);
                     *typed = Some(nodes);
                 }
-                Err(error) => diagnostics.push(diagnostic_from_span(
+                Err(error) => diagnostics.push(diagnostic_from_analysis_span(
+                    service,
+                    &source_stages,
+                    script
+                        .as_ref()
+                        .map_or(active_document, |script| &script.entry),
                     AnalysisDiagnosticKind::Typecheck,
-                    AnalysisSeverity::Error,
-                    active_document,
-                    error.span.start,
-                    error.span.end,
+                    &error.span,
                     error.message,
                 )),
             }
             *resolved = Some(resolved_nodes);
         }
-        Err(error) => diagnostics.push(diagnostic_from_span(
+        Err(error) => diagnostics.push(diagnostic_from_analysis_span(
+            service,
+            &source_stages,
+            script
+                .as_ref()
+                .map_or(active_document, |script| &script.entry),
             AnalysisDiagnosticKind::Resolve,
-            AnalysisSeverity::Error,
-            active_document,
-            error.span.start,
-            error.span.end,
+            &error.span,
             error.message,
         )),
     }
@@ -1392,6 +1610,7 @@ fn semantic_index_with_declarations(
 }
 
 fn active_stage_index_for_document(
+    service: &AnalysisService,
     source_stages: &[crate::ModuleStage],
     active_document: &DocumentSnapshot,
 ) -> usize {
@@ -1402,7 +1621,7 @@ fn active_stage_index_for_document(
             stage
                 .files
                 .iter()
-                .any(|file| file.path == active_document.path)
+                .any(|file| service.same_source_path(&file.path, &active_document.path))
                 .then_some(stage_index)
         })
         .unwrap_or(source_stages.len())
@@ -1477,7 +1696,7 @@ fn build_staged_modules(
     context: &ResolvedAnalysisContext,
     source_stages: &[crate::ModuleStage],
     standard: Option<&PreparedStandardSources>,
-    active_document: &DocumentSnapshot,
+    script: Option<&PreparedAnalysisScript>,
     diagnostics: &mut Vec<AnalysisDiagnostic>,
     semantic_index: &mut SemanticIndex,
 ) -> Option<Vec<Vec<sigil::StagedModuleAst>>> {
@@ -1488,11 +1707,19 @@ fn build_staged_modules(
             *semantic_index = semantic_index_with_source_locations(semantic_index, path, ast);
         }
     }
-    for stage in source_stages.iter().skip(module_stages.len()) {
+    for (stage_index, stage) in source_stages.iter().enumerate().skip(module_stages.len()) {
         let mut staged_modules = Vec::new();
         for (source_index, file) in stage.files.iter().enumerate() {
             let Some(source) = source_for_module_file(service, &file.path) else {
-                continue;
+                diagnostics.push(AnalysisDiagnostic {
+                    kind: AnalysisDiagnosticKind::DocumentMissing,
+                    severity: AnalysisSeverity::Error,
+                    path: file.path.clone(),
+                    range: None,
+                    message: "definition source cannot be read".into(),
+                    related: Vec::new(),
+                });
+                return None;
             };
             let standard_module = standard_module_spec_for_path(context, &file.path);
             let parser_module_path = standard_module
@@ -1501,11 +1728,7 @@ fn build_staged_modules(
             let ast = service.parse_cache.strict(
                 &file.path,
                 ParseInput {
-                    source: if file.path == active_document.path {
-                        &active_document.text
-                    } else {
-                        &source
-                    },
+                    source: &source,
                     source_id: 0,
                     source_kind: file.source_kind,
                     compile_unit_kind,
@@ -1524,15 +1747,22 @@ fn build_staged_modules(
                     };
                     let mut source_modules =
                         sigil::staged_modules_from_source_ast(ast, fallback_module_path.as_deref());
+                    let source_id = analysis_source_id(source_stages, stage_index, source_index);
+                    let base = (source_id as usize + 1) * sindr::ir::MODULE_SPAN_STRIDE;
                     for module in &mut source_modules {
                         module.source_index = source_index;
+                        module.ast = spire::rebase_ast_spans(std::mem::take(&mut module.ast), base);
+                        if let Some(owner) = &mut module.owner {
+                            owner.span.start += base;
+                            owner.span.end += base;
+                        }
                     }
                     staged_modules.extend(source_modules);
                 }
                 Err(error) => {
                     let span = error.span();
                     let line_index = LineIndex::new(&source);
-                    diagnostics.push(diagnostic_from_line_index(
+                    let mut diagnostic = diagnostic_from_line_index(
                         AnalysisDiagnosticKind::Parse,
                         AnalysisSeverity::Error,
                         file.path.clone(),
@@ -1540,14 +1770,41 @@ fn build_staged_modules(
                         span.start,
                         span.end,
                         error.message(),
-                    ));
+                    );
+                    if let Some(script) = script {
+                        let spec = diagnostics::parse_error_spec(
+                            diagnostics::SourceId(0),
+                            &source,
+                            &error,
+                        );
+                        if let Some((origin, description)) = script
+                            .include_origins
+                            .iter()
+                            .find(|origin| {
+                                origin.stage_index == stage_index
+                                    && origin.source_index == source_index
+                            })
+                            .zip(crate::script_include::include_policy_description(&spec))
+                        {
+                            diagnostic.related.push(AnalysisDiagnosticRelated {
+                                path: file.path.clone(),
+                                range: diagnostic.range.expect("parser declaration range"),
+                                message: "declaration rejected in user-defined source".into(),
+                            });
+                            diagnostic.path = script.entry.path.clone();
+                            diagnostic.range = Some(analysis_range_for_span(
+                                &script.entry.line_index,
+                                &origin.directive.span,
+                            ));
+                            diagnostic.message = format!("Cannot include '{}': {description} is not allowed in user-defined source.", origin.directive.file_path);
+                        }
+                    }
+                    diagnostics.push(diagnostic);
                     return None;
                 }
             }
         }
-        if !staged_modules.is_empty() {
-            module_stages.push(staged_modules);
-        }
+        module_stages.push(staged_modules);
     }
     Some(module_stages)
 }
@@ -1574,11 +1831,70 @@ fn source_for_module_file(service: &AnalysisService, path: &Path) -> Option<Stri
             .find(|spec| Path::new(spec.file_name) == relative)
             .map(|spec| spec.source.to_string());
     }
-    service
-        .documents
-        .get(path)
-        .map(|document| document.text.clone())
-        .or_else(|| service.host.read_to_string(path))
+    service.source_for_path(path)
+}
+
+fn analysis_source_id(
+    stages: &[crate::ModuleStage],
+    stage_index: usize,
+    source_index: usize,
+) -> u32 {
+    (stages
+        .iter()
+        .take(stage_index)
+        .map(|stage| stage.files.len())
+        .sum::<usize>()
+        + source_index
+        + 1)
+    .try_into()
+    .expect("analysis source count fits u32")
+}
+
+fn local_analysis_span(span: &Span) -> Span {
+    sindr::ir::decode_module_source_span(span.start, span.end)
+        .map_or_else(|| span.clone(), |(_, start, end)| Span { start, end })
+}
+
+fn diagnostic_from_analysis_span(
+    service: &AnalysisService,
+    stages: &[crate::ModuleStage],
+    user: &DocumentSnapshot,
+    kind: AnalysisDiagnosticKind,
+    span: &Span,
+    message: String,
+) -> AnalysisDiagnostic {
+    if let Some((source_id, start, end)) =
+        sindr::ir::decode_module_source_span(span.start, span.end)
+    {
+        let file = source_id.checked_sub(1).and_then(|index| {
+            stages
+                .iter()
+                .flat_map(|stage| &stage.files)
+                .nth(index as usize)
+        });
+        if let Some(file) = file {
+            let source =
+                source_for_module_file(service, &file.path).expect("parsed analysis source");
+            return diagnostic_from_line_index(
+                kind,
+                AnalysisSeverity::Error,
+                file.path.clone(),
+                &LineIndex::new(&source),
+                start,
+                end,
+                message,
+            );
+        }
+        return diagnostic_from_span(kind, AnalysisSeverity::Error, user, start, end, message);
+    }
+    diagnostic_from_span(
+        kind,
+        AnalysisSeverity::Error,
+        user,
+        span.start,
+        span.end,
+        message,
+    )
 }
 
 fn source_for_resolve_provenance(
@@ -1596,11 +1912,7 @@ fn source_for_resolve_provenance(
         .get(provenance.source_index)?
         .path
         .clone();
-    let source = if path == active_document.path {
-        active_document.text.clone()
-    } else {
-        source_for_module_file(service, &path)?
-    };
+    let source = source_for_module_file(service, &path)?;
     Some((path, source))
 }
 
@@ -1608,6 +1920,7 @@ fn diagnostic_from_project_resolve_error(
     service: &AnalysisService,
     source_stages: &[crate::ModuleStage],
     active_document: &DocumentSnapshot,
+    script: Option<&PreparedAnalysisScript>,
     error: &sigil::error::ResolveError,
 ) -> AnalysisDiagnostic {
     let primary_label_index = error
@@ -1636,8 +1949,8 @@ fn diagnostic_from_project_resolve_error(
         AnalysisSeverity::Error,
         primary_path,
         &primary_line_index,
-        error.span.start,
-        error.span.end,
+        local_analysis_span(&error.span).start,
+        local_analysis_span(&error.span).end,
         error.message.clone(),
     );
     diagnostic.related = error
@@ -1652,11 +1965,46 @@ fn diagnostic_from_project_resolve_error(
             let line_index = LineIndex::new(&source);
             Some(AnalysisDiagnosticRelated {
                 path,
-                range: analysis_range_for_span(&line_index, &label.span),
+                range: analysis_range_for_span(&line_index, &local_analysis_span(&label.span)),
                 message: label.message.clone(),
             })
         })
         .collect();
+    if error.diagnostic.reason == sigil::error::ResolveErrorReason::DeclarationCollision {
+        if let Some(script) = script {
+            if let Some(origin) = error
+                .related_labels
+                .last()
+                .and_then(|label| label.source)
+                .and_then(|source| {
+                    script.include_origins.iter().find(|origin| {
+                        origin.stage_index == source.stage_index
+                            && origin.source_index == source.source_index
+                    })
+                })
+            {
+                diagnostic.related.push(AnalysisDiagnosticRelated {
+                    path: diagnostic.path.clone(),
+                    range: diagnostic.range.expect("conflicting declaration range"),
+                    message: "conflicting declaration".into(),
+                });
+                diagnostic.path = script.entry.path.clone();
+                diagnostic.range = Some(analysis_range_for_span(
+                    &script.entry.line_index,
+                    &origin.directive.span,
+                ));
+                diagnostic.message = format!(
+                    "Cannot include '{}': symbol '{}' is already defined.",
+                    origin.directive.file_path,
+                    error
+                        .diagnostic
+                        .subject
+                        .as_deref()
+                        .expect("collision subject")
+                );
+            }
+        }
+    }
     diagnostic
 }
 
@@ -1909,16 +2257,6 @@ fn typecheck_context_for_analysis(context: &ResolvedAnalysisContext) -> scar::Ty
     )
 }
 
-fn module_path_for_document(mode: AnalysisMode, path: &Path) -> Option<String> {
-    match mode {
-        AnalysisMode::Project => None,
-        AnalysisMode::Script | AnalysisMode::DefinitionCheck | AnalysisMode::ReplPreview => path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .map(|stem| stem.to_string()),
-    }
-}
-
 #[allow(dead_code)]
 fn _text_position_for_byte(line_index: &LineIndex, byte_offset: usize) -> TextPosition {
     line_index.byte_to_text_position(byte_offset)
@@ -1936,6 +2274,453 @@ mod tests {
             runner_selection: None,
             open_documents: Vec::new(),
         })
+    }
+
+    fn script_include_service() -> (AnalysisService, PathBuf, PathBuf, PathBuf) {
+        let mut service = AnalysisService::new();
+        let entry = PathBuf::from("/repo/main.srt");
+        let a = PathBuf::from("/repo/a.srt");
+        let b = PathBuf::from("/repo/b.srt");
+        service.update_document(
+            a.clone(),
+            Some(1),
+            "import StageB::value_b;\ndefmod StageA { def value_a() -> Int { value_b() } }".into(),
+        );
+        service.update_document(
+            b.clone(),
+            Some(1),
+            "defmod StageB { def value_b() -> Int { 42 } }".into(),
+        );
+        service.update_document(
+            entry.clone(),
+            Some(1),
+            "include './a.srt'\ninclude './b.srt'\nStageA::value_a()".into(),
+        );
+        (service, entry, a, b)
+    }
+
+    fn script_include_context(
+        service: &AnalysisService,
+        active: &Path,
+        entry: &Path,
+    ) -> ResolvedAnalysisContext {
+        resolve_context(AnalysisContextRequest {
+            workspace_root: PathBuf::from("/repo"),
+            active_file: active.to_path_buf(),
+            selected_context: Some(SelectedContext::DefinitionUnderEntry {
+                entry_file: entry.to_path_buf(),
+            }),
+            runner_selection: None,
+            open_documents: service.document_store().open_document_versions(),
+        })
+    }
+
+    #[test]
+    fn script_include_entry_sees_later_modules() {
+        let (service, entry, _, _) = script_include_service();
+        let snapshot = service.analyze(script_include_context(&service, &entry, &entry));
+        assert!(snapshot.typed.is_some(), "{:?}", snapshot.diagnostics);
+    }
+
+    #[test]
+    fn script_include_active_definition_uses_the_selected_entry() {
+        let (mut service, entry, a, _) = script_include_service();
+        service.update_document(
+            entry.clone(),
+            Some(1),
+            "include './b.srt'\ninclude './a.srt'\nStageA::value_a()".into(),
+        );
+        let snapshot = service.analyze(script_include_context(&service, &a, &entry));
+        assert!(snapshot.typed.is_some(), "{:?}", snapshot.diagnostics);
+    }
+
+    #[test]
+    fn standalone_definition_does_not_guess_its_including_entry() {
+        let (service, _, a, _) = script_include_service();
+        let snapshot = service.analyze(standalone_context(&a));
+        assert!(
+            snapshot.typed.is_none(),
+            "standalone definitions must not infer their entry"
+        );
+    }
+
+    #[test]
+    fn script_include_stage_uses_updated_unsaved_dependencies() {
+        let (mut service, entry, a, b) = script_include_service();
+        service.update_document(
+            b.clone(),
+            Some(2),
+            "defmod StageB { def other() -> Int { 7 } }".into(),
+        );
+        let broken = service.analyze(script_include_context(&service, &a, &entry));
+        assert!(broken.typed.is_none());
+        assert!(
+            broken
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("value_b")),
+            "{:?}",
+            broken.diagnostics
+        );
+        service.update_document(
+            b,
+            Some(2),
+            "defmod StageB { def value_b() -> Int { 7 } }".into(),
+        );
+        assert!(service
+            .analyze(script_include_context(&service, &a, &entry))
+            .typed
+            .is_some());
+    }
+
+    #[test]
+    fn script_include_diagnostics_keep_occurrence_and_source_locations() {
+        let mut service = AnalysisService::new();
+        let entry = PathBuf::from("/repo/main.srt");
+        let module = PathBuf::from("/repo/helper.srt");
+        service.update_document(
+            module.clone(),
+            Some(1),
+            "defmod Helper { def value() -> Int { 1 } }".into(),
+        );
+        service.update_document(
+            entry.clone(),
+            Some(1),
+            "include './helper.srt'\ninclude './helper.srt'\ninclude './helper.srt'\n()".into(),
+        );
+        let collision = service.analyze(script_include_context(&service, &module, &entry));
+        let diagnostic = collision
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.kind == AnalysisDiagnosticKind::Resolve)
+            .unwrap();
+        assert_eq!(diagnostic.path, entry);
+        assert_eq!(diagnostic.range.unwrap().start.line, 1);
+        assert!(
+            diagnostic
+                .related
+                .iter()
+                .filter(|related| related.path == module)
+                .count()
+                >= 2
+        );
+        service.update_document(entry.clone(), Some(2), "include './helper.srt'\n()".into());
+        service.update_document(
+            module.clone(),
+            Some(2),
+            r#"defmod Helper { def value() -> Int { "bad" } }"#.into(),
+        );
+        let invalid_type = service.analyze(script_include_context(&service, &entry, &entry));
+        let diagnostic = invalid_type
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.kind == AnalysisDiagnosticKind::Typecheck)
+            .unwrap();
+        assert_eq!(diagnostic.path, module);
+        assert_eq!(diagnostic.range.unwrap().start.line, 0);
+    }
+
+    #[test]
+    fn script_include_policy_diagnostic_from_active_definition_points_to_directive() {
+        let mut service = AnalysisService::new();
+        let entry = PathBuf::from("/repo/main.srt");
+        let module = PathBuf::from("/repo/helper.srt");
+        service.update_document(entry.clone(), Some(1), "include './helper.srt'\n()".into());
+        service.update_document(
+            module.clone(),
+            Some(1),
+            "@builtin defmod Helper { def value() -> Int }".into(),
+        );
+        let snapshot = service.analyze(script_include_context(&service, &module, &entry));
+        let errors = snapshot
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == AnalysisSeverity::Error)
+            .collect::<Vec<_>>();
+        assert_eq!(errors.len(), 1, "{:?}", errors);
+        assert_eq!(errors[0].path, entry);
+        assert!(errors[0].message.contains("Cannot include"));
+        assert_eq!(errors[0].related[0].path, module);
+    }
+
+    #[test]
+    fn script_include_and_project_paths_share_the_same_module_stage_contract() {
+        let root = std::env::temp_dir().join(format!(
+            "surtr-include-project-equivalence-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        let sources = [
+            (
+                "a",
+                "import StageB::value_b;\ndefmod StageA { def value_a() -> Int { value_b() } }",
+            ),
+            (
+                "b",
+                "import StageC::value_c;\ndefmod StageB { def value_b() -> Int { value_c() } }",
+            ),
+            ("c", "defmod StageC { def value_c() -> Int { 42 } }"),
+        ];
+        for (name, source) in sources {
+            std::fs::write(root.join(format!("src/{name}.srt")), source).unwrap();
+        }
+        let mut service = AnalysisService::new();
+        let active = root.join("src/a.srt");
+        let entry = root.join("main.srt");
+        service.update_document(active.clone(), Some(1), sources[0].1.into());
+        service.update_document(entry.clone(), Some(1), "include './src/c.srt'\ninclude './src/b.srt'\ninclude './src/a.srt'\nStageA::value_a()".into());
+        let context = script_include_context(&service, &active, &entry);
+        let mut included_stages = Vec::new();
+        prepare_analysis_script(&service, &context, &mut included_stages, &mut Vec::new()).unwrap();
+        let compile_stages = |stages: &[crate::ModuleStage]| {
+            let mut diagnostics = Vec::new();
+            let modules = build_staged_modules(
+                &service,
+                &context,
+                stages,
+                None,
+                None,
+                &mut diagnostics,
+                &mut SemanticIndex::default(),
+            )
+            .unwrap();
+            assert!(diagnostics.is_empty());
+            let standard = standard_sources().unwrap();
+            let mut all_modules = standard.module_stages.clone();
+            all_modules.extend(modules);
+            let declarations = sigil::precollect_declaration_index(&all_modules).unwrap();
+            let resolved = sigil::resolve_staged_program_with_state(
+                &all_modules,
+                Vec::new(),
+                &declarations,
+                None,
+            )
+            .unwrap();
+            scar::typecheck_staged_program_with_context(resolved, standard_typecheck_context())
+                .unwrap()
+        };
+        let included = compile_stages(&included_stages);
+        assert!(included.nodes.len() >= 3);
+        for paths in [
+            vec!["src/a.srt", "src/b.srt", "src/c.srt"],
+            vec!["src/*.srt"],
+        ] {
+            let runner = crate::resolve_project_runner(ProjectRunnerInput {
+                project_file: root.join("project.srt"),
+                selected_profile: "main".into(),
+                entrypoint: "StageA::value_a".into(),
+                normalized_args: Vec::new(),
+                declared_paths: paths
+                    .into_iter()
+                    .map(|literal_or_glob| crate::DeclaredProjectPath {
+                        declared_by: root.join("project.srt"),
+                        literal_or_glob: literal_or_glob.into(),
+                        declaration_span: None,
+                    })
+                    .collect(),
+                active_file_profiles: Vec::new(),
+                boot_summary: crate::ProjectBootSummary::default(),
+                external_inputs: Vec::new(),
+            });
+            assert!(runner.diagnostics.is_empty(), "{:?}", runner.diagnostics);
+            assert_eq!(runner.module_stages.len(), 1);
+            assert_eq!(runner.module_stages[0].files.len(), 3);
+            let project = compile_stages(&runner.module_stages);
+            assert_eq!(project.nodes.len(), included.nodes.len());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn active_definition_parser_accepts_declared_owners_and_rejects_real_nesting() {
+        let mut service = AnalysisService::new();
+        let path = PathBuf::from("/repo/owners.srt");
+        service.update_document(path.clone(), Some(1), "defrecord Item(value: Int)\nimpl Item { def helper() -> Int { 1 } }\nnamespace N { defmod Helper { def value() -> Int { 1 } } }\ndefmod Other { def value() -> Int { 2 } }".into());
+        let valid = service.analyze(standalone_context(&path));
+        assert!(valid.ast.is_some(), "{:?}", valid.diagnostics);
+        service.update_document(
+            path.clone(),
+            Some(2),
+            "defmod Outer { defmod Inner {} }".into(),
+        );
+        let nested = service.analyze(standalone_context(&path));
+        assert!(nested.ast.is_none());
+        assert!(nested
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("Nested module declarations")));
+    }
+
+    #[test]
+    fn script_include_parent_relative_path_prefers_unsaved_virtual_document() {
+        #[derive(Debug)]
+        struct VirtualHost;
+        impl AnalysisHost for VirtualHost {
+            fn read_to_string(&self, _path: &Path) -> Option<String> {
+                None
+            }
+        }
+        let mut service = AnalysisService::with_host(Arc::new(VirtualHost));
+        let entry = PathBuf::from("/repo/scripts/main.srt");
+        let module = PathBuf::from("/repo/lib/a.srt");
+        service.update_document(
+            entry.clone(),
+            Some(1),
+            "include '../lib/a.srt'\nCurrent::value()".into(),
+        );
+        service.update_document(
+            module.clone(),
+            Some(1),
+            "defmod Current { def value() -> Int { 42 } }".into(),
+        );
+        let snapshot = service.analyze(script_include_context(&service, &module, &entry));
+        assert!(snapshot.typed.is_some(), "{:?}", snapshot.diagnostics);
+        service.update_document(
+            module.clone(),
+            Some(2),
+            "defmod Current { def value(".into(),
+        );
+        let changed = service.analyze(script_include_context(&service, &entry, &entry));
+        let diagnostic = changed
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.kind == AnalysisDiagnosticKind::Parse)
+            .unwrap();
+        assert_eq!(diagnostic.path, module);
+    }
+
+    #[test]
+    fn script_include_parent_relative_path_prefers_unsaved_file_to_disk() {
+        let root = std::env::temp_dir().join(format!(
+            "surtr-parent-include-overlay-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("scripts")).unwrap();
+        std::fs::create_dir_all(root.join("lib")).unwrap();
+        let entry = root.join("scripts/main.srt");
+        let module = root.join("lib/a.srt");
+        std::fs::write(&module, "defmod Stale {}").unwrap();
+        let mut service = AnalysisService::new();
+        service.update_document(
+            entry.clone(),
+            Some(1),
+            "include '../lib/a.srt'\nCurrent::value()".into(),
+        );
+        service.update_document(
+            module,
+            Some(1),
+            "defmod Current { def value() -> Int { 42 } }".into(),
+        );
+        let snapshot = service.analyze(script_include_context(&service, &entry, &entry));
+        assert!(snapshot.typed.is_some(), "{:?}", snapshot.diagnostics);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn script_include_symlink_parent_path_matches_open_alias_without_changing_target() {
+        let root = std::env::temp_dir().join(format!(
+            "surtr-include-symlink-overlay-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("scripts")).unwrap();
+        std::fs::create_dir_all(root.join("real/scripts")).unwrap();
+        std::os::unix::fs::symlink(root.join("real/scripts"), root.join("scripts/link")).unwrap();
+        std::os::unix::fs::symlink(root.join("real"), root.join("view")).unwrap();
+        let entry = root.join("scripts/main.srt");
+        let module = root.join("view/a.srt");
+        std::fs::write(root.join("real/a.srt"), "defmod Stale {}").unwrap();
+        std::fs::write(root.join("scripts/a.srt"), "defmod WrongTarget {}").unwrap();
+        let mut service = AnalysisService::new();
+        service.update_document(
+            entry.clone(),
+            Some(1),
+            "include './link/../a.srt'\nCurrent::value()".into(),
+        );
+        let active = service.update_document(
+            module.clone(),
+            Some(1),
+            "defmod Current { def value() -> Int { 42 } }".into(),
+        );
+        let snapshot = service.analyze(script_include_context(&service, &module, &entry));
+        assert!(snapshot.typed.is_some(), "{:?}", snapshot.diagnostics);
+        let stages = [crate::ModuleStage {
+            files: vec![crate::ModuleFileFingerprint {
+                path: root.join("real/a.srt"),
+                source_kind: SourceKind::DefinitionSource,
+                content_hash: String::new(),
+            }],
+        }];
+        assert_eq!(
+            active_stage_index_for_document(&service, &stages, &active),
+            0
+        );
+        // A missing intermediate directory cannot be skipped by normalizing `..`.
+        assert!(service
+            .source_for_path(&root.join("missing/../real/a.srt"))
+            .is_none());
+        // An unsaved new file under the same symlinked parent needs no disk file.
+        service.update_document(root.join("view/new.srt"), Some(1), "defmod New {}".into());
+        assert_eq!(
+            service
+                .source_for_path(&root.join("scripts/link/../new.srt"))
+                .as_deref(),
+            Some("defmod New {}")
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn script_include_rejects_ambiguous_document_aliases_and_preserves_exact_match() {
+        #[derive(Debug)]
+        struct VirtualHost;
+        impl AnalysisHost for VirtualHost {
+            fn read_to_string(&self, _path: &Path) -> Option<String> {
+                Some("disk must not win".into())
+            }
+        }
+        let mut service = AnalysisService::with_host(Arc::new(VirtualHost));
+        let entry = PathBuf::from("/repo/scripts/main.srt");
+        let canonical = PathBuf::from("/repo/lib/a.srt");
+        let alias = PathBuf::from("/repo/extra/../lib/a.srt");
+        service.update_document(entry.clone(), Some(1), "include '../lib/a.srt'\n()".into());
+        service.update_document(alias.clone(), Some(1), "defmod Alias {}".into());
+        assert_eq!(
+            service.source_for_path(&canonical).as_deref(),
+            Some("defmod Alias {}")
+        );
+        service.update_document(canonical.clone(), Some(1), "defmod Canonical {}".into());
+        assert_eq!(
+            service.source_for_path(&canonical).as_deref(),
+            Some("defmod Canonical {}")
+        );
+        assert_eq!(
+            service.source_for_path(&alias).as_deref(),
+            Some("defmod Alias {}")
+        );
+        let snapshot = service.analyze(script_include_context(&service, &entry, &entry));
+        assert!(snapshot.typed.is_none());
+        assert!(
+            snapshot.diagnostics.iter().any(|diagnostic| diagnostic.kind
+                == AnalysisDiagnosticKind::ContextSelection
+                && diagnostic
+                    .message
+                    .contains("multiple open document aliases")),
+            "{:?}",
+            snapshot.diagnostics
+        );
     }
 
     #[test]
@@ -2024,7 +2809,7 @@ mod tests {
                 &context,
                 &stages,
                 None,
-                &active,
+                None,
                 &mut diagnostics,
                 &mut SemanticIndex::default(),
             );
@@ -2064,7 +2849,7 @@ mod tests {
     fn project_standard_syntax_reuse_leaves_parse_cache_for_current_documents() {
         let mut service = AnalysisService::new();
         let path = PathBuf::from("/repo/helper.srt");
-        let active = service.update_document(
+        service.update_document(
             path.clone(),
             Some(1),
             "defmod Helper { def value() -> Int { 1 } }".into(),
@@ -2080,14 +2865,14 @@ mod tests {
             }],
         });
         let standard = standard_sources().expect("bundled standard syntax");
-        let parse = |service: &AnalysisService, active: &DocumentSnapshot| {
+        let parse = |service: &AnalysisService| {
             let mut diagnostics = Vec::new();
             let parsed = build_staged_modules(
                 service,
                 &context,
                 &stages,
                 Some(standard),
-                active,
+                None,
                 &mut diagnostics,
                 &mut SemanticIndex::default(),
             )
@@ -2097,21 +2882,21 @@ mod tests {
             parsed
         };
 
-        let first = parse(&service, &active);
+        let first = parse(&service);
         assert_eq!(first.len(), 3);
         assert_eq!(service.parse_cache.stats().strict_calls, 1);
-        assert_eq!(parse(&service, &active), first);
+        assert_eq!(parse(&service), first);
         assert_eq!(service.parse_cache.stats().strict_calls, 1);
 
-        let changed = service.update_document(
+        service.update_document(
             path,
             Some(1),
             "defmod Helper { def value() -> Int { 2 } }".into(),
         );
-        let second = parse(&service, &changed);
+        let second = parse(&service);
         assert_ne!(first[2][0].ast, second[2][0].ast);
         assert_eq!(service.parse_cache.stats().strict_calls, 2);
-        assert_eq!(parse(&service, &changed), second);
+        assert_eq!(parse(&service), second);
         assert_eq!(service.parse_cache.stats().strict_calls, 2);
     }
 
