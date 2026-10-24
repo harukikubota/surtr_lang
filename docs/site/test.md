@@ -6,6 +6,9 @@
 `lib/test.srt` の明示的な include は、ユーザー定義では許可されない `@builtin` 宣言を含むため拒否します。
 include 先のモジュールで短名を使う場合も、そのファイルに `import Test;` が必要です。
 
+通常束縛、SafeBind、Extractor、Facet を検証目的に応じて使い分ける例は、
+[テストの書き方ガイド](./test-writing-guide.md)を参照してください。
+
 ## 最初のテスト
 
 `test` でテストをまとめ、`it` に一件ずつ条件を書きます。
