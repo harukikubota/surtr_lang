@@ -1,7 +1,7 @@
 task = Task::async({||
   values = List::flat_map([1, 2], {|value|
     print("before=#{value}")
-    Process::sleep(10ms)
+    Process::sleep(10ms);
     print("after=#{value}")
     [value]
   })

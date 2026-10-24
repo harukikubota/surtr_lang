@@ -82,6 +82,14 @@ include 文全体とし、拒否された宣言、または衝突する双方の
 
 - `apply_pattern` の projection は選択済み Pattern 引数だけで検査する。index の範囲・重複・欠番・許可位置と注釈型の不一致は静的エラーとし、runtime `Err` に変換しない。通常 Pattern 不一致には既存の literal / list / constructor 診断を使い、Extractor の `Err` は kind・message・cause・source を保持する。consumer 自体は外側 callable / do へ早期 return しない。
 
+## 非最終文の Unit 制約
+
+通常のブロックでは、非最終文の結果型が `Unit` でなければ typecheck phase の `NonUnitStatement` で拒否する。
+関数・closure 本体と、内部の通常ブロックに同じ規則を適用する。スクリプトの top-level も暗黙の関数コンテキストとして同じ規則で検査する。束縛文は `Unit` を返し、最終式は従来どおり受け手が要求する型で検査する。
+診断は戻り値の暗黙破棄を許可しないことを message に示し、対象文の span と実際の型を保持する。
+`;` または束縛（明示破棄なら `_ = expr`）による修正案を `help` に置く。`;` の構文・改行区切りの規則は変更しない。
+REPL も各入力 chunk の非最終文に同じ規則を適用し、chunk の末尾値は従来どおり表示する。`do` 直下の bare Monad 式は既存の sequence 規則に従う。
+
 ## Lazy・PatternキャプチャとErrorKind
 
 正規化と各フェーズの責務は[Lazy special formの実装契約](Lazy_spec.md)に従う。
@@ -122,6 +130,7 @@ placeholderの競合では、その正規化で確定した要求型をまとめ
 | family | stable reason |
 |---|---|
 | argument contract | `ArityMismatch`, `ArgumentModeMismatch`, `UnknownNamedArgument`, `DuplicateArgument`, `MissingArgument` |
+| statement | `NonUnitStatement` |
 | type relation / callable | `ArgumentTypeMismatch`, `ReturnTypeMismatch`, `AnnotationTypeMismatch`, `NotCallable`, `CallableShapeMismatch`, `CallableSignatureMetadataMismatch` |
 | ReturnTypeArgument | `ReturnTypeArgumentArityMismatch`, `ReturnTypeArgumentMismatch`, `AmbiguousReturnTypeArgument`, `DuplicateReturnTypeArgumentInput`, `MissingReturnTypeArgument`, `UnusedReturnTypeArgument`, `ConcreteReturnTypeArgumentInDefinition`, `InlineReturnTypeArgumentConstraint` |
 | Enum constructor | `UnresolvedEnumConstructorTypeArgument` |

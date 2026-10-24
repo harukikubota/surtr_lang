@@ -377,9 +377,12 @@ mod shared_registry_tests {
             resolved.into_iter().skip(1).collect()
         };
         let typed = successful
-            .typecheck(calls("cow_identity(1)\ncow_identity(\"ok\")"))
+            .typecheck(calls("cow_identity(1);\ncow_identity(\"ok\")"))
             .unwrap();
-        assert_eq!(typed[0].ty, Ty::Int);
+        let TypedInner::Semi(first_call) = &typed[0].node else {
+            panic!("expected an explicitly discarded first call");
+        };
+        assert_eq!(first_call.ty, Ty::Int);
         assert_eq!(typed[1].ty, Ty::Str);
         assert!(Arc::ptr_eq(
             &declaration,

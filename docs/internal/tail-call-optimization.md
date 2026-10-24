@@ -92,7 +92,7 @@ def sum_non_tail(n: Int) -> Int {
 ```surtr
 def f(n: Int) -> Int {
   {
-    g(n)
+    g(n);
     0
   }
 }

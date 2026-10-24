@@ -645,7 +645,8 @@ impl Checker {
 
             let mut typed = Vec::new();
             let t = profile_enabled.then(Instant::now);
-            for stmt in stmts {
+            let source_stmt_count = stmts.len();
+            for (index, stmt) in stmts.into_iter().enumerate() {
                 // Source spans can repeat across definition sources and REPL inputs.
                 // Provenance belongs only to this expression checking tree.
                 self.safe_operator_results.clear();
@@ -700,6 +701,9 @@ impl Checker {
                 let node = *self.resolve_typed_node(node);
                 self.profiler
                     .finish(ProfileEvent::ResolveTypedNode, profile);
+                if index + 1 < source_stmt_count {
+                    self.ensure_unit_statement(&node)?;
+                }
                 typed.push(node);
                 if let (Some(start), Some(label)) = (stmt_start, stmt_label.as_ref()) {
                     let elapsed = start.elapsed();
@@ -785,7 +789,6 @@ impl Checker {
                     ),
                 };
             }
-            self.collect_unused_value_warnings_in_sequence(&specialized);
             Ok(specialized)
         })();
 

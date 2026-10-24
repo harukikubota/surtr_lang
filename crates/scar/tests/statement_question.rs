@@ -2,7 +2,6 @@ use scar::typed::{
     SafeBindFailureTarget, SafeBindRhsProjection, TypedInner, TypedNode, TypedPattern,
 };
 use scar::types::Ty;
-use sindr::warning::WarningKind;
 
 #[allow(dead_code)]
 mod support;
@@ -322,13 +321,6 @@ fn explicit_result_closure_signatures_provide_local_safebind_failure_targets() {
 }
 
 #[test]
-fn question_is_an_explicit_discard_for_unused_value_warnings() {
-    let resolved = resolve_with_builtin_prelude("Ok(())?\n ()");
-    let output = support::session_from_cached_std_prelude()
-        .typecheck_with_warnings(resolved)
-        .expect("question statement should typecheck");
-    assert!(output
-        .warnings
-        .iter()
-        .all(|warning| warning.kind != WarningKind::UnusedValue));
+fn question_succeeds_as_a_non_final_unit_statement() {
+    typecheck_with_builtin_prelude("Ok(())?\n ()");
 }

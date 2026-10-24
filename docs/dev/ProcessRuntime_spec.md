@@ -823,7 +823,7 @@ singleton の新規 PID 解決は既存 slot を使い、開始済み実行は�
 
 ```surtr
 task = Task::async({||
-  Process::sleep(10ms)
+  Process::sleep(10ms);
   Ok("ready")
 })
 result = Task::await(task) @timeout(100ms)
@@ -990,7 +990,7 @@ defgenserver Logger {
 
   @cast
   def info(state: LoggerState, message: String) -> Result<LoggerState> {
-    OutHandler::write(ctx.out, message)
+    OutHandler::write(ctx.out, message);
     Ok(state)
   }
 }
@@ -1151,7 +1151,7 @@ OutHandler::write(pid: PID<OutHandler>, text: String) -> Result<()>
 
 ```surtr
 it("runs only the selected blocks") {
-  capture_stdout()
+  capture_stdout();
 
   print("run-if")
   print("if-then")

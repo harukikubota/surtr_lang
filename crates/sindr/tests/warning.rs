@@ -16,10 +16,10 @@ fn warning_buffer_push_extend_and_take_preserves_order() {
         Some("Use `_` if the binding is intentionally ignored.".to_string()),
     );
     let second = CompilerWarning::new(
-        WarningKind::UnusedValue,
+        WarningKind::UnusedTypeParameter,
         WarningPhase::Typecheck,
         span(3, 7),
-        "unused value",
+        "unused type parameter `$A`",
         None,
     );
 

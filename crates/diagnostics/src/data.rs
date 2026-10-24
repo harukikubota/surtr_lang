@@ -18,6 +18,7 @@ pub enum TypeDiagnosticReason {
     ArgumentTypeMismatch,
     ReturnTypeMismatch,
     AnnotationTypeMismatch,
+    NonUnitStatement,
     NotCallable,
     CallableShapeMismatch,
     CallableSignatureMetadataMismatch,
@@ -89,6 +90,7 @@ impl TypeDiagnosticReason {
             Self::ArgumentTypeMismatch => "ArgumentTypeMismatch",
             Self::ReturnTypeMismatch => "ReturnTypeMismatch",
             Self::AnnotationTypeMismatch => "AnnotationTypeMismatch",
+            Self::NonUnitStatement => "NonUnitStatement",
             Self::NotCallable => "NotCallable",
             Self::CallableShapeMismatch => "CallableShapeMismatch",
             Self::CallableSignatureMetadataMismatch => "CallableSignatureMetadataMismatch",
@@ -861,6 +863,7 @@ pub struct PatternDiagnosticData {
 #[serde(rename_all = "snake_case")]
 pub enum TypePolicy {
     TestScriptReturn,
+    NonFinalStatementUnit,
     SafeBindFacet,
     FacetPatternBinding,
     FacetOperation,

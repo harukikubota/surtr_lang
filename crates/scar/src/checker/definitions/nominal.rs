@@ -451,7 +451,7 @@ mod deferror_scope_tests {
 
     fn warning(message: &str) -> CompilerWarning {
         CompilerWarning::new(
-            WarningKind::UnusedValue,
+            WarningKind::UnusedTypeParameter,
             WarningPhase::Typecheck,
             WarningSpan { start: 1, end: 2 },
             message,
@@ -624,7 +624,7 @@ mod deferror_scope_tests {
                 do::<Option> {
                     ys: List<Int> = xs
                     Option::Some(())
-                }
+                };
                 zs: List<$ELEMENT> = xs"#
                 .replace("$ELEMENT", element);
             let result =
