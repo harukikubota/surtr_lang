@@ -5,9 +5,9 @@ use diagnostics::SourceFact;
 fn candidate_rollback_isolates_generated_capture_aliases_and_warnings_in_either_order() {
     fn candidate_source(rejected: bool) -> Vec<Resolved> {
         let source = if rejected {
-            "capture = &or(&1, &2)\n11\nTrue"
+            "capture = &or(&1, &2)\nTrue"
         } else {
-            "capture = &and(&1, &2)\n22\n1"
+            "capture = &and(&1, &2)\n1"
         };
         let ast = spire::parse_with_context(source, spire::ParserContext::project(0)).unwrap();
         crate::test_support::resolve_ast_with_builtin_prelude(ast).unwrap()
@@ -37,7 +37,15 @@ fn candidate_rollback_isolates_generated_capture_aliases_and_warnings_in_either_
             &Ty::Unit,
             &proxy.span,
         )?;
-        checker.collect_unused_value_warnings_in_sequence(&typed);
+        // A warning produced during a candidate probe must follow the same
+        // commit/rollback boundary as the generated capture metadata.
+        checker.warnings.push(CompilerWarning::new(
+            WarningKind::UnusedTypeParameter,
+            WarningPhase::Typecheck,
+            WarningSpan { start: 0, end: 1 },
+            "unused type parameter `$Probe`",
+            None,
+        ));
         assert_eq!(checker.lazy_capture_bindings.len(), 1);
         assert_eq!(
             checker.pattern_binding_aliases.get(&proxy.unique_id),

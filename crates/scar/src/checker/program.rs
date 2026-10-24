@@ -785,7 +785,6 @@ impl Checker {
                     ),
                 };
             }
-            self.collect_unused_value_warnings_in_sequence(&specialized);
             Ok(specialized)
         })();
 

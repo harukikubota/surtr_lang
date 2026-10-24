@@ -8,13 +8,12 @@ Phase1 では警告を compiler 内部の buffer に集めるところまでを�
 
 ## 対象
 
-Phase1 で扱う警告は次の 4 種類です。
+Phase1 で扱う警告は次の 3 種類です。
 
 | warning | phase | 意味 |
 |---|---|---|
 | `UnusedVariable` | resolve | 束縛した変数が使われていない |
 | `UnusedImportFunction` | resolve | 明示 import した関数を短い名前で使っていない |
-| `UnusedValue` | typecheck | `Unit` ではない値を文の途中で捨てている |
 | `UnusedTypeParameter` | typecheck | 宣言した型引数が実際の型位置で使われていない |
 
 ## Unused Variable
@@ -72,46 +71,6 @@ def main() -> Int {
 この形では `double` を unqualified name として使っていないため、import は不要です。
 
 `import Mod` の unused member 検出は Phase1 の対象外です。auto import もこの警告の対象外です。
-
-## Unused Value
-
-block や top-level の途中にある文が `Unit` ではない値を返し、その値を使っていない場合に警告します。
-
-```surtr
-def main() -> Unit {
-  1
-  ()
-}
-```
-
-意図的に捨てる場合は明示的に `;` を付けます。
-
-```surtr
-def main() -> Unit {
-  1;
-  ()
-}
-```
-
-`Unit` を返す文は警告しません。
-
-```surtr
-def main() -> Unit {
-  print("hello")
-  ()
-}
-```
-
-`Result<Unit>` は `Unit` ではないため、途中で捨てると警告します。
-
-```surtr
-def main() -> Unit {
-  Ok(())
-  ()
-}
-```
-
-この場合も、意図的に捨てるなら `Ok(());` と書きます。
 
 ## Unused Type Parameter
 

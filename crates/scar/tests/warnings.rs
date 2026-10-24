@@ -86,22 +86,6 @@ fn empty_new_def(struct_name: &str, uid: u32) -> Resolved {
 }
 
 #[test]
-fn non_tail_non_unit_block_value_warns() {
-    let output = typecheck_with_warnings(vec![Resolved::Block(
-        span(0, 8),
-        vec![
-            Resolved::Lit(span(1, 2), Lit::Int(int(1))),
-            Resolved::Lit(span(4, 6), Lit::Unit),
-        ],
-    )])
-    .expect("block should typecheck");
-
-    assert_eq!(output.warnings.len(), 1);
-    assert_eq!(output.warnings[0].kind, WarningKind::UnusedValue);
-    assert_eq!(output.warnings[0].span.start, 1);
-}
-
-#[test]
 fn unit_and_explicit_semicolon_values_do_not_warn() {
     let output = typecheck_with_warnings(vec![Resolved::Block(
         span(0, 12),
@@ -117,25 +101,6 @@ fn unit_and_explicit_semicolon_values_do_not_warn() {
     .expect("block should typecheck");
 
     assert!(output.warnings.is_empty(), "{:?}", output.warnings);
-}
-
-#[test]
-fn result_unit_non_tail_value_warns() {
-    let resolved = support::resolve_with_builtin_prelude(
-        r#"Ok(())
-()"#,
-    );
-    let mut session = support::session_from_cached_std_prelude();
-    let output = session
-        .typecheck_with_warnings(resolved)
-        .expect("result unit expression should typecheck");
-
-    let unused_values = output
-        .warnings
-        .iter()
-        .filter(|warning| warning.kind == WarningKind::UnusedValue)
-        .collect::<Vec<_>>();
-    assert_eq!(unused_values.len(), 1, "{:?}", output.warnings);
 }
 
 #[test]
