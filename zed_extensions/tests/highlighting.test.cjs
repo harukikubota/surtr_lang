@@ -149,3 +149,12 @@ test('outline captures declared names and excludes calls, closures and documenta
   assert.equal((captures.match(/ - item,/g) || []).length, 5, captures);
   assert.ok(!captures.includes('text: `fake`'), captures);
 });
+
+test('text objects distinguish named functions, expression bodies, containers and comments', () => {
+  const source = 'defmod Example {\n  def identity(value: Int) -> Int { value }\n  def one() -> Int = 1\n}\n# note\n{|value| value}';
+  const { captures } = inspect(source, 'textobjects.scm');
+  assert.equal((captures.match(/ - function.around,/g) || []).length, 2, captures);
+  assert.equal((captures.match(/ - class.around,/g) || []).length, 1, captures);
+  assert.ok(captures.includes(' - function.inside,') && captures.includes('text: `value`'), captures);
+  assert.ok(captures.includes('text: `1`') && captures.includes(' - comment.around,'), captures);
+});
