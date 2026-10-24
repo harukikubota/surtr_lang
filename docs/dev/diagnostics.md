@@ -82,6 +82,10 @@ include 文全体とし、拒否された宣言、または衝突する双方の
 
 - `apply_pattern` の projection は選択済み Pattern 引数だけで検査する。index の範囲・重複・欠番・許可位置と注釈型の不一致は静的エラーとし、runtime `Err` に変換しない。通常 Pattern 不一致には既存の literal / list / constructor 診断を使い、Extractor の `Err` は kind・message・cause・source を保持する。consumer 自体は外側 callable / do へ早期 return しない。
 
+## 具象エラー定義の総称型
+
+Scar は具象エラー定義の保存 Payload とメッセージコンストラクタ引数にある型変数を、`GenericTypeInErrorDefinition` で拒否する。primary span は型変数の位置とし、container・tuple・関数型の内部も検査する。構造化された policy data は型変数名と宣言位置の区分（`payload` / `message_constructor_input`）を保持する。message は両宣言位置で総称型を使えないことを伝え、具体型の指定と呼び出し元での前処理を help に示す。未知の通常型名は既存診断を維持する。
+
 ## 非最終文の Unit 制約
 
 通常のブロックでは、非最終文の結果型が `Unit` でなければ typecheck phase の `NonUnitStatement` で拒否する。
@@ -140,7 +144,7 @@ placeholderの競合では、その正規化で確定した要求型をまとめ
 | branch | `IfBranchTypeMismatch`, `MatchArmTypeMismatch`, `CondBranchTypeMismatch` |
 | SafeBind input | `SafeBindTotalPatternNonExtractingRhs`, `SafeBindMissingMonadExtractor`, `SafeBindWholeInputAfterExtraction` |
 | pattern / Extractor | `PatternTypeMismatch`, `PatternShapeMismatch`, `PatternArityMismatch`, `NonTotalBindingPattern`, `NestedResultErrorPattern`, `MatchGuardTypeMismatch`, `ConstructorPatternRequiresEnumOrResultRhs`, `ExtractorInputTypeMismatch`, `ExtractorArityMismatch`, `NonExhaustiveMatch` |
-| policy | `TestScriptErrorPropagation`, `TestScriptReturnType`, `SafeBindErrorTypeMismatch`, `SafeBindRequiresMonadFailTarget`, Facet / Process / source / compile policy reason、`NominalDeclarationConstraintViolation`, `TraitImplementationForbidden`, `TraitHelperCaptureNeedsExpectedType`, `ReservedIntrinsicMarkerUsage` |
+| policy | `TestScriptErrorPropagation`, `TestScriptReturnType`, `SafeBindErrorTypeMismatch`, `SafeBindRequiresMonadFailTarget`, Facet / Process / source / compile policy reason、`NominalDeclarationConstraintViolation`, `GenericTypeInErrorDefinition`, `TraitImplementationForbidden`, `TraitHelperCaptureNeedsExpectedType`, `ReservedIntrinsicMarkerUsage` |
 | producer contract | `TypecheckInvariantViolation` |
 
 `MissingGenericBound`はrigid genericの宣言済みproof不足、`MissingTraitCapability`は具象subjectの能力不足、

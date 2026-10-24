@@ -79,6 +79,8 @@ deferror InvalidPort(port: Int) {
 }
 ```
 
+具象エラー定義の保存フィールドとメッセージコンストラクタ引数には、具体型を指定します。`$T` や `List<$T>` など、型変数を含む型では宣言できません。`List<Int>` のように型引数が具体化済みの型は使えます。総称値を表示・加工したい場合は、呼び出し元で処理してから具体型の値を渡します。
+
 保存フィールドがない Error は `deferror NoValue { "no value" }` と書けます。`deferror NoValue() { Self(message: "no value") }` も同じ空フィールドの定義です。String を返す形では、分岐の結果から message を作れます。
 
 ```surtr

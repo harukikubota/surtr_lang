@@ -332,6 +332,14 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
             stage: None,
             entrypoint: Some("main".into()),
         }),
+        GenericTypeInErrorDefinition => DiagnosticData::Policy(PolicyData {
+            policy: TypePolicy::ConcreteErrorDefinition,
+            subject: Some("$T".into()),
+            expected_type: None,
+            actual_type: None,
+            stage: Some("payload".into()),
+            entrypoint: None,
+        }),
         NominalDeclarationConstraintViolation => DiagnosticData::Policy(PolicyData {
             policy: TypePolicy::NominalDeclarationConstraint,
             subject: Some("$M".into()),
@@ -437,6 +445,7 @@ fn every_common_reason_has_a_typed_template_and_schema() {
         ReturnTypeArgumentMismatch,
         AmbiguousReturnTypeArgument,
         UnresolvedEnumConstructorTypeArgument,
+        GenericTypeInErrorDefinition,
         InvalidTraitConstraintSubject,
         MissingGenericBound,
         MissingTraitCapability,

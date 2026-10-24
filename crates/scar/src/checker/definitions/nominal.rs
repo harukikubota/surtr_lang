@@ -1,6 +1,58 @@
 use super::*;
 
 impl Checker {
+    pub(in crate::checker) fn resolve_error_definition_ty(
+        &mut self,
+        ty: &AstTy,
+        position: ErrorDefinitionTypePosition,
+    ) -> Result<Ty, TypeError> {
+        fn type_variable(ty: &AstTy) -> Option<(&Span, &str)> {
+            match ty {
+                AstTy::Named(span, name) | AstTy::Generic(span, name, _)
+                    if name.starts_with('$') =>
+                {
+                    Some((span, name))
+                }
+                AstTy::Generic(_, _, arguments) | AstTy::Tuple(_, arguments) => {
+                    arguments.iter().find_map(type_variable)
+                }
+                AstTy::Func(_, parameters, result) => parameters
+                    .iter()
+                    .find_map(type_variable)
+                    .or_else(|| type_variable(result)),
+                AstTy::Named(..) | AstTy::ImplTrait(..) => None,
+            }
+        }
+
+        if let Some((span, name)) = type_variable(ty) {
+            return Err(TypeError::from_structured(diagnostics::StructuredDiagnostic {
+                reason: diagnostics::TypeDiagnosticReason::GenericTypeInErrorDefinition.into(),
+                origin: diagnostics::DiagnosticOrigin::Annotation,
+                data: diagnostics::DiagnosticData::Policy(diagnostics::PolicyData {
+                    policy: diagnostics::TypePolicy::ConcreteErrorDefinition,
+                    subject: Some(name.to_string()),
+                    expected_type: None,
+                    actual_type: None,
+                    stage: Some(match position {
+                        ErrorDefinitionTypePosition::Payload => "payload",
+                        ErrorDefinitionTypePosition::MessageConstructorInput => "message_constructor_input",
+                    }.into()),
+                    entrypoint: None,
+                }),
+                primary: diagnostics::SourceFact::untyped(
+                    diagnostics::SourceRole::Annotation,
+                    diagnostics::SourceId(0),
+                    span.clone(),
+                ),
+                related: Vec::new(),
+                remediation: Some(diagnostics::Remediation::Help {
+                    text: "Use a concrete type. Process generic values in the caller before constructing the error.".into(),
+                }),
+            }));
+        }
+        self.resolve_ast_ty_in_context(ty, TypeSyntaxContext::General)
+    }
+
     pub(in crate::checker) fn check_struct_def(
         &mut self,
         span: &Span,
@@ -139,7 +191,10 @@ impl Checker {
                         field.span.clone(),
                     ));
                 }
-                let ty = self.resolve_ast_ty_in_context(&field.ty, TypeSyntaxContext::General)?;
+                let ty = self.resolve_error_definition_ty(
+                    &field.ty,
+                    ErrorDefinitionTypePosition::Payload,
+                )?;
                 self.ensure_no_match_result_value(&ty, &field.span)?;
                 if self.ty_contains_facet(&ty) {
                     return Err(TypeError::new(
@@ -170,7 +225,10 @@ impl Checker {
         let typed_params = params.iter().map(|param| {
             let ast_ty = param.ty.as_ref().ok_or_else(|| TypeError::new(
                 "deferror constructor inputs require type annotations", param.id.span.clone()))?;
-            let ty = self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)?;
+            let ty = self.resolve_error_definition_ty(
+                ast_ty,
+                ErrorDefinitionTypePosition::MessageConstructorInput,
+            )?;
             self.ensure_no_match_result_value(&ty, &param.id.span)?;
             if self.ty_contains_facet(&ty) {
                 return Err(TypeError::new(

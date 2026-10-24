@@ -551,6 +551,9 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
                 };
             }
         }
+        TypeDiagnosticReason::GenericTypeInErrorDefinition => {
+            return "Concrete error definitions cannot use generic types in payload declarations or message constructor parameters.".into();
+        }
         TypeDiagnosticReason::NominalDeclarationConstraintViolation => {
             if let DiagnosticData::Policy(value) = &input.data {
                 return format!(

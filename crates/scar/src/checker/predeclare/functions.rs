@@ -817,7 +817,10 @@ impl Checker {
                             })?;
                             Ok((
                                 param.id.name.clone(),
-                                self.resolve_ast_ty_in_context(ty, TypeSyntaxContext::General)?,
+                                self.resolve_error_definition_ty(
+                                    ty,
+                                    ErrorDefinitionTypePosition::MessageConstructorInput,
+                                )?,
                             ))
                         })
                         .collect::<Result<Vec<_>, TypeError>>()?;

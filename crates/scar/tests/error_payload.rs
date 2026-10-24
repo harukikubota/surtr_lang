@@ -3,6 +3,74 @@ mod support;
 use sindr::policy::RuntimeSourcePolicy;
 
 #[test]
+fn error_definitions_reject_generic_payloads_and_message_constructor_inputs() {
+    for (source, position) in [
+        (
+            r#"deferror Bad(value: $T) { Self(message: "bad", value: 1) }"#,
+            "payload",
+        ),
+        (
+            r#"deferror Bad(value: List<$T>) { Self(message: "bad", value: []) }"#,
+            "payload",
+        ),
+        (
+            r#"deferror Bad(value: (Int, $T)) { Self(message: "bad", value: (1, 2)) }"#,
+            "payload",
+        ),
+        (
+            r#"deferror Bad(value: (Int -> $T)) { Self(message: "bad", value: 1) }"#,
+            "payload",
+        ),
+        (
+            r#"deferror Bad { |value: $T| inspect(value) }"#,
+            "message_constructor_input",
+        ),
+        (
+            r#"deferror Bad { |value: List<$T>| inspect(value) }"#,
+            "message_constructor_input",
+        ),
+        (
+            r#"deferror Bad { |value: ($T -> String)| "bad" }"#,
+            "message_constructor_input",
+        ),
+    ] {
+        let error =
+            support::typecheck_with_rules(source, RuntimeSourcePolicy::script()).expect_err(source);
+        assert_eq!(error.message, "Concrete error definitions cannot use generic types in payload declarations or message constructor parameters.", "{source}");
+        assert_eq!(
+            error.reason().map(|reason| reason.as_str()),
+            Some("GenericTypeInErrorDefinition")
+        );
+        assert_eq!(&source[error.span.start..error.span.end], "$T");
+        let diagnostic = error.structured.as_ref().expect("structured diagnostic");
+        let diagnostics::DiagnosticData::Policy(data) = &diagnostic.data else {
+            panic!("expected Error declaration policy data");
+        };
+        assert_eq!(data.subject.as_deref(), Some("$T"));
+        assert_eq!(data.stage.as_deref(), Some(position));
+    }
+}
+
+#[test]
+fn error_definitions_accept_concrete_type_arguments_and_preserve_unknown_type_errors() {
+    support::typecheck_with_rules(
+        r#"deferror Held(value: List<Int>) { |input: List<Int>| Self(message: inspect(input), value: input) }"#,
+        RuntimeSourcePolicy::script(),
+    ).expect("fully applied concrete payload and input types remain valid");
+    for source in [
+        r#"deferror Bad(value: MissingType) { Self(message: "bad", value: 1) }"#,
+        r#"deferror Bad { |input: MissingType| "bad" }"#,
+    ] {
+        let error =
+            support::typecheck_with_rules(source, RuntimeSourcePolicy::script()).expect_err(source);
+        assert!(
+            error.message.contains("Unknown type: MissingType"),
+            "{error:?}"
+        );
+    }
+}
+
+#[test]
 fn error_payload_schema_is_separate_from_constructor_inputs() {
     support::typecheck_with_rules(
         r#"deferror Trouble(code: Int) {

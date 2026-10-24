@@ -29,6 +29,8 @@ deferror FixedValue() { Self(message: "fixed value") }
 
 ヘッダは保存する Payload スキーマ、本体先頭の `|args...|` は外部コンストラクタの入力である。両者は名前・型・個数が同じでも別に検査する。ヘッダのフィールドを本体の引数として自動束縛しない。空ヘッダは括弧の省略と `Name()` の両形式を受理し、0 引数の `||` は省略できる。コンストラクタ入力には型注釈が必要であり、式と引数は既存の型規則で検査する。
 
+具象 Error 定義では、保存 Payload とメッセージコンストラクタ引数を総称型で宣言できない。`$T` は `List<$T>`、tuple、関数型などの内部でも禁止し、`GenericTypeInErrorDefinition` で型変数の位置を示す。`List<Int>` のように型引数が具体化済みの型は許可する。総称値の処理は呼び出し元で行い、具体型の値をコンストラクタに渡す。
+
 Payload 名は既存のフィールド名規則に従い、追加で `kind` と `message` を禁止する。重複名も拒否する。`message` は共通情報であり、保存 Payload には含めない。Facet と MatchResult を通常値として運搬する能力は追加しない。保存 Payload と入力に Facet を含む型を使う定義や、直接の MatchResult 運搬は既存の拒否規則に従う。
 
 外部 `NegativeValue(input)` とその constructor capture は入力署名を使い、生成値の型は常に共通 `Error` である。生成直後の値に局所具象型は付けない。

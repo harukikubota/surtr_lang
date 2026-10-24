@@ -82,6 +82,12 @@ enum CallableContext {
     ExtractorClosure,
 }
 
+#[derive(Clone, Copy)]
+enum ErrorDefinitionTypePosition {
+    Payload,
+    MessageConstructorInput,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TypeSyntaxContext {
     General,

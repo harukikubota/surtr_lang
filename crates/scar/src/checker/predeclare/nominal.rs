@@ -419,7 +419,10 @@ impl Checker {
                         .map(|f| {
                             Ok((
                                 f.name.clone(),
-                                self.resolve_ast_ty_in_context(&f.ty, TypeSyntaxContext::General)?,
+                                self.resolve_error_definition_ty(
+                                    &f.ty,
+                                    ErrorDefinitionTypePosition::Payload,
+                                )?,
                             ))
                         })
                         .collect::<Result<Vec<_>, TypeError>>()?;
