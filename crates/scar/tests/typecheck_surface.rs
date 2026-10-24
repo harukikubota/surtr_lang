@@ -47,6 +47,7 @@ macro_rules! surface_case {
 }
 
 const SURFACE_CASES: &[(&str, fn())] = &[
+    surface_case!(same_stage_facet_const_dependency_contract),
     surface_case!(hash_map_pattern_type_boundaries),
     surface_case!(pattern_failure_diagnostics_show_target_origins),
     surface_case!(facet_view_capture_infers_source_from_path),
@@ -12367,4 +12368,113 @@ fn facet_pending_dispatch_collects_path_type_inputs() {
     );
     assert_eq!(&missing_bound[error.span.start..error.span.end], "value");
     assert_eq!(error.structured.unwrap().data_json()["trait_name"], "Add");
+}
+
+fn same_stage_facet_const_dependency_contract() {
+    for declarations in [
+        "const FIRST = SECOND\nconst SECOND = Item.value",
+        "const SECOND = Item.value\nconst FIRST = SECOND",
+    ] {
+        let source =
+            format!("defrecord Item(value: Int)\n{declarations}\nFacet::view(FIRST, Item(42))");
+        let typed = typecheck_with_standard_environment(&source)
+            .expect("Facet aliases must be independent of declaration order");
+        assert_eq!(typed.last().unwrap().ty, Ty::Int);
+    }
+    let declarations = [
+        "const FULL_NAME = USER_PROFILE -> PROFILE_NAME",
+        "const USER_PROFILE = User.profile",
+        "const PROFILE_NAME = Profile.name",
+    ];
+    for order in [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ] {
+        let source = format!(
+            "defrecord Profile(name: String)\ndefrecord User(profile: Profile)\n{}\n{}\n{}\nFacet::view(FULL_NAME, User(Profile(\"alice\")))",
+            declarations[order[0]], declarations[order[1]], declarations[order[2]],
+        );
+        let typed = typecheck_with_standard_environment(&source).unwrap_or_else(|error| {
+            panic!("Facet composition must resolve in order {order:?}: {error:?}")
+        });
+        assert_eq!(typed.last().unwrap().ty, Ty::Str, "order {order:?}");
+    }
+    for declarations in [
+        "const FIRST = SECOND\nconst SECOND = 1",
+        "const SECOND = 1\nconst FIRST = SECOND",
+    ] {
+        let error = typecheck_with_standard_environment(declarations)
+            .expect_err("literal aliases remain forbidden");
+        assert_eq!(
+            error.reason().map(|reason| reason.as_str()),
+            Some("ConstValueForbidden")
+        );
+    }
+    for (source, expected_cycle) in [
+        ("const SELF = SELF", vec!["SELF"]),
+        (
+            "const PREFIX = FIRST\nconst FIRST = SECOND\nconst SECOND = FIRST",
+            vec!["FIRST", "SECOND"],
+        ),
+    ] {
+        let error =
+            typecheck_with_standard_environment(source).expect_err("const cycles must be rejected");
+        assert_eq!(
+            error.reason().map(|reason| reason.as_str()),
+            Some("CyclicConst")
+        );
+        let structured = error.structured.unwrap();
+        assert_eq!(
+            structured.data.to_json_value()["cycle"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|name| name.as_str().unwrap())
+                .collect::<Vec<_>>(),
+            expected_cycle
+        );
+        assert!(structured.related.iter().all(|fact| fact
+            .declaration_identity
+            .as_ref()
+            .is_some_and(|identity| identity.name != "PREFIX")));
+        let start = if expected_cycle.len() == 1 {
+            source.rfind("SELF")
+        } else {
+            source.rfind("FIRST")
+        }
+        .unwrap();
+        assert_eq!(
+            structured.primary.span,
+            Span {
+                start,
+                end: start + expected_cycle[0].len()
+            }
+        );
+    }
+    let error = typecheck_with_standard_environment(
+        "def identity(value: Int) -> Int { value }\nconst VALUE = identity(VALUE)",
+    )
+    .expect_err("calls must be rejected before dependency traversal");
+    assert_eq!(
+        error.reason().map(|reason| reason.as_str()),
+        Some("ConstValueForbidden")
+    );
+
+    let mut source = String::from("defrecord Item(value: Int)\n");
+    for index in 0..2048 {
+        source.push_str(&format!("const PATH{index} = PATH{}\n", index + 1));
+    }
+    source.push_str("const PATH2048 = Item.value\nFacet::view(PATH0, Item(42))");
+    assert_eq!(
+        typecheck_with_standard_environment(&source)
+            .expect("const dependency traversal must use an explicit stack")
+            .last()
+            .unwrap()
+            .ty,
+        Ty::Int
+    );
 }

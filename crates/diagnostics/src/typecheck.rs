@@ -216,6 +216,27 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
         .type_reason()
         .expect("typecheck renderer requires a type diagnostic reason");
     match reason {
+        TypeDiagnosticReason::ConstValueForbidden => {
+            return "const value must be a primitive literal or a facet path".into();
+        }
+        TypeDiagnosticReason::ConstDynamicBracket => {
+            return "const Facet path bracket segments must use literal Int or String values"
+                .into();
+        }
+        TypeDiagnosticReason::CyclicConst => {
+            let DiagnosticData::ConstDeclaration(value) = &input.data else {
+                unreachable!("const cycle requires its dependency path");
+            };
+            let mut names = value.cycle.clone();
+            names.push(
+                value
+                    .cycle
+                    .first()
+                    .expect("a const cycle is nonempty")
+                    .clone(),
+            );
+            return format!("Cyclic const dependency: {}", names.join(" -> "));
+        }
         TypeDiagnosticReason::SafeBindTotalPatternNonExtractingRhs => {
             if let DiagnosticData::SafeBindRelation(value) = &input.data {
                 return format!(

@@ -18,8 +18,8 @@ mod tests;
 
 pub use data::{
     ArgumentContractData, ArgumentRelationData, BranchAssertionData, BranchForm, CallableShapeData,
-    CallableSignatureData, CandidateFailureData, CandidateSelectionData, ConstraintSubjectData,
-    DeclarationIdentity, DiagnosticData, DiagnosticOrigin, DiagnosticReason,
+    CallableSignatureData, CandidateFailureData, CandidateSelectionData, ConstDeclarationData,
+    ConstraintSubjectData, DeclarationIdentity, DiagnosticData, DiagnosticOrigin, DiagnosticReason,
     EnumConstructorConstraintStatus, EnumConstructorTypeArgumentData, ParseDiagnosticData,
     ParseDiagnosticGuidance, ParseDiagnosticReason, PatternDiagnosticData, PatternFailureContext,
     PatternFailureData, PatternKind, PolicyData, Remediation, ReplDiagnosticData,

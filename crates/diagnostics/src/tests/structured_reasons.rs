@@ -269,6 +269,13 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
             stage: None,
             entrypoint: None,
         }),
+        ConstValueForbidden | ConstDynamicBracket | CyclicConst => {
+            DiagnosticData::ConstDeclaration(ConstDeclarationData {
+                constant: "FIRST".into(),
+                referenced_constant: Some("SECOND".into()),
+                cycle: vec!["FIRST".into(), "SECOND".into()],
+            })
+        }
         FacetSafeBindForbidden => DiagnosticData::Policy(PolicyData {
             policy: TypePolicy::SafeBindFacet,
             subject: Some("facet path".into()),
@@ -469,6 +476,9 @@ fn every_common_reason_has_a_typed_template_and_schema() {
         SafeBindRequiresMonadFailTarget,
         TestScriptErrorPropagation,
         TestScriptReturnType,
+        ConstValueForbidden,
+        ConstDynamicBracket,
+        CyclicConst,
         FacetSafeBindForbidden,
         FacetPatternBindingForbidden,
         FacetOperationPolicyViolation,
@@ -497,6 +507,7 @@ fn every_common_reason_has_a_typed_template_and_schema() {
             .remove(0);
         let data = &before.data;
         let keys: &[&str] = match data["kind"].as_str().unwrap() {
+            "ConstDeclaration" => &["constant", "referenced_constant", "cycle"],
             "ArgumentRelation" => &[
                 "ordinal",
                 "expected_type",

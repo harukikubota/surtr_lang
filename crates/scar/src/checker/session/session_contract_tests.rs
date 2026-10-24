@@ -609,3 +609,95 @@ fn test_script_checks_unit_result_and_rejects_top_level_propagation() {
         assert!(error.structured.is_some());
     }
 }
+
+#[test]
+fn const_dependency_failure_preserves_saved_prefix_and_allows_retry() {
+    let prefix_source =
+        "defrecord ConstSessionItem(value: Int)\nconst STABLE = ConstSessionItem.value";
+    let mut prefix = prefix_session();
+    prefix
+        .typecheck(resolved_suffix(prefix_source, None).resolved)
+        .unwrap();
+    let checkpoint = prefix.checkpoint();
+    let saved = bincode::serialize(&checkpoint).unwrap();
+    let suffix = |source: &str| {
+        // Keep resolution identities for the retained declarations while only
+        // passing the new stage to the persistent typechecking environment.
+        resolved_suffix(&format!("{prefix_source}\n{source}"), None)
+            .resolved
+            .into_iter()
+            .skip(2)
+            .collect::<Vec<_>>()
+    };
+    let bad = suffix("const VALID = STABLE\nconst FIRST = SECOND\nconst SECOND = FIRST");
+    let good = suffix("const VALID = STABLE\nconst FIRST = SECOND\nconst SECOND = STABLE\nFacet::view(FIRST, ConstSessionItem(7))");
+    let stable_uid = prefix
+        .state
+        .consts
+        .iter()
+        .find_map(|(uid, value)| (value.name == "STABLE").then_some(*uid))
+        .unwrap();
+    let expected_path = prefix.state.consts[&stable_uid].value.clone();
+    for api in [SessionApi::Transactional, SessionApi::InPlace] {
+        let mut rejected = prefix.clone();
+        let error = api.check(&mut rejected, bad.clone()).unwrap_err();
+        assert_eq!(
+            error.reason(),
+            Some(Reason::CyclicConst),
+            "{api:?}: {error:?}"
+        );
+        assert_eq!(
+            bincode::serialize(&checkpoint).unwrap(),
+            saved,
+            "a failed suffix must not change its saved prefix"
+        );
+        assert_eq!(
+            bincode::serialize(&prefix.checkpoint()).unwrap(),
+            saved,
+            "a failed sibling must not change the retained session"
+        );
+        if matches!(api, SessionApi::Transactional) {
+            assert_eq!(bincode::serialize(&rejected.checkpoint()).unwrap(), saved);
+            assert!(!rejected
+                .state
+                .consts
+                .values()
+                .any(|value| value.name == "VALID"));
+            // The same IDs can be used immediately after a failed transaction.
+            let immediate = api.check(&mut rejected, good.clone()).unwrap();
+            assert_eq!(immediate.last().unwrap().ty, Ty::Int);
+        } else {
+            assert!(
+                rejected
+                    .state
+                    .consts
+                    .values()
+                    .any(|value| value.name == "VALID"),
+                "the one-shot failure occurred after completing its independent const"
+            );
+            assert!(
+                !rejected
+                    .state
+                    .consts
+                    .values()
+                    .any(|value| matches!(value.name.as_str(), "FIRST" | "SECOND")),
+                "pending const declarations must stay out of persistent state"
+            );
+        }
+        rejected.rollback(checkpoint.clone());
+        let retry = api.check(&mut rejected, good.clone()).unwrap();
+        let mut sibling = prefix.clone();
+        let expected = api.check(&mut sibling, good.clone()).unwrap();
+        assert_eq!(retry, expected, "{api:?}: retry must match a fresh sibling");
+        assert_eq!(rejected.state.consts[&stable_uid].value, expected_path);
+        assert_eq!(bincode::serialize(&checkpoint).unwrap(), saved);
+        // A serialized checkpoint must contain only completed const values.
+        let restored: ScarCheckpoint = bincode::deserialize(&saved).unwrap();
+        let mut restored_session = prefix_session();
+        restored_session.rollback(restored);
+        assert_eq!(
+            api.check(&mut restored_session, good.clone()).unwrap(),
+            expected
+        );
+    }
+}

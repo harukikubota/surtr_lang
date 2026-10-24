@@ -78,11 +78,17 @@ pub enum TypeDiagnosticReason {
     TypecheckInvariantViolation,
     TraitImplementationForbidden,
     CyclicTraitObligation,
+    ConstValueForbidden,
+    ConstDynamicBracket,
+    CyclicConst,
 }
 
 impl TypeDiagnosticReason {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::ConstValueForbidden => "ConstValueForbidden",
+            Self::ConstDynamicBracket => "ConstDynamicBracket",
+            Self::CyclicConst => "CyclicConst",
             Self::ArityMismatch => "ArityMismatch",
             Self::ArgumentModeMismatch => "ArgumentModeMismatch",
             Self::UnknownNamedArgument => "UnknownNamedArgument",
@@ -917,8 +923,16 @@ pub struct PatternFailureData {
     pub carrier_type: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConstDeclarationData {
+    pub constant: String,
+    pub referenced_constant: Option<String>,
+    pub cycle: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiagnosticData {
+    ConstDeclaration(ConstDeclarationData),
     CallableShape(CallableShapeData),
     ArgumentContract(ArgumentContractData),
     ArgumentRelation(ArgumentRelationData),
@@ -954,6 +968,7 @@ impl DiagnosticData {
 
     pub(crate) fn raw_json_value(&self) -> Value {
         let (kind, payload) = match self {
+            Self::ConstDeclaration(value) => ("ConstDeclaration", serde_json::to_value(value)),
             Self::CallableShape(value) => ("CallableShape", serde_json::to_value(value)),
             Self::ArgumentContract(value) => ("ArgumentContract", serde_json::to_value(value)),
             Self::ArgumentRelation(value) => ("ArgumentRelation", serde_json::to_value(value)),

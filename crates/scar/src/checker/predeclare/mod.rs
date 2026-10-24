@@ -1,5 +1,6 @@
 use super::*;
 
+mod consts;
 mod functions;
 mod nominal;
 mod traits;
