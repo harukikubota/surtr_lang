@@ -116,3 +116,11 @@ test('matching brackets exclude literal and commented brackets, including escape
   assert.equal((captures.match(/ - open,/g) || []).length, 5, captures);
   assert.equal((captures.match(/ - close,/g) || []).length, 5, captures);
 });
+
+test('autoclose scopes isolate text and escapes from interpolation code', () => {
+  const { captures } = inspect('"text #{f(1)} \\#{literal}" # note', 'overrides.scm');
+  assert.ok(captures.includes(' - string.inclusive,'), captures);
+  assert.ok(captures.includes(' - escape.inclusive,'), captures);
+  assert.ok(captures.includes(' - comment.inclusive,'), captures);
+  assert.ok(!captures.includes('text: `f`') && !captures.includes('text: `1`'), captures);
+});

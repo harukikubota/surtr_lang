@@ -4,3 +4,13 @@ path_suffixes = ["srt"]
 line_comments = ["# "]
 tab_size = 2
 hard_tabs = false
+brackets = [
+  { start = "(", end = ")", close = true, newline = true, not_in = ["string", "comment", "escape"] },
+  { start = "[", end = "]", close = true, newline = true, not_in = ["string", "comment", "escape"] },
+  { start = "{", end = "}", close = true, newline = true, not_in = ["string", "comment", "escape"] },
+  { start = "#{", end = "}", close = true, newline = false, not_in = ["comment", "escape"] },
+  { start = '"""', end = '"""', close = true, newline = true, not_in = ["string", "comment", "escape"] },
+  { start = '"', end = '"', close = true, newline = false, not_in = ["string", "comment", "escape"] },
+  { start = "'", end = "'", close = true, newline = false, not_in = ["string", "comment", "escape"] },
+  { start = "`", end = "`", close = true, newline = false, not_in = ["string", "comment", "escape"] },
+]
