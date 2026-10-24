@@ -1,0 +1,6 @@
+/node_modules/
+/dist/
+/tree-sitter-surtr/src/parser.c
+/tree-sitter-surtr/src/grammar.json
+/tree-sitter-surtr/src/node-types.json
+/tree-sitter-surtr/src/tree_sitter/
