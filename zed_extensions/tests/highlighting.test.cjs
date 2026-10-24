@@ -158,3 +158,18 @@ test('text objects distinguish named functions, expression bodies, containers an
   assert.ok(captures.includes(' - function.inside,') && captures.includes('text: `value`'), captures);
   assert.ok(captures.includes('text: `1`') && captures.includes(' - comment.around,'), captures);
 });
+
+test('constant and type declarations and regex text receive their specific highlights', () => {
+  has('const LIMIT = 3', 'constant', 'LIMIT');
+  has('type Count = Int', 'type', 'Count');
+  for (const q of ['"', "'"]) {
+    has(`re${q}${q}`, 'string.regex', q);
+    has(`re${q}^a+#{f(1)}b$${q}`, 'string.regex', '^a+');
+    has(`re${q}^a+#{f(1)}b$${q}`, 'string.regex', 'b$');
+    has(`re${q}^a+#{f(1)}b$${q}`, 'function', 'f');
+    has(`re${q}^a+#{f(1)}b$${q}`, 'number', '1');
+  }
+  for (const source of ['re', 'other"text"', 're_more"text"', 're\n"text"']) {
+    assert.ok(!inspect(source).captures.includes(' - string.regex,'), source);
+  }
+});

@@ -22,19 +22,32 @@
 ["(" ")" "[" "]" "{" "}"] @punctuation.bracket
 "#{" @punctuation.special
 
-; The highlighting tree keeps sibling tokens and groups. Only immediate
-; siblings match, so declarations and calls cannot cross a newline.
+; Declarations expose their names directly. Expression queries use immediate
+; siblings, so calls cannot cross a newline.
 (function_declaration name: (_) @function)
 (function_declaration suffix: (operator) @function)
-(_ (keyword) @_def . (identifier) @function
-  (#match? @_def "^(def|defp|defextractor)$"))
 (_ (identifier) @function . (parenthesized) (#match? @function "^[a-z_]"))
 (_ (identifier) @function . (operator) @_question . (parenthesized)
   (#eq? @_question "?"))
-(_ (keyword) @_def . (identifier) @function . (operator) @_question @function
-  (#match? @_def "^(def|defp)$") (#eq? @_question "?"))
 (_ (identifier) @function . (punctuation) @_sep . (operator) @_angle
   (#eq? @_sep "::") (#eq? @_angle "<"))
 (_ (operator) @_capture . (identifier) @function (#eq? @_capture "&"))
 (_ (punctuation) @_sep . (identifier) @function (#eq? @_sep "::"))
 (_ (punctuation) @_dot . (identifier) @property (#eq? @_dot "."))
+
+(_ (keyword) @_kind . (identifier) @constant (#eq? @_kind "const"))
+(_ (keyword) @_kind . (identifier) @type (#match? @_kind "^(type|Type)$"))
+
+; Capture only regex text, keeping embedded code and escapes independently styled.
+(_ (identifier) @_generator .
+  (double_string open: "\"" @string.regex close: "\"" @string.regex)
+  (#eq? @_generator "re"))
+(_ (identifier) @_generator .
+  (double_string (double_content) @string.regex)
+  (#eq? @_generator "re"))
+(_ (identifier) @_generator .
+  (single_string open: "'" @string.regex close: "'" @string.regex)
+  (#eq? @_generator "re"))
+(_ (identifier) @_generator .
+  (single_string (single_content) @string.regex)
+  (#eq? @_generator "re"))
