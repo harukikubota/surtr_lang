@@ -6965,11 +6965,6 @@ fn compile_preloaded_repl_chunk_with_runtime(
             module_path: crate::module_path_from_source_or_file_name(file_name, source),
         }]);
     }
-    if let Some(script) = prepared_script.as_ref() {
-        for module in &script.include_modules {
-            module_input_stages.push(vec![module.clone()]);
-        }
-    }
     compile_repl_preload_from_module_stages(
         module_input_stages,
         prepared_script,
@@ -7006,15 +7001,8 @@ fn compile_repl_preload_from_module_stages(
         runtime_execution,
     )
     .map_err(|mut error| {
-        if let (
-            Some(script),
-            ReplLoadError::Diagnostic {
-                sources,
-                source_id,
-                spec,
-                ..
-            },
-        ) = (prepared_script.as_ref(), &mut error)
+        if let (Some(script), ReplLoadError::Diagnostic { sources, .. }) =
+            (prepared_script.as_ref(), &mut error)
         {
             let script_source_id = sources
                 .entries()
@@ -7023,16 +7011,6 @@ fn compile_repl_preload_from_module_stages(
                 .expect("preload script source registered")
                 .id;
             sources.update_source(script_source_id, script.original_source.clone());
-            let (primary, updated) = crate::attach_include_diagnostic(
-                sources,
-                script_source_id,
-                *source_id,
-                spec.clone(),
-                &script.include_directives,
-                &script.include_modules,
-            );
-            *source_id = primary;
-            *spec = updated;
         }
         error
     })
@@ -7044,8 +7022,18 @@ fn compile_repl_preload_from_module_stages_inner(
     mode: PreloadCompileMode,
     runtime_execution: PreloadRuntimeExecution,
 ) -> Result<PreloadedChunkState, ReplLoadError> {
-    let mut repl_sources = loader::collect_repl_sources_with_module_stages(&module_input_stages)
+    let mut module_sources =
+        loader::collect_module_sources_with_module_stages(&module_input_stages)
+            .map_err(ReplLoadError::Load)?;
+    if let Some(script) = prepared_script {
+        module_sources = loader::extend_module_sources_with_script_includes(
+            module_sources,
+            &script.include_modules,
+            &script.include_directives,
+        )
         .map_err(ReplLoadError::Load)?;
+    }
+    let mut repl_sources = loader::collect_repl_sources_from_module_sources(module_sources);
 
     let user_file_name = prepared_script
         .as_ref()
@@ -7068,6 +7056,7 @@ fn compile_repl_preload_from_module_stages_inner(
         builtin_source_id: repl_sources.builtin_source_id,
         builtin_module_path: Some("Bootstrap".to_string()),
         module_stages: repl_sources.module_stages.clone(),
+        include_origins: repl_sources.include_origins.clone(),
         stdlib_variant: crate::StdlibVariant::Default,
     };
     let snapshot = crate::default_stdlib_semantic_snapshot().map_err(ReplLoadError::Load)?;
@@ -7197,7 +7186,11 @@ fn compile_repl_preload_from_module_stages_inner(
             &user_ast,
             &compile_sources.user_module_path,
         );
-        staged_program.resolved.extend(user_resolved);
+        staged_program.stages.push(sigil::ResolvedStage {
+            stage_index: module_stage_asts.len(),
+            resolved: user_resolved,
+            process_specs: Vec::new(),
+        });
     }
 
     let mut scar_session = snapshot.compile_prefix().restored_scar_session();
@@ -7391,11 +7384,18 @@ fn parse_preload_sources(
 > {
     let expanded =
         crate::expand_snapshot_module_stages(compile_sources, snapshot, compile_unit_kind)
-            .map_err(|e| ReplLoadError::Diagnostic {
-                phase: "parse".to_string(),
-                sources: compile_sources.sources.clone(),
-                source_id: e.source_id,
-                spec: e.diagnostic_spec(&compile_sources.sources),
+            .map_err(|e| {
+                let (source_id, spec) = crate::attach_include_diagnostic(
+                    compile_sources,
+                    &e,
+                    e.diagnostic_spec(&compile_sources.sources),
+                );
+                ReplLoadError::Diagnostic {
+                    phase: "parse".to_string(),
+                    sources: compile_sources.sources.clone(),
+                    source_id,
+                    spec,
+                }
             })?;
     let mut module_stage_asts = expanded.module_stages.into_owned();
     let raw_module_stages = compile_sources.module_stages.clone();
@@ -7764,13 +7764,9 @@ fn preload_resolve_error(
         &labels,
     );
     let (source_id, spec) = match prepared_script {
-        Some(script) => crate::attach_resolve_include_diagnostic(
-            compile_sources,
-            error,
-            source_id,
-            spec,
-            &script.include_directives,
-        ),
+        Some(_) => {
+            crate::attach_resolve_include_diagnostic(compile_sources, error, source_id, spec)
+        }
         None => (source_id, spec),
     };
     ReplLoadError::Diagnostic {
@@ -8101,9 +8097,10 @@ pub(crate) fn parse_module_stages_from_sources(
     let mut staged_module_asts = Vec::with_capacity(module_stages.len());
     let mut seen_module_paths: HashMap<String, SeenModulePath> = HashMap::new();
 
-    for stage in module_stages {
+    for (stage_index, stage) in module_stages.iter().enumerate() {
         let mut stage_ast = Vec::new();
-        let parsed_stage = parse_stage_modules_parallel(sources, stage, compile_unit_kind);
+        let parsed_stage =
+            parse_stage_modules_parallel(sources, stage, stage_index, compile_unit_kind);
         for (source_index, (module, lowered_modules)) in stage.iter().zip(parsed_stage).enumerate()
         {
             for lowered in lowered_modules? {
@@ -8117,6 +8114,8 @@ pub(crate) fn parse_module_stages_from_sources(
                         if !is_impl_owner && seen.has_normal_module() {
                             return Err(ModuleStageParseError {
                                 source_id: module.source_id,
+                                stage_index,
+                                source_index,
                                 kind: ModuleStageParseErrorKind::DuplicateModulePath {
                                     module_path: lowered.module_path.clone(),
                                     first_file_name: seen
@@ -8199,13 +8198,15 @@ type StageParseResult = Result<Vec<crate::LoweredModuleAst>, ModuleStageParseErr
 fn parse_stage_modules_parallel(
     sources: &SourceRegistry,
     stage: &[StagedModule],
+    stage_index: usize,
     compile_unit_kind: CompileUnitKind,
 ) -> Vec<StageParseResult> {
     std::thread::scope(|scope| {
         let mut handles = Vec::with_capacity(stage.len());
-        for module in stage {
+        for (source_index, module) in stage.iter().enumerate() {
             handles.push((
                 module,
+                source_index,
                 std::thread::Builder::new()
                     .stack_size(STAGE_PARSE_WORKER_STACK_SIZE)
                     .spawn_scoped(scope, move || {
@@ -8228,6 +8229,8 @@ fn parse_stage_modules_parallel(
                         )
                         .map_err(|error| ModuleStageParseError {
                             source_id: module.source_id,
+                            stage_index,
+                            source_index,
                             kind: ModuleStageParseErrorKind::Parse { error },
                         })?;
                         let fallback_module_path = sigil::const_only_fallback_module_path(
@@ -8241,17 +8244,23 @@ fn parse_stage_modules_parallel(
 
         handles
             .into_iter()
-            .map(|(module, worker)| finish_stage_parse_worker(module, worker))
+            .map(|(module, source_index, worker)| {
+                finish_stage_parse_worker(module, stage_index, source_index, worker)
+            })
             .collect()
     })
 }
 
 fn finish_stage_parse_worker(
     module: &StagedModule,
+    stage_index: usize,
+    source_index: usize,
     worker: std::io::Result<std::thread::ScopedJoinHandle<'_, StageParseResult>>,
 ) -> StageParseResult {
     let worker = worker.map_err(|error| ModuleStageParseError {
         source_id: module.source_id,
+        stage_index,
+        source_index,
         kind: ModuleStageParseErrorKind::WorkerSpawnFailure {
             module_path: module.module_path.clone(),
             message: error.to_string(),
@@ -8384,6 +8393,8 @@ mod tests {
         };
         let error = finish_stage_parse_worker(
             &module,
+            0,
+            0,
             Err(std::io::Error::new(
                 std::io::ErrorKind::WouldBlock,
                 "injected worker shortage",
@@ -8422,6 +8433,8 @@ mod tests {
             std::thread::scope(|scope| {
                 finish_stage_parse_worker(
                     &module,
+                    0,
+                    0,
                     std::thread::Builder::new()
                         .spawn_scoped(scope, || std::panic::panic_any(73_u32)),
                 )

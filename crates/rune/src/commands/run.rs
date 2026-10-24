@@ -372,6 +372,7 @@ fn run_source_file(
         file_path,
         &compile_plan.source_for_parse,
         &compile_plan.include_modules,
+        &compile_plan.include_directives,
         xldr::StdlibVariant::Default,
     )?;
     let (cached_bytecode, cache_state) =

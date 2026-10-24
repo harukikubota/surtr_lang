@@ -129,8 +129,7 @@ impl Checker {
                 )
             })
             .collect();
-        let result_fields = self.instantiate_type_def_fields(&def, &arguments);
-        let result_ty = Ty::Struct(id.name.clone(), NominalType::new(arguments, result_fields));
+        let result_ty = Ty::Struct(id.name.clone(), NominalType::new(arguments));
         Ok(TypedNode {
             ty: result_ty,
             span: span.clone(),
@@ -567,10 +566,7 @@ impl Checker {
             let ret_ty = typed_call.ty.clone();
             let expected_self_ty = Ty::Struct(
                 id.name.clone(),
-                NominalType::new(
-                    def.type_param_vars.iter().copied().map(Ty::Var).collect(),
-                    def.fields.clone(),
-                ),
+                NominalType::new(def.type_param_vars.iter().copied().map(Ty::Var).collect()),
             );
             let returns_self = self.types_compatible(&expected_self_ty, &ret_ty)?;
             let returns_result_self = match self.resolve_ty(&ret_ty) {
@@ -744,10 +740,7 @@ impl Checker {
             .collect::<Result<Vec<_>, _>>()?;
 
         let result_ty = match def.kind {
-            crate::env::TypeKind::Record => Ty::Record(
-                id.name.clone(),
-                NominalType::monomorphic(def.fields.clone()),
-            ),
+            crate::env::TypeKind::Record => Ty::Record(id.name.clone(), NominalType::monomorphic()),
             crate::env::TypeKind::Struct
             | crate::env::TypeKind::Enum
             | crate::env::TypeKind::ConcreteError => {

@@ -1402,17 +1402,12 @@ impl Checker {
                 Span { start: 0, end: 0 },
             )
         };
-        let nominal = |def: &crate::env::TypeDefInfo| {
-            let fields = self.instantiate_type_def_fields(def, &args);
-            match def.kind {
-                TypeKind::Struct => {
-                    Ty::Struct(def.name.clone(), NominalType::new(args.clone(), fields))
-                }
-                TypeKind::Record | TypeKind::ConcreteError => {
-                    Ty::Record(def.name.clone(), NominalType::new(args.clone(), fields))
-                }
-                TypeKind::Enum => Ty::Enum(def.name.clone(), args.clone()),
+        let nominal = |def: &crate::env::TypeDefInfo| match def.kind {
+            TypeKind::Struct => Ty::Struct(def.name.clone(), NominalType::new(args.clone())),
+            TypeKind::Record | TypeKind::ConcreteError => {
+                Ty::Record(def.name.clone(), NominalType::new(args.clone()))
             }
+            TypeKind::Enum => Ty::Enum(def.name.clone(), args.clone()),
         };
         Ok(match &ty.head {
             CanonicalTypeHead::Variable(var) => Ty::Var(*var),

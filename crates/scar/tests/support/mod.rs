@@ -2,7 +2,7 @@ mod core;
 pub(crate) use core::*;
 
 use scar::typed::TypedNode;
-use scar::{typecheck_with_context as scar_typecheck_with_context, TypecheckContext};
+use scar::TypecheckContext;
 use sindr::policy::RuntimeSourcePolicy;
 use spire::ast::Ast;
 
@@ -63,7 +63,7 @@ pub(crate) fn resolve_with_builtin_prelude_in_module(
         prelude.module_stages.len(),
         prelude.semantics.resolve_resume_state.clone(),
     )
-    .map(|resolved| resolved.resolved)
+    .map(sigil::ResolvedStagedProgram::into_resolved)
 }
 
 pub(crate) fn typecheck_with_builtin_prelude(source: &str) -> Vec<TypedNode> {
@@ -142,10 +142,6 @@ pub(crate) fn resolve_staged_program_suffix_with_builtin_prelude(
         prelude.semantics.resolve_resume_state,
     )?;
 
-    let mut process_specs = prelude.semantics.process_specs.clone();
-    process_specs.append(&mut suffix.process_specs);
-    suffix.process_specs = process_specs;
-
     let mut boot_plan = prelude.semantics.boot_plan.clone();
     boot_plan.entries.append(&mut suffix.boot_plan.entries);
     boot_plan
@@ -165,10 +161,14 @@ pub(crate) fn typecheck_std_modules_with_overrides(
     let module_stages = std_module_stages_with_overrides(overrides);
     let declaration_index =
         sigil::precollect_declaration_index(&module_stages).expect("std modules should precollect");
-    let resolved =
-        sigil::resolve_staged_program(&module_stages, Vec::new(), &declaration_index, None)
-            .expect("std modules should resolve");
-    scar_typecheck_with_context(
+    let resolved = sigil::resolve_staged_program_with_state(
+        &module_stages,
+        Vec::new(),
+        &declaration_index,
+        None,
+    )
+    .expect("std modules should resolve");
+    scar::typecheck_staged_program_with_context(
         resolved,
         TypecheckContext {
             runtime_policy: RuntimeSourcePolicy::std_module(),
@@ -177,4 +177,5 @@ pub(crate) fn typecheck_std_modules_with_overrides(
             test_script: false,
         },
     )
+    .map(|program| program.nodes)
 }

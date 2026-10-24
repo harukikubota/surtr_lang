@@ -37,6 +37,8 @@ pub(super) struct Checker {
     pub(super) specialization_fun_idxs: HashMap<CallableInstantiationKey, u32>,
     pub(super) substitutions: HashMap<u32, Ty>,
     pub(super) tyvar_bounds: HashMap<u32, Vec<String>>,
+    /// Deferred schema validation is completed after every impl head is registered.
+    pub(super) pending_nominal_arguments: Option<Vec<(String, Vec<Ty>, Span, bool)>>,
     /// Obligations discovered while an inference variable is still unbound.
     /// These are deliberately separate from signature bounds: solving an
     /// expression must never strengthen a declaration-owned generic.
@@ -121,6 +123,7 @@ impl Checker {
             direct_pattern_requirement_tyvars: HashMap::new(),
             substitutions: HashMap::new(),
             tyvar_bounds: state.tyvar_bounds,
+            pending_nominal_arguments: None,
             pending_trait_obligations: HashMap::new(),
             active_capabilities: Vec::new(),
             constructor_capabilities: state.constructor_capabilities,

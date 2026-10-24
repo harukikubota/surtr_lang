@@ -19,9 +19,14 @@ impl Checker {
                 .field_type_spans
                 .iter()
                 .position(|span| span == subject_span)
-                .and_then(|index| nominal.fields.get(index))
+                .and_then(|index| {
+                    self.nominal_fields(name, nominal, subject_span)
+                        .ok()?
+                        .get(index)
+                        .cloned()
+                })
                 .map(|(name, ty)| {
-                    let leaf = self.resolve_ty(ty);
+                    let leaf = self.resolve_ty(&ty);
                     (
                         TraitDependencyStep {
                             kind: TraitDependencyStepKind::Field,

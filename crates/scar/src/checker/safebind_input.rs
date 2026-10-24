@@ -127,7 +127,7 @@ impl Checker {
             ResolvedPattern::BoolLit(..) => SafeBindInputRequirement::Exact(Ty::Bool),
             ResolvedPattern::DurationLit(..) => SafeBindInputRequirement::Exact(Ty::Struct(
                 "Duration".into(),
-                NominalType::monomorphic(Vec::new()),
+                NominalType::monomorphic(),
             )),
             ResolvedPattern::ListNil(_) | ResolvedPattern::ListCons(..) => {
                 SafeBindInputRequirement::Sequence
@@ -231,10 +231,7 @@ mod tests {
     }
 
     fn wrapped(payload: Ty) -> Ty {
-        Ty::Struct(
-            "Identity".into(),
-            NominalType::new(vec![payload], Vec::new()),
-        )
+        Ty::Struct("Identity".into(), NominalType::new(vec![payload]))
     }
 
     fn annotated(name: &str) -> ResolvedPattern {

@@ -5,70 +5,19 @@ impl Checker {
         &mut self,
         span: &Span,
         id: &ResolvedId,
-        type_params: &[ResolvedTypeParam],
+        _type_params: &[ResolvedTypeParam],
         fields: &[ResolvedField],
     ) -> Result<TypedNode, TypeError> {
-        let mut tyvars = HashMap::new();
-        self.seed_signature_type_params(type_params, &mut tyvars);
-        let ty_fields: Vec<(String, Ty)> = fields
-            .iter()
-            .map(|f| {
-                Ok((
-                    f.name.clone(),
-                    self.resolve_signature_ast_ty_in_context(
-                        &f.ty,
-                        TypeSyntaxContext::General,
-                        &mut tyvars,
-                    )?,
-                ))
-            })
-            .collect::<Result<Vec<_>, TypeError>>()?;
-        let private_fields = fields
-            .iter()
-            .filter(|field| field.visibility == spire::ast::Visibility::Private)
-            .map(|field| field.name.clone())
-            .collect::<HashSet<_>>();
-
-        let readonly_fields = fields
-            .iter()
-            .filter(|field| field.readonly)
-            .map(|field| field.name.clone())
-            .collect::<HashSet<_>>();
-        let type_param_vars = type_params
-            .iter()
-            .filter_map(|param| match tyvars.get(&param.name) {
-                Some(Ty::Var(var)) => Some(*var),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-
-        let tag = self
-            .env
-            .resolve_type_def_signature(
-                &id.name,
-                ty_fields.clone(),
-                type_param_vars.clone(),
-                private_fields,
-                readonly_fields,
-            )
-            .ok_or_else(|| TypeError {
-                structured: None,
-                message: format!("Unknown struct type declaration: {}", id.name),
-                span: span.clone(),
-                hint: None,
-            })?;
-
-        self.env.bind_var(
-            id.unique_id,
-            Ty::Struct(
-                id.name.clone(),
-                NominalType::new(
-                    type_param_vars.iter().copied().map(Ty::Var).collect(),
-                    ty_fields.clone(),
-                ),
-            ),
-        );
-
+        let definition = self.env.lookup_type_def(&id.name).ok_or_else(|| {
+            self.typecheck_invariant_error("struct declaration has no predeclared schema", span)
+        })?;
+        if definition.state != crate::env::TypeDefState::SignatureResolved {
+            return Err(
+                self.typecheck_invariant_error("struct declaration schema is unresolved", span)
+            );
+        }
+        let tag = definition.tag;
+        let ty_fields = definition.fields.clone();
         let field_names: Vec<String> = ty_fields.iter().map(|(n, _)| n.clone()).collect();
         let field_policies = fields
             .iter()
@@ -139,37 +88,16 @@ impl Checker {
                 hint: None,
             });
         }
-        let ty_fields: Vec<(String, Ty)> = fields
-            .iter()
-            .map(|f| {
-                Ok((
-                    f.name.clone(),
-                    self.resolve_ast_ty_in_context(&f.ty, TypeSyntaxContext::General)?,
-                ))
-            })
-            .collect::<Result<Vec<_>, TypeError>>()?;
-
-        let tag = self
-            .env
-            .resolve_type_def_signature(
-                &id.name,
-                ty_fields.clone(),
-                Vec::new(),
-                HashSet::new(),
-                HashSet::new(),
-            )
-            .ok_or_else(|| TypeError {
-                structured: None,
-                message: format!("Unknown record type declaration: {}", id.name),
-                span: span.clone(),
-                hint: None,
-            })?;
-
-        self.env.bind_var(
-            id.unique_id,
-            Ty::Record(id.name.clone(), NominalType::monomorphic(ty_fields.clone())),
-        );
-
+        let definition = self.env.lookup_type_def(&id.name).ok_or_else(|| {
+            self.typecheck_invariant_error("record declaration has no predeclared schema", span)
+        })?;
+        if definition.state != crate::env::TypeDefState::SignatureResolved {
+            return Err(
+                self.typecheck_invariant_error("record declaration schema is unresolved", span)
+            );
+        }
+        let tag = definition.tag;
+        let ty_fields = definition.fields.clone();
         let field_names: Vec<String> = ty_fields.iter().map(|(n, _)| n.clone()).collect();
         let field_policies = fields
             .iter()

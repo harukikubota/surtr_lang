@@ -226,7 +226,9 @@ pub(super) fn build_module_scope_with_imports(
 
     if let Some(module_path) = current_module_path {
         for entry in declaration_index.values() {
-            if surface_path_name(&entry.module_path) == surface_path_name(module_path) {
+            if entry.stage_index <= current_stage_index
+                && surface_path_name(&entry.module_path) == surface_path_name(module_path)
+            {
                 if !is_module_visible_declaration(&entry.kind) {
                     continue;
                 }

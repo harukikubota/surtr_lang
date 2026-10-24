@@ -43,7 +43,8 @@ impl Checker {
             }
             (Ty::Struct(name, mut fields), TypedFacetSegment::Field { field_index, .. }) => {
                 let index = *field_index as usize;
-                let Some((_, field_ty)) = fields.get(index).cloned() else {
+                let resolved_fields = self.nominal_fields(&name, &fields, span)?;
+                let Some((_, field_ty)) = resolved_fields.get(index).cloned() else {
                     return Err(TypeError {
                         structured: None,
                         message: "Facet field path is inconsistent with its source type".into(),
@@ -68,12 +69,12 @@ impl Checker {
                     &rebuilt_field,
                     span,
                 )?;
-                fields[index].1 = rebuilt_field;
                 Ok(Ty::Struct(name, fields))
             }
             (Ty::Record(name, mut fields), TypedFacetSegment::Field { field_index, .. }) => {
                 let index = *field_index as usize;
-                let Some((_, field_ty)) = fields.get(index).cloned() else {
+                let resolved_fields = self.nominal_fields(&name, &fields, span)?;
+                let Some((_, field_ty)) = resolved_fields.get(index).cloned() else {
                     return Err(TypeError {
                         structured: None,
                         message: "Facet field path is inconsistent with its source type".into(),
@@ -98,7 +99,6 @@ impl Checker {
                     &rebuilt_field,
                     span,
                 )?;
-                fields[index].1 = rebuilt_field;
                 Ok(Ty::Record(name, fields))
             }
             (Ty::List(inner), TypedFacetSegment::ListIndex { .. }) => {
@@ -476,7 +476,11 @@ impl Checker {
                     .unwrap_or_else(|| argument.clone())
             })
             .collect::<Vec<_>>();
-        let rebuilt_fields = self.instantiate_type_def_fields(&def, &rebuilt_arguments);
+        let rebuilt_fields = self.nominal_fields(
+            type_name,
+            &NominalType::new(rebuilt_arguments.clone()),
+            span,
+        )?;
         let Some((_, expected_field)) = rebuilt_fields.get(field_index) else {
             return Err(TypeError {
                 structured: None,

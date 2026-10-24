@@ -25,6 +25,7 @@ pub struct TypedProgram {
     pub enum_definitions: std::collections::HashMap<String, Vec<TypedEnumVariantDef>>,
     /// Checked struct and record templates, preserving formal and phantom type parameters.
     pub nominal_definitions: std::collections::HashMap<String, TypedNominalDefinition>,
+    /// Process declarations checked with `nodes`; excludes an incremental prefix.
     pub process_specs: Vec<TypedProcessSpec>,
     pub boot_plan: SupervisorInitSpec,
 }
@@ -324,6 +325,9 @@ pub struct TypedFacetPath {
     pub path_kind: TypedFacetPathKind,
     pub may_fail: bool,
     pub segments: Vec<TypedFacetSegment>,
+    /// The checked focus after each finite path segment, aligned with `segments`.
+    /// Consumers do not resolve constructor projections or trait mappings again.
+    pub segment_focus_tys: Vec<Ty>,
 }
 
 impl TypedFacetPath {

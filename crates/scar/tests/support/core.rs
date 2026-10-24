@@ -76,8 +76,8 @@ pub(crate) fn cached_std_prelude() -> &'static CachedStdPrelude {
             .expect("std modules should resolve");
             let mut session = ScarSession::new();
             session
-                .typecheck_with_context(
-                    std_resolved.resolved,
+                .typecheck_staged_program_with_context(
+                    std_resolved.clone(),
                     TypecheckContext {
                         runtime_policy: RuntimeSourcePolicy::std_module(),
                         enforce_builtin_type_contracts: true,
@@ -87,7 +87,7 @@ pub(crate) fn cached_std_prelude() -> &'static CachedStdPrelude {
                 )
                 .expect("std modules should typecheck");
             CachedStdSemantics {
-                process_specs: std_resolved.process_specs,
+                process_specs: std_resolved.process_specs().cloned().collect(),
                 boot_plan: std_resolved.boot_plan,
                 resolve_resume_state: std_resolved.resume_state,
                 checkpoint: session.checkpoint(),
@@ -159,7 +159,7 @@ pub(crate) fn resolve_ast_with_builtin_prelude(
         prelude.module_stages.len(),
         prelude.semantics.resolve_resume_state.clone(),
     )
-    .map(|resolved| resolved.resolved)
+    .map(sigil::ResolvedStagedProgram::into_resolved)
 }
 
 pub(crate) fn resolve_with_builtin_prelude(source: &str) -> Vec<sigil::resolved::Resolved> {

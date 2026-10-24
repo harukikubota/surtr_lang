@@ -561,7 +561,6 @@ impl Checker {
                     .iter()
                     .map(|argument| self.canonical_ty_key(argument))
                     .collect(),
-                fields: self.canonical_field_keys(&fields),
             },
             Ty::Record(name, fields) => CanonicalTyKey::Record {
                 name: Self::canonical_specialization_name(&name),
@@ -570,7 +569,6 @@ impl Checker {
                     .iter()
                     .map(|argument| self.canonical_ty_key(argument))
                     .collect(),
-                fields: self.canonical_field_keys(&fields),
             },
             Ty::Enum(name, args) => CanonicalTyKey::Enum {
                 name: Self::canonical_specialization_name(&name),
@@ -581,15 +579,6 @@ impl Checker {
                 err: Box::new(self.canonical_ty_key(&err)),
             },
         }
-    }
-
-    fn canonical_field_keys(&self, fields: &[(String, Ty)]) -> Vec<(String, CanonicalTyKey)> {
-        let mut fields = fields
-            .iter()
-            .map(|(name, ty)| (name.clone(), self.canonical_ty_key(ty)))
-            .collect::<Vec<_>>();
-        fields.sort_by(|(left, _), (right, _)| left.cmp(right));
-        fields
     }
 
     fn canonical_specialization_name(name: &str) -> String {
@@ -989,6 +978,9 @@ impl Checker {
             TypedInner::FacetPath(path) => {
                 self.collect_bound_tyvars_in_ty(&path.source_ty, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&path.focus_ty, ordered, seen);
+                for ty in &path.segment_focus_tys {
+                    self.collect_bound_tyvars_in_ty(ty, ordered, seen);
+                }
             }
             TypedInner::PendingFacetPath(path) => {
                 if let Some(source_ty_hint) = &path.source_ty_hint {
@@ -999,6 +991,9 @@ impl Checker {
                 self.collect_bound_tyvars_in_node(source, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&path.source_ty, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&path.focus_ty, ordered, seen);
+                for ty in &path.segment_focus_tys {
+                    self.collect_bound_tyvars_in_ty(ty, ordered, seen);
+                }
             }
             TypedInner::FacetSet {
                 source,
@@ -1009,6 +1004,9 @@ impl Checker {
                 self.collect_bound_tyvars_in_node(source, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&path.source_ty, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&path.focus_ty, ordered, seen);
+                for ty in &path.segment_focus_tys {
+                    self.collect_bound_tyvars_in_ty(ty, ordered, seen);
+                }
                 self.collect_bound_tyvars_in_node(value, ordered, seen);
             }
             TypedInner::FacetOver {
@@ -1020,6 +1018,9 @@ impl Checker {
                 self.collect_bound_tyvars_in_node(source, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&path.source_ty, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&path.focus_ty, ordered, seen);
+                for ty in &path.segment_focus_tys {
+                    self.collect_bound_tyvars_in_ty(ty, ordered, seen);
+                }
                 self.collect_bound_tyvars_in_node(update_fun, ordered, seen);
             }
             TypedInner::StructLit(_, fields) | TypedInner::ConstructorCall(_, fields) => {
@@ -1111,9 +1112,6 @@ impl Checker {
             Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
                 for argument in &nominal.arguments {
                     self.collect_bound_tyvars_in_ty(argument, ordered, seen);
-                }
-                for (_, field_ty) in nominal {
-                    self.collect_bound_tyvars_in_ty(&field_ty, ordered, seen);
                 }
             }
             Ty::Enum(_, args) => {
@@ -1924,14 +1922,8 @@ mod tests {
         let original_def =
             generic_identity_def(original_fun_idx, function_id.clone(), param_id, ty_var);
 
-        let box_int = Ty::Struct(
-            "Global::Box".to_string(),
-            NominalType::new(vec![Ty::Int], vec![("value".to_string(), Ty::Int)]),
-        );
-        let box_string = Ty::Struct(
-            "Global::Box".to_string(),
-            NominalType::new(vec![Ty::Str], vec![("value".to_string(), Ty::Str)]),
-        );
+        let box_int = Ty::Struct("Global::Box".to_string(), NominalType::new(vec![Ty::Int]));
+        let box_string = Ty::Struct("Global::Box".to_string(), NominalType::new(vec![Ty::Str]));
         let typed = checker
             .specialize_program(vec![
                 original_def,

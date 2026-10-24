@@ -577,7 +577,6 @@ impl Checker {
                 Ty::Tuple(items) => items.iter().any(needs_context),
                 Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
                     nominal.arguments.iter().any(needs_context)
-                        || nominal.iter().any(|(_, field)| needs_context(field))
                 }
                 Ty::Enum(_, arguments) => arguments.iter().any(needs_context),
                 Ty::Facet(_, source, focus, update_source, update_focus) => {
@@ -1036,20 +1035,11 @@ impl Checker {
                     .find_map(|(left, right)| find(checker, left, right, explicit_slot_for_var))
                     .or_else(|| find(checker, left_ret, right_ret, explicit_slot_for_var)),
                 (Ty::Struct(_, left), Ty::Struct(_, right))
-                | (Ty::Record(_, left), Ty::Record(_, right)) => {
-                    if !left.arguments.is_empty() || !right.arguments.is_empty() {
-                        left.arguments
-                            .iter()
-                            .zip(&right.arguments)
-                            .find_map(|(left, right)| {
-                                find(checker, left, right, explicit_slot_for_var)
-                            })
-                    } else {
-                        left.iter().zip(right).find_map(|((_, left), (_, right))| {
-                            find(checker, left, right, explicit_slot_for_var)
-                        })
-                    }
-                }
+                | (Ty::Record(_, left), Ty::Record(_, right)) => left
+                    .arguments
+                    .iter()
+                    .zip(&right.arguments)
+                    .find_map(|(left, right)| find(checker, left, right, explicit_slot_for_var)),
                 _ => None,
             }
         }

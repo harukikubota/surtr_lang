@@ -10,6 +10,128 @@ impl Checker {
         }
     }
 
+    /// Resolve the finite graph of declaration parameter roles before reading
+    /// schemas. Only marker roles propagate; ordinary field types are not expanded.
+    fn predeclare_pid_parameter_roles(&mut self, stmts: &[Resolved]) {
+        type Parameter = (String, usize);
+        let mut dependents = HashMap::<Parameter, Vec<Parameter>>::new();
+        let mut markers = HashSet::<Parameter>::new();
+        let mut roots = Vec::new();
+        for definition in self.env.type_defs.values() {
+            for (index, variable) in definition.type_param_vars.iter().enumerate() {
+                if self.process_marker_tyvars.contains(variable) {
+                    markers.insert((Self::canonical_user_type_name(&definition.name), index));
+                }
+            }
+        }
+        for (name, alias) in &self.signature_aliases {
+            roots.push((
+                name.clone(),
+                alias
+                    .params
+                    .iter()
+                    .map(|p| p.name.clone())
+                    .collect::<Vec<_>>(),
+                vec![&alias.rhs],
+            ));
+        }
+        for statement in stmts {
+            let (id, params, inputs) = match statement {
+                Resolved::StructDef(_, id, params, fields, _) => {
+                    (id, params, fields.iter().map(|f| &f.ty).collect::<Vec<_>>())
+                }
+                Resolved::EnumDef(_, id, params, variants, _) => (
+                    id,
+                    params,
+                    variants.iter().flat_map(|v| &v.payload).collect::<Vec<_>>(),
+                ),
+                _ => continue,
+            };
+            roots.push((
+                id.name.clone(),
+                params.iter().map(|p| p.name.clone()).collect::<Vec<_>>(),
+                inputs,
+            ));
+        }
+        for (owner, parameters, mut pending) in roots {
+            let own_parameters = parameters
+                .into_iter()
+                .enumerate()
+                .map(|(index, name)| (name, (Self::canonical_user_type_name(&owner), index)))
+                .collect::<HashMap<_, _>>();
+            while let Some(ty) = pending.pop() {
+                match ty {
+                    AstTy::Generic(_, name, arguments) => {
+                        let marker_head = matches!(
+                            sindr::names::builtin_type_name(Self::surface_name(name)),
+                            Some(
+                                sindr::names::TypeName::Pid
+                                    | sindr::names::TypeName::Workers
+                                    | sindr::names::TypeName::WorkerLease
+                            )
+                        );
+                        if marker_head {
+                            if let [AstTy::Named(_, parameter)] = arguments.as_slice() {
+                                if let Some(node) = own_parameters.get(parameter) {
+                                    markers.insert(node.clone());
+                                }
+                            }
+                        } else {
+                            let target = self
+                                .env
+                                .lookup_type_def(name)
+                                .map(|d| {
+                                    (Self::canonical_user_type_name(&d.name), d.type_params.len())
+                                })
+                                .or_else(|| {
+                                    self.signature_aliases.get(name).map(|a| {
+                                        (Self::canonical_user_type_name(name), a.params.len())
+                                    })
+                                });
+                            if let Some((target, arity)) = target {
+                                for (index, argument) in arguments.iter().take(arity).enumerate() {
+                                    if let AstTy::Named(_, parameter) = argument {
+                                        if let Some(node) = own_parameters.get(parameter) {
+                                            dependents
+                                                .entry((target.clone(), index))
+                                                .or_default()
+                                                .push(node.clone());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        pending.extend(arguments);
+                    }
+                    AstTy::Tuple(_, items) => pending.extend(items),
+                    AstTy::Func(_, parameters, result) => {
+                        pending.extend(parameters);
+                        pending.push(result);
+                    }
+                    AstTy::Named(_, _) | AstTy::ImplTrait(_, _) => {}
+                }
+            }
+        }
+        let mut pending = markers.iter().cloned().collect::<Vec<_>>();
+        while let Some(marker) = pending.pop() {
+            if let Some(users) = dependents.get(&marker) {
+                for user in users {
+                    if markers.insert(user.clone()) {
+                        pending.push(user.clone());
+                    }
+                }
+            }
+        }
+        for definition in self.env.type_defs.values() {
+            let name = Self::canonical_user_type_name(&definition.name);
+            for (index, variable) in definition.type_param_vars.iter().enumerate() {
+                if markers.contains(&(name.clone(), index)) {
+                    self.process_marker_tyvars.insert(*variable);
+                }
+            }
+        }
+    }
+
     pub(in crate::checker) fn predeclare_type_signatures(
         &mut self,
         stmts: &[Resolved],
@@ -107,18 +229,62 @@ impl Checker {
             }
             seen_type_spans.insert(name.clone(), span.clone());
 
+            let formal_variables = (0..type_params.len())
+                .map(|_| match self.env.fresh_tyvar() {
+                    Ty::Var(variable) => variable,
+                    _ => unreachable!("fresh type variable must be a variable"),
+                })
+                .collect();
             self.env
                 .predeclare_type_def(name.clone(), kind, type_params, type_param_bounds);
+            self.env
+                .lookup_type_def_mut(name)
+                .expect("reserved nominal identity remains registered")
+                .type_param_vars = formal_variables;
         }
 
         self.ensure_no_type_cycles(stmts)?;
+        self.predeclare_trait_headers(stmts)?;
+        for statement in stmts {
+            let (Resolved::StructDef(_, id, _, _, _) | Resolved::EnumDef(_, id, _, _, _)) =
+                statement
+            else {
+                continue;
+            };
+            let definition = self
+                .env
+                .lookup_type_def(&id.name)
+                .expect("nominal identities have been reserved")
+                .clone();
+            for (variable, bound) in definition
+                .type_param_vars
+                .iter()
+                .zip(&definition.type_param_bounds)
+            {
+                if let Some(bound) = bound {
+                    self.register_tyvar_bound(*variable, bound);
+                    if let Some(trait_key) = self.declaration_constructor_trait_key(bound) {
+                        self.constructor_witness_traits.insert(*variable, trait_key);
+                    }
+                }
+            }
+        }
+        self.predeclare_pid_parameter_roles(stmts);
+        self.pending_nominal_arguments = Some(Vec::new());
 
         // Pass 2: finalize field signatures and constructor-like bindings.
         for stmt in stmts {
             match stmt {
                 Resolved::StructDef(_, id, type_params, fields, _) => {
-                    let mut tyvars = HashMap::new();
-                    self.seed_signature_type_params(type_params, &mut tyvars);
+                    let definition = self
+                        .env
+                        .lookup_type_def(&id.name)
+                        .expect("struct identity has been reserved");
+                    let mut tyvars = type_params
+                        .iter()
+                        .zip(&definition.type_param_vars)
+                        .map(|(parameter, variable)| (parameter.name.clone(), Ty::Var(*variable)))
+                        .collect::<HashMap<_, _>>();
                     let ty_fields = fields
                         .iter()
                         .map(|f| {
@@ -185,7 +351,6 @@ impl Checker {
                             id.name.clone(),
                             NominalType::new(
                                 type_param_vars.iter().copied().map(Ty::Var).collect(),
-                                ty_fields,
                             ),
                         ),
                     );
@@ -245,7 +410,7 @@ impl Checker {
                     self.env.register_type_constructor_id(id.unique_id);
                     self.env.bind_var(
                         id.unique_id,
-                        Ty::Record(id.name.clone(), NominalType::monomorphic(ty_fields)),
+                        Ty::Record(id.name.clone(), NominalType::monomorphic()),
                     );
                 }
                 Resolved::DeferrorDef(_, id, fields, _) => {
@@ -287,8 +452,15 @@ impl Checker {
                 }
                 Resolved::EnumDef(span, id, type_params, variants, attrs) => {
                     self.validate_builtin_enum_shape(span, id, type_params, variants, attrs)?;
-                    let mut sig_tyvars = HashMap::new();
-                    self.seed_signature_type_params(type_params, &mut sig_tyvars);
+                    let definition = self
+                        .env
+                        .lookup_type_def(&id.name)
+                        .expect("enum identity has been reserved");
+                    let mut sig_tyvars = type_params
+                        .iter()
+                        .zip(&definition.type_param_vars)
+                        .map(|(parameter, variable)| (parameter.name.clone(), Ty::Var(*variable)))
+                        .collect::<HashMap<_, _>>();
                     let enum_ty_args = type_params
                         .iter()
                         .map(|param| {
@@ -717,6 +889,18 @@ impl Checker {
         &mut self,
         stmts: &[Resolved],
     ) -> Result<(), TypeError> {
+        let pending = self.pending_nominal_arguments.take().ok_or_else(|| {
+            self.typecheck_invariant_error(
+                "nominal schema validation was not initialized",
+                &Span { start: 0, end: 0 },
+            )
+        })?;
+        for (name, arguments, span, defer_unresolved) in pending {
+            let definition = self.env.lookup_type_def(&name).cloned().ok_or_else(|| {
+                self.typecheck_invariant_error("deferred nominal declaration was lost", &span)
+            })?;
+            self.validate_nominal_type_arguments(&definition, &arguments, &span, defer_unresolved)?;
+        }
         let declarations = stmts
             .iter()
             .filter_map(|stmt| match stmt {
@@ -728,9 +912,12 @@ impl Checker {
             .collect::<Vec<_>>();
 
         for (name, span) in declarations {
-            let Some(def) = self.env.lookup_type_def(&name).cloned() else {
-                continue;
-            };
+            let def = self.env.lookup_type_def(&name).cloned().ok_or_else(|| {
+                self.typecheck_invariant_error(
+                    "nominal declaration missing during bound validation",
+                    &span,
+                )
+            })?;
             let parameters = def
                 .type_param_vars
                 .iter()

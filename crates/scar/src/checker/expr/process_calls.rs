@@ -309,10 +309,7 @@ impl Checker {
             .map(|def| {
                 Ty::Struct(
                     def.name.clone(),
-                    NominalType::new(
-                        def.type_param_vars.iter().copied().map(Ty::Var).collect(),
-                        def.fields.clone(),
-                    ),
+                    NominalType::new(def.type_param_vars.iter().copied().map(Ty::Var).collect()),
                 )
             })
             .ok_or_else(|| {
@@ -415,10 +412,7 @@ impl Checker {
             .map(|def| {
                 Ty::Struct(
                     def.name.clone(),
-                    NominalType::new(
-                        def.type_param_vars.iter().copied().map(Ty::Var).collect(),
-                        def.fields.clone(),
-                    ),
+                    NominalType::new(def.type_param_vars.iter().copied().map(Ty::Var).collect()),
                 )
             })
             .ok_or_else(|| self.typecheck_invariant_error("WorkerStrategy type metadata", span))?;

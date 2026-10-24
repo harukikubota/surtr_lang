@@ -227,6 +227,7 @@ impl Checker {
                                             update_focus_ty,
                                             path_kind: path.path_kind,
                                             may_fail: path.may_fail,
+                                            segment_focus_tys: path.segment_focus_tys.iter().map(|ty| self.resolve_ty(ty)).collect(),
                                             segments: path.segments,
                                         }),
                                     }

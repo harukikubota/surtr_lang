@@ -79,6 +79,7 @@ fn build_command(
         input_srt,
         &compile_plan.source_for_parse,
         &compile_plan.include_modules,
+        &compile_plan.include_directives,
         xldr::StdlibVariant::Default,
     )?;
     let bytecode = compile_source_with_measurement(

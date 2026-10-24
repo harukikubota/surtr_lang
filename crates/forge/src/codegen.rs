@@ -2518,7 +2518,7 @@ mod tests {
 
     #[test]
     fn ty_to_string_uses_surface_names_for_runtime_display_types() {
-        let user_ty = Ty::Struct("Global::User".into(), NominalType::monomorphic(Vec::new()));
+        let user_ty = Ty::Struct("Global::User".into(), NominalType::monomorphic());
         assert_eq!(ty_to_string(&user_ty), "User");
 
         let option_ty = Ty::Enum("Global::Option".into(), vec![user_ty.clone()]);
@@ -2539,14 +2539,13 @@ mod tests {
     fn pid_error_schema_preserves_generic_nominal_fields_and_rejects_invalid_markers() {
         use sindr::ir::ErrorValueSchema as S;
         let marker = Ty::ProcessMarker("Global::Worker".into());
-        let pid = Ty::Pid(Box::new(marker.clone()));
         let definition = scar::typed::TypedNominalDefinition {
             type_param_vars: vec![4],
             fields: vec![("pid".into(), Ty::Pid(Box::new(Ty::Var(4))))],
         };
         let ty = Ty::Struct(
             "Global::PidBox".into(),
-            NominalType::new(vec![marker.clone()], vec![("pid".into(), pid)]),
+            NominalType::new(vec![marker.clone()]),
         );
         let nominals = HashMap::from([("Global::PidBox".into(), definition)]);
         let enums = HashMap::new();
@@ -2574,13 +2573,7 @@ mod tests {
             ty: Ty::Var(42),
             span: span(0, 0),
         }];
-        let range_ty = Ty::Struct(
-            "Global::Range".into(),
-            NominalType::new(
-                vec![Ty::Var(42)],
-                vec![("min".into(), Ty::Var(42)), ("max".into(), Ty::Var(42))],
-            ),
-        );
+        let range_ty = Ty::Struct("Global::Range".into(), NominalType::new(vec![Ty::Var(42)]));
         let params = vec![
             typed_value_parameter("min", 1, Ty::Var(42)),
             typed_value_parameter("max", 2, Ty::Var(42)),
@@ -3995,6 +3988,7 @@ mod tests {
         let path = TypedFacetPath {
             source_ty: Ty::List(Box::new(Ty::Int)),
             focus_ty: Ty::Int,
+            segment_focus_tys: vec![Ty::Int],
             update_source_ty: Ty::Hole,
             update_focus_ty: Ty::Hole,
             path_kind: TypedFacetPathKind::InfallibleStructural,
@@ -5959,64 +5953,21 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
             let mut stop_points = Vec::new();
             let mut path_is_fallible = false;
             let mut prefix = String::new();
-            for segment in &path.segments {
+            assert_eq!(
+                path.segments.len(),
+                path.segment_focus_tys.len(),
+                "checked Facet segment metadata must be complete"
+            );
+            for (segment, focus_ty) in path.segments.iter().zip(&path.segment_focus_tys) {
                 let label = facet_segment_label(segment);
-                let focus_ty = match segment {
-                    TypedFacetSegment::ReadonlyBuiltin { .. } => Ty::Str,
-                    TypedFacetSegment::ErrorPayload { .. } => path.focus_ty.clone(),
-                    TypedFacetSegment::Field { .. } | TypedFacetSegment::Tuple { .. } => {
-                        match &current_source {
-                            Ty::Tuple(items) => match segment {
-                                TypedFacetSegment::Tuple { field_index, .. } => items
-                                    .get(*field_index as usize)
-                                    .cloned()
-                                    .unwrap_or(Ty::Unit),
-                                _ => Ty::Unit,
-                            },
-                            Ty::Struct(_, fields) | Ty::Record(_, fields) => match segment {
-                                TypedFacetSegment::Field { field_index, .. } => fields
-                                    .get(*field_index as usize)
-                                    .map(|(_, ty)| ty.clone())
-                                    .unwrap_or(Ty::Unit),
-                                _ => Ty::Unit,
-                            },
-                            _ => Ty::Unit,
-                        }
-                    }
-                    TypedFacetSegment::Variant {
-                        payload_arity,
-                        variant_name,
-                        ..
-                    } => {
-                        stop_points.push(format!(
-                            "{}.{} - variant mismatch returns Result",
-                            ty_to_string(&current_source),
-                            variant_name
-                        ));
-                        if *payload_arity == 0 {
-                            Ty::Unit
-                        } else {
-                            path.focus_ty.clone()
-                        }
-                    }
-                    TypedFacetSegment::ListIndex { .. } => match &current_source {
-                        Ty::List(inner) => inner.as_ref().clone(),
-                        _ => path.focus_ty.clone(),
-                    },
-                    TypedFacetSegment::ListRange { .. } => match &current_source {
-                        Ty::List(inner) => Ty::List(Box::new(inner.as_ref().clone())),
-                        _ => path.focus_ty.clone(),
-                    },
-                    TypedFacetSegment::MapKey { .. } => match &current_source {
-                        Ty::Enum(name, args)
-                            if name.rsplit("::").next().unwrap_or(name) == "HashMap"
-                                && args.len() == 1 =>
-                        {
-                            args[0].clone()
-                        }
-                        _ => path.focus_ty.clone(),
-                    },
-                };
+                let focus_ty = focus_ty.clone();
+                if let TypedFacetSegment::Variant { variant_name, .. } = segment {
+                    stop_points.push(format!(
+                        "{}.{} - variant mismatch returns Result",
+                        ty_to_string(&current_source),
+                        variant_name
+                    ));
+                }
                 if !prefix.is_empty() && !matches!(segment, TypedFacetSegment::Tuple { .. }) {
                     prefix.push('.');
                 }
@@ -8580,7 +8531,6 @@ impl Codegen {
                 Ty::Facet(_, a, b, c, d) => [a, b, c, d].into_iter().any(|ty| pending(ty)),
                 Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
                     nominal.arguments.iter().any(pending)
-                        || nominal.iter().any(|(_, ty)| pending(ty))
                 }
                 _ => false,
             }
@@ -13988,10 +13938,7 @@ mod process_runtime_v2_tests {
 
     fn worker_strategy_value() -> TypedNode {
         TypedNode {
-            ty: Ty::Struct(
-                "WorkerStrategy".into(),
-                NominalType::monomorphic(Vec::new()),
-            ),
+            ty: Ty::Struct("WorkerStrategy".into(), NominalType::monomorphic()),
             span: span(50, 58),
             node: TypedInner::Var(ResolvedId {
                 name: "strategy".into(),

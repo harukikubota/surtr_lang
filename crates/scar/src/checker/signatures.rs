@@ -1457,18 +1457,6 @@ fn builtin_runtime_type_matches(
                     .all(|(expected, actual)| {
                         builtin_runtime_type_matches(checker, expected, actual, expected_variables)
                     })
-                && expected_fields.len() == actual_fields.len()
-                && expected_fields.iter().zip(&actual_fields).all(
-                    |((expected_name, expected_ty), (actual_name, actual_ty))| {
-                        expected_name == actual_name
-                            && builtin_runtime_type_matches(
-                                checker,
-                                expected_ty,
-                                actual_ty,
-                                expected_variables,
-                            )
-                    },
-                )
         }
         (Ty::Enum(expected_name, expected_args), Ty::Enum(actual_name, actual_args)) => {
             Checker::surface_name(&expected_name) == Checker::surface_name(&actual_name)

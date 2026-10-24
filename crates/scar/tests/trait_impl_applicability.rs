@@ -75,7 +75,7 @@ deftrait Read<$V> {{ def read::<$V>(self: Self) -> $V }}
         };
         assert_eq!(*ret, Ty::Str);
         assert!(
-            matches!(&params[0].ty, Ty::Struct(_, fields) if fields[0].1 == Ty::Tuple(vec![Ty::Int, Ty::Str]))
+            matches!(&params[0].ty, Ty::Struct(_, fields) if fields.arguments[0] == Ty::Tuple(vec![Ty::Int, Ty::Str]))
         );
         let TypedInner::Block(body) = &body.node else {
             panic!("method block required")

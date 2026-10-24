@@ -26,10 +26,11 @@ pub use loader::{
     collect_module_sources_with_stdlib_variant, collect_script_include_directives,
     collect_test_module_sources_with_module_stages, compose_script_compile_sources,
     compose_script_compile_sources_with_stdlib_variant, derive_primary_module_path,
-    extend_module_sources_with_module_stages, is_default_std_module_file_name,
-    is_default_std_module_path, module_path_from_source_or_file_name, prepare_script_sources,
-    script_pseudo_module_path, CompileSources, LoadError, ModuleInput, ModuleSources,
-    PreparedScriptSources, ScriptIncludeDirective, ScriptSourcePrepareError, SourceDescriptor,
+    extend_module_sources_with_module_stages, extend_module_sources_with_script_includes,
+    is_default_std_module_file_name, is_default_std_module_path,
+    module_path_from_source_or_file_name, prepare_script_sources, script_pseudo_module_path,
+    CompileSources, LoadError, ModuleInput, ModuleSources, PreparedScriptSources,
+    ScriptIncludeDirective, ScriptIncludeOrigin, ScriptSourcePrepareError, SourceDescriptor,
     StagedModule, StdlibVariant,
 };
 
@@ -193,6 +194,8 @@ pub enum ModuleStageParseErrorKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModuleStageParseError {
     pub source_id: diagnostics::SourceId,
+    pub stage_index: usize,
+    pub source_index: usize,
     pub kind: ModuleStageParseErrorKind,
 }
 
@@ -360,6 +363,10 @@ pub fn parse_module_stages_from_compile_sources_suffix(
         &suffix,
         compile_unit_kind,
     )
+    .map_err(|mut error| {
+        error.stage_index += start_stage_index;
+        error
+    })
 }
 
 pub struct ExpandedSnapshotModuleStages<'a> {
@@ -1505,6 +1512,55 @@ defmod B {
             key(&changed),
             "source ID layout must be retained"
         );
+    }
+
+    #[test]
+    fn semantic_prefix_key_distinguishes_grouped_includes_from_separate_stages() {
+        let inputs = [
+            ModuleInput {
+                file_name: "a.srt".into(),
+                source: "defmod StageA {}".into(),
+                module_path: "StageA".into(),
+            },
+            ModuleInput {
+                file_name: "b.srt".into(),
+                source: "defmod StageB {}".into(),
+                module_path: "StageB".into(),
+            },
+        ];
+        let prefix = collect_test_module_sources_with_module_stages(&[]).unwrap();
+        let directives = [
+            ScriptIncludeDirective {
+                file_path: "a.srt".into(),
+                span: spire::ast::Span { start: 0, end: 15 },
+            },
+            ScriptIncludeDirective {
+                file_path: "b.srt".into(),
+                span: spire::ast::Span { start: 16, end: 31 },
+            },
+        ];
+        let grouped =
+            extend_module_sources_with_script_includes(prefix.clone(), &inputs, &directives)
+                .unwrap();
+        let separate = extend_module_sources_with_module_stages(
+            prefix,
+            &[vec![inputs[0].clone()], vec![inputs[1].clone()]],
+        )
+        .unwrap();
+        let key = |modules| {
+            test_semantic_prefix_cache_key_with_fingerprint(
+                "compiler",
+                "stdlib",
+                CompileUnitKind::Script,
+                &compose_script_compile_sources_with_stdlib_variant(
+                    "entry.srt",
+                    "()",
+                    modules,
+                    StdlibVariant::TestEnabled,
+                ),
+            )
+        };
+        assert_ne!(key(grouped), key(separate));
     }
 
     #[test]

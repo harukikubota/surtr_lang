@@ -681,33 +681,11 @@ impl Checker {
             }
             Ty::Struct(name, nominal) => {
                 let arguments = normalize_nominal_arguments(&name, &nominal.arguments);
-                let fields = self
-                    .env
-                    .lookup_type_def(&name)
-                    .map(|definition| self.instantiate_type_def_fields(definition, &arguments))
-                    .unwrap_or_else(|| {
-                        nominal
-                            .fields
-                            .iter()
-                            .map(|(field, ty)| (field.clone(), normalize(ty)))
-                            .collect()
-                    });
-                Ty::Struct(name, NominalType::new(arguments, fields))
+                Ty::Struct(name, NominalType::new(arguments))
             }
             Ty::Record(name, nominal) => {
                 let arguments = normalize_nominal_arguments(&name, &nominal.arguments);
-                let fields = self
-                    .env
-                    .lookup_type_def(&name)
-                    .map(|definition| self.instantiate_type_def_fields(definition, &arguments))
-                    .unwrap_or_else(|| {
-                        nominal
-                            .fields
-                            .iter()
-                            .map(|(field, ty)| (field.clone(), normalize(ty)))
-                            .collect()
-                    });
-                Ty::Record(name, NominalType::new(arguments, fields))
+                Ty::Record(name, NominalType::new(arguments))
             }
             Ty::Func(parameters, ret) => Ty::Func(
                 parameters.iter().map(normalize).collect(),

@@ -1028,20 +1028,14 @@ mod tests {
         let constructor = checker.env.fresh_tyvar();
         let expected = Ty::Struct(
             "OptionT".into(),
-            NominalType::new(vec![constructor, Ty::Int], Vec::new()),
+            NominalType::new(vec![constructor, Ty::Int]),
         );
         let actual = Ty::Struct(
             "OptionT".into(),
-            NominalType::new(
-                vec![
-                    Ty::Struct(
-                        "Identity".into(),
-                        NominalType::new(vec![Ty::Hole], Vec::new()),
-                    ),
-                    Ty::Str,
-                ],
-                Vec::new(),
-            ),
+            NominalType::new(vec![
+                Ty::Struct("Identity".into(), NominalType::new(vec![Ty::Hole])),
+                Ty::Str,
+            ]),
         );
         let witnesses = checker.constructor_witness_traits.clone();
         assert!(!checker

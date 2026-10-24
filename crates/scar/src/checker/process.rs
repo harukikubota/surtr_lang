@@ -50,15 +50,10 @@ impl Checker {
                     .any(|param| self.ty_contains_process_init(param))
                     || self.ty_contains_process_init(&ret)
             }
-            Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
-                nominal
-                    .arguments
-                    .iter()
-                    .any(|argument| self.ty_contains_process_init(argument))
-                    || nominal
-                        .iter()
-                        .any(|(_, field_ty)| self.ty_contains_process_init(field_ty))
-            }
+            Ty::Struct(_, nominal) | Ty::Record(_, nominal) => nominal
+                .arguments
+                .iter()
+                .any(|argument| self.ty_contains_process_init(argument)),
             Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
                 params
                     .iter()
@@ -457,61 +452,42 @@ impl Checker {
     }
 
     fn ty_contains_handler_capability_pid(&self, ty: &Ty, slots: &HashMap<String, String>) -> bool {
-        match self.resolve_ty(ty) {
-            Ty::Pid(marker) => {
-                matches!(marker.as_ref(), Ty::ProcessMarker(name) if slots.values().any(|capability| Self::canonical_user_type_name(capability) == *name))
-            }
-            Ty::Result(ok, err) => {
-                self.ty_contains_handler_capability_pid(&ok, slots)
-                    || self.ty_contains_handler_capability_pid(&err, slots)
-            }
-            Ty::List(inner)
-            | Ty::MatchResult(inner)
-            | Ty::ExtractorClosure(inner)
-            | Ty::Lazy(inner) => self.ty_contains_handler_capability_pid(&inner, slots),
-            Ty::Tuple(items) | Ty::SelfApp(items) => items
-                .iter()
-                .any(|item| self.ty_contains_handler_capability_pid(item, slots)),
-            Ty::Func(params, ret) => {
-                params
-                    .iter()
-                    .any(|param| self.ty_contains_handler_capability_pid(param, slots))
-                    || self.ty_contains_handler_capability_pid(&ret, slots)
-            }
-            Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
-                nominal
-                    .arguments
-                    .iter()
-                    .any(|argument| self.ty_contains_handler_capability_pid(argument, slots))
-                    || nominal.iter().any(|(_, field_ty)| {
-                        self.ty_contains_handler_capability_pid(field_ty, slots)
-                    })
-            }
-            Ty::Enum(_, args) => args
-                .iter()
-                .any(|arg| self.ty_contains_handler_capability_pid(arg, slots)),
-            Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
-                params
-                    .iter()
-                    .any(|param| self.ty_contains_handler_capability_pid(param, slots))
-                    || self.ty_contains_handler_capability_pid(&ret, slots)
-            }
-            Ty::Var(_)
-            | Ty::Int
-            | Ty::Float
-            | Ty::Str
-            | Ty::Bool
-            | Ty::Unit
-            | Ty::Error
-            | Ty::Hole
-            | Ty::ProcessMarker(_) => false,
-            Ty::Facet(_, source, focus, update_source, update_focus) => {
-                self.ty_contains_handler_capability_pid(&source, slots)
-                    || self.ty_contains_handler_capability_pid(&focus, slots)
-                    || self.ty_contains_handler_capability_pid(&update_source, slots)
-                    || self.ty_contains_handler_capability_pid(&update_focus, slots)
+        let mut pending = vec![self.resolve_ty(ty)];
+        let mut expanded_nominals = HashSet::new();
+        while let Some(ty) = pending.pop() {
+            match ty {
+                Ty::Pid(marker) => {
+                    if matches!(marker.as_ref(), Ty::ProcessMarker(name) if slots.values().any(|capability| Self::canonical_user_type_name(capability) == *name))
+                    {
+                        return true;
+                    }
+                }
+                Ty::Struct(name, nominal) | Ty::Record(name, nominal) => {
+                    pending.extend(nominal.arguments.iter().cloned());
+                    if expanded_nominals.insert(name.clone()) {
+                        let fields = self
+                            .nominal_fields(&name, &nominal, &Span { start: 0, end: 0 })
+                            .expect("checked process state requires a resolved nominal schema");
+                        pending.extend(fields.into_iter().map(|(_, ty)| ty));
+                    }
+                }
+                Ty::Result(ok, err) => pending.extend([*ok, *err]),
+                Ty::List(inner)
+                | Ty::MatchResult(inner)
+                | Ty::ExtractorClosure(inner)
+                | Ty::Lazy(inner) => pending.push(*inner),
+                Ty::Tuple(items) | Ty::SelfApp(items) | Ty::Enum(_, items) => pending.extend(items),
+                Ty::Func(params, ret)
+                | Ty::BuiltinFunc { params, ret, .. }
+                | Ty::UserFunc { params, ret, .. } => {
+                    pending.extend(params);
+                    pending.push(*ret);
+                }
+                Ty::Facet(_, a, b, c, d) => pending.extend([*a, *b, *c, *d]),
+                _ => {}
             }
         }
+        false
     }
 }
 

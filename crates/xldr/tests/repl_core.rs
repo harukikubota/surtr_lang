@@ -3676,6 +3676,13 @@ defenum Plain<$A> {
     );
     assert!(rendered_text(&viewed).contains("Some(1)"));
 
+    let inspected =
+        rendered_text(&engine.handle_line(":facet Facet::view(ReplOptionT.inner, value)"));
+    assert!(
+        inspected.contains("relation: ReplOptionT<Result<_>, Int> -> Result<Option<Int>>"),
+        "{inspected}"
+    );
+
     let cross_nominal = engine.handle_line("Facet::view(OptionT.inner, value)");
     assert!(!cross_nominal.should_exit);
     assert!(

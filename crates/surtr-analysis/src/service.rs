@@ -1036,7 +1036,7 @@ fn standard_environment(
                 None,
             )
             .map_err(|error| error.message)?;
-            let resolved = program.resolved.clone();
+            let resolved = program.iter_resolved().cloned().collect::<Vec<_>>();
             let resolve_state = program.resume_state;
             let mut scar = scar::ScarSession::new();
             let typed = scar
@@ -1225,7 +1225,7 @@ fn analyze_stages(
                 return;
             }
         };
-        let resolved = program.resolved.clone();
+        let resolved = program.iter_resolved().cloned().collect::<Vec<_>>();
         let resolve_state = program.resume_state;
         let mut scar = scar::ScarSession::new();
         let typed = match scar
@@ -1269,7 +1269,7 @@ fn analyze_stages(
         Ok(resolved_program) => {
             let mut resolved_nodes =
                 standard.map_or_else(Vec::new, |prefix| prefix.resolved.clone());
-            resolved_nodes.extend(resolved_program.resolved.clone());
+            resolved_nodes.extend(resolved_program.iter_resolved().cloned());
             let mut scar = scar::ScarSession::new();
             if let Some(prefix) = standard {
                 scar.rollback(prefix.scar_checkpoint.clone());

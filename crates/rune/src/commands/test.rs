@@ -775,6 +775,7 @@ fn compile_test_script(
         &script.file_path,
         &compile_plan.source_for_parse,
         &compile_plan.include_modules,
+        &compile_plan.include_directives,
         xldr::StdlibVariant::TestEnabled,
     )?;
     if !context.standard_prepared {

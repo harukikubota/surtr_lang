@@ -312,7 +312,7 @@ pub fn resolve_staged_program(
         0,
         ResolveResumeState::default(),
     )
-    .map(|resolved| resolved.resolved)
+    .map(ResolvedStagedProgram::into_resolved)
 }
 
 pub fn resolve_staged_program_with_warnings(
@@ -330,8 +330,7 @@ pub fn resolve_staged_program_with_warnings(
         ResolveResumeState::default(),
     )
     .map(|output| {
-        let mut program = output.value;
-        let resolved = std::mem::take(&mut program.resolved);
+        let resolved = output.value.into_resolved();
         PhaseOutput::new(resolved, output.warnings)
     })
 }
@@ -343,10 +342,36 @@ pub struct ResolveResumeState {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedStagedProgram {
-    pub resolved: Vec<Resolved>,
-    pub process_specs: Vec<ResolvedProcessSpec>,
+    pub stages: Vec<ResolvedStage>,
     pub boot_plan: SupervisorInitSpec,
     pub resume_state: ResolveResumeState,
+}
+
+/// A declaration stage, retaining its original source stage index across suffix resumes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedStage {
+    pub stage_index: usize,
+    pub resolved: Vec<Resolved>,
+    pub process_specs: Vec<ResolvedProcessSpec>,
+}
+
+impl ResolvedStagedProgram {
+    pub fn iter_resolved(&self) -> impl Iterator<Item = &Resolved> {
+        self.stages.iter().flat_map(|stage| &stage.resolved)
+    }
+
+    /// Flatten for read-only consumers or explicitly single-stage APIs.
+    /// Compilers must pass `stages` to Scar to preserve visibility.
+    pub fn into_resolved(self) -> Vec<Resolved> {
+        self.stages
+            .into_iter()
+            .flat_map(|stage| stage.resolved)
+            .collect()
+    }
+
+    pub fn process_specs(&self) -> impl Iterator<Item = &ResolvedProcessSpec> {
+        self.stages.iter().flat_map(|stage| &stage.process_specs)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -443,14 +468,15 @@ pub fn resolve_staged_program_from_state_with_warnings(
                 staged_modules_from_source_ast(vec![stmt], user_module_path.as_deref())
             })
             .collect::<Vec<_>>();
-        let user_owner_registry = precollect_owner_registry(&[user_owner_modules])?;
+        let mut user_owner_stages = vec![Vec::new(); module_stages.len()];
+        user_owner_stages.push(user_owner_modules);
+        let user_owner_registry = precollect_owner_registry(&user_owner_stages)?;
         owner_registry.merge(&user_owner_registry)?;
     }
     let owner_registry = Arc::new(owner_registry);
     let declaration_hidden_by_uid = Arc::new(declaration_hidden_by_uid);
-    let mut resolved = Vec::new();
+    let mut resolved_stages = Vec::new();
     let mut explicit_function_imports = Vec::new();
-    let mut process_specs = Vec::new();
     let mut boot_plan = SupervisorInitSpec::default();
     let mut next_local_id = declaration_uids
         .values()
@@ -462,20 +488,28 @@ pub fn resolve_staged_program_from_state_with_warnings(
     next_local_id = next_local_id.max(resume_state.next_local_id);
 
     for (stage_index, stage) in module_stages.iter().enumerate().skip(start_stage_index) {
+        let visible_index = visible_declaration_index(declaration_index, stage_index);
+        let visible_uids = visible_declaration_uids(&visible_index, &declaration_uids);
+        let visible_scope = build_global_scope(&visible_index, &visible_uids);
+        let visible_owners = Arc::new(owner_registry.visible_through(stage_index));
+        let visible_slots =
+            collect_staged_trait_constructor_slots(&module_stages[..=stage_index], &visible_uids);
+        let mut resolved = Vec::new();
+        let mut process_specs = Vec::new();
         let stage_impl_targets = Arc::new(collect_stage_impl_target_resolutions(stage));
         let stage_local_base = next_local_id;
         let stage_results = resolve_stage_modules_parallel(
             stage,
             stage_index,
             stage_local_base,
-            &global_scope,
+            &visible_scope,
             &auto_import_modules,
             declaration_index,
             &declaration_uids,
             &declaration_uid_kinds,
             &declaration_hidden_by_uid,
-            &trait_constructor_slots,
-            &owner_registry,
+            &visible_slots,
+            &visible_owners,
             &stage_impl_targets,
         );
 
@@ -552,6 +586,11 @@ pub fn resolve_staged_program_from_state_with_warnings(
                 });
             }
         }
+        resolved_stages.push(ResolvedStage {
+            stage_index,
+            resolved,
+            process_specs,
+        });
     }
 
     if !user_ast.is_empty() {
@@ -578,17 +617,25 @@ pub fn resolve_staged_program_from_state_with_warnings(
         user_resolver.owner_registry = owner_registry;
         user_resolver.current_module_path = user_module_path;
         user_resolver.allow_top_level_shadowing = true;
-        resolved.extend(user_resolver.resolve_program(user_scope_build.program)?);
+        resolved_stages.push(ResolvedStage {
+            stage_index: module_stages.len(),
+            resolved: user_resolver.resolve_program(user_scope_build.program)?,
+            process_specs: Vec::new(),
+        });
         next_local_id = user_resolver.scope.next_id();
     }
 
-    validate_trait_impl_pairs_in_nodes(&resolved)?;
-    let warnings = collect_resolution_warnings(&resolved, &explicit_function_imports);
+    for stage in &resolved_stages {
+        validate_trait_impl_pairs_in_nodes(&stage.resolved)?;
+    }
+    let warnings = collect_resolution_warnings(
+        resolved_stages.iter().flat_map(|stage| &stage.resolved),
+        &explicit_function_imports,
+    );
 
     Ok(PhaseOutput::new(
         ResolvedStagedProgram {
-            resolved,
-            process_specs,
+            stages: resolved_stages,
             boot_plan,
             resume_state: ResolveResumeState { next_local_id },
         },
@@ -653,9 +700,12 @@ fn resolve_stage_modules_parallel(
                         module_scope.advance_next_id_to(stage_local_base);
                         let mut resolver = Resolver::with_scope(module_scope);
                         resolver.current_module_path = Some(module.module_path.clone());
+                        let visible_index =
+                            visible_declaration_index(declaration_index, stage_index);
+                        resolver.declaration_uids =
+                            Arc::new(visible_declaration_uids(&visible_index, declaration_uids));
                         resolver.declaration_entries =
-                            Arc::new(declaration_index.clone().into_iter().collect());
-                        resolver.declaration_uids = Arc::new(declaration_uids.clone());
+                            Arc::new(visible_index.into_iter().collect());
                         resolver.declaration_uid_kinds = Arc::new(declaration_uid_kinds.clone());
                         resolver.declaration_hidden_by_uid = Arc::clone(declaration_hidden_by_uid);
                         resolver.trait_constructor_slots =
@@ -1079,6 +1129,24 @@ fn rebase_extractor_param(param: &mut ResolvedExtractorParam, base: u32, offset:
 
 fn rebase_type_params(_params: &mut [ResolvedTypeParam], _base: u32, _offset: u32) {}
 
+fn visible_declaration_index(index: &DeclarationIndex, stage_index: usize) -> DeclarationIndex {
+    index
+        .iter()
+        .filter(|(_, entry)| entry.stage_index <= stage_index)
+        .map(|(name, entry)| (name.clone(), entry.clone()))
+        .collect()
+}
+
+fn visible_declaration_uids(
+    index: &DeclarationIndex,
+    uids: &HashMap<String, u32>,
+) -> HashMap<String, u32> {
+    uids.iter()
+        .filter(|(name, _)| index.contains_key(*name))
+        .map(|(name, uid)| (name.clone(), *uid))
+        .collect()
+}
+
 pub fn build_scope_for_module(
     module_stages: &[Vec<StagedModuleAst>],
     current_module_path: Option<&str>,
@@ -1086,7 +1154,8 @@ pub fn build_scope_for_module(
 ) -> Result<Scope, ResolveError> {
     let declaration_index = precollect_declaration_index(module_stages)?;
     let declaration_uids = assign_declaration_uids(&declaration_index);
-    let global_scope = build_global_scope(&declaration_index, &declaration_uids);
+    let visible_index = visible_declaration_index(&declaration_index, current_stage_index);
+    let global_scope = build_global_scope(&visible_index, &declaration_uids);
     let auto_import_modules = auto_import_module_names(module_stages);
     build_module_scope(
         &global_scope,
@@ -1106,7 +1175,8 @@ pub fn effective_auto_import_entries(
 ) -> Result<Vec<DeclarationEntry>, ResolveError> {
     let declaration_index = precollect_declaration_index(module_stages)?;
     let declaration_uids = assign_declaration_uids(&declaration_index);
-    let global_scope = build_global_scope(&declaration_index, &declaration_uids);
+    let visible_index = visible_declaration_index(&declaration_index, current_stage_index);
+    let global_scope = build_global_scope(&visible_index, &declaration_uids);
     let auto_import_modules = auto_import_module_names(module_stages);
     let build = build_module_scope_with_imports(
         &global_scope,
@@ -1192,7 +1262,8 @@ pub fn effective_visible_entries(
 ) -> Result<Vec<EffectiveVisibleEntry>, ResolveError> {
     let declaration_index = precollect_declaration_index(module_stages)?;
     let declaration_uids = assign_declaration_uids(&declaration_index);
-    let global_scope = build_global_scope(&declaration_index, &declaration_uids);
+    let visible_index = visible_declaration_index(&declaration_index, current_stage_index);
+    let global_scope = build_global_scope(&visible_index, &declaration_uids);
     let auto_import_modules = auto_import_module_names(module_stages);
     let build = build_module_scope_with_imports(
         &global_scope,

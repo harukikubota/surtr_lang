@@ -237,7 +237,7 @@ divide(Number::new("seven"))"#;
     for expected in [Ty::Int, Ty::Str] {
         let (params, ret, body) = wrappers
             .iter()
-            .find(|(params, _, _)| matches!(&params[0].ty, Ty::Struct(_, fields) if fields[0].1 == expected))
+            .find(|(params, _, _)| matches!(&params[0].ty, Ty::Struct(_, fields) if fields.arguments[0] == expected))
             .expect("concrete payload specialization");
         assert!(matches!(ret, Ty::Result(payload, _) if payload.as_ref() == &params[0].ty));
         assert_eq!(&body.ty, *ret);

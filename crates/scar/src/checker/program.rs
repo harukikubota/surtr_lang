@@ -581,9 +581,36 @@ impl Checker {
         Ok(())
     }
 
+    /// A flat input is exactly one declaration stage.
     pub(super) fn check_program(
         &mut self,
         stmts: Vec<Resolved>,
+    ) -> Result<Vec<TypedNode>, TypeError> {
+        let nodes = self.check_stage(stmts, true)?;
+        self.ensure_builtin_type_contracts()?;
+        Ok(nodes)
+    }
+
+    pub(super) fn check_stages(
+        &mut self,
+        stages: Vec<sigil::ResolvedStage>,
+    ) -> Result<Vec<TypedNode>, TypeError> {
+        let stage_count = stages.len();
+        let mut nodes = Vec::new();
+        for (index, stage) in stages.into_iter().enumerate() {
+            let mut process_specs = self.process_specs.clone();
+            process_specs.extend(stage.process_specs.into_iter().map(Into::into));
+            self.set_process_handler_dependencies(&process_specs);
+            nodes.extend(self.check_stage(stage.resolved, index + 1 == stage_count)?);
+        }
+        self.ensure_builtin_type_contracts()?;
+        Ok(nodes)
+    }
+
+    fn check_stage(
+        &mut self,
+        stmts: Vec<Resolved>,
+        is_last_stage: bool,
     ) -> Result<Vec<TypedNode>, TypeError> {
         let profile_enabled = self.profiler.enabled();
         if profile_enabled {
@@ -596,7 +623,6 @@ impl Checker {
         let mut predeclare_functions_dur = Duration::ZERO;
         let mut ensure_struct_impl_new_contract_dur = Duration::ZERO;
         let mut check_stmt_loop_dur = Duration::ZERO;
-        let mut ensure_builtin_type_contracts_dur = Duration::ZERO;
         let mut specialize_program_dur = Duration::ZERO;
         let mut stmt_count = 0usize;
         let mut slow_stmts = Vec::<(Duration, String)>::new();
@@ -620,8 +646,6 @@ impl Checker {
                 predeclare_type_signatures_dur = start.elapsed();
             }
 
-            self.predeclare_consts(&stmts)?;
-
             let t = profile_enabled.then(Instant::now);
             self.predeclare_traits(&stmts)?;
             self.activate_nominal_declaration_bounds(&stmts)?;
@@ -635,6 +659,7 @@ impl Checker {
                 predeclare_functions_dur = start.elapsed();
             }
 
+            self.predeclare_consts(&stmts)?;
             self.validate_process_state_contracts()?;
 
             let t = profile_enabled.then(Instant::now);
@@ -719,13 +744,7 @@ impl Checker {
             }
 
             let t = profile_enabled.then(Instant::now);
-            self.ensure_builtin_type_contracts()?;
-            if let Some(start) = t {
-                ensure_builtin_type_contracts_dur = start.elapsed();
-            }
-
-            let t = profile_enabled.then(Instant::now);
-            if self.test_script {
+            if self.test_script && is_last_stage {
                 if let Some(result) = typed.last() {
                     if self.resolve_ty(&result.ty) != Ty::Unit {
                         return Err(self.policy_error(
@@ -797,14 +816,13 @@ impl Checker {
             self.profiler.print_summary(total);
             if total >= Duration::from_millis(5) {
                 eprintln!(
-                    "scar-phase predeclare_error_types={:.3}ms predeclare_type_signatures={:.3}ms predeclare_traits={:.3}ms predeclare_functions={:.3}ms ensure_struct_impl_new_contract={:.3}ms check_stmt_loop={:.3}ms ensure_builtin_type_contracts={:.3}ms specialize_program={:.3}ms",
+                    "scar-phase predeclare_error_types={:.3}ms predeclare_type_signatures={:.3}ms predeclare_traits={:.3}ms predeclare_functions={:.3}ms ensure_struct_impl_new_contract={:.3}ms check_stmt_loop={:.3}ms specialize_program={:.3}ms",
                     predeclare_error_types_dur.as_secs_f64() * 1000.0,
                     predeclare_type_signatures_dur.as_secs_f64() * 1000.0,
                     predeclare_traits_dur.as_secs_f64() * 1000.0,
                     predeclare_functions_dur.as_secs_f64() * 1000.0,
                     ensure_struct_impl_new_contract_dur.as_secs_f64() * 1000.0,
                     check_stmt_loop_dur.as_secs_f64() * 1000.0,
-                    ensure_builtin_type_contracts_dur.as_secs_f64() * 1000.0,
                     specialize_program_dur.as_secs_f64() * 1000.0,
                 );
                 if !slow_stmts.is_empty() {

@@ -74,6 +74,7 @@ impl Checker {
                 id.span.clone(),
             ));
         }
+        let nominal_fields = self.nominal_fields(&expected_name, &nominal, &id.span)?;
         let named = fields.iter().any(|(name, _)| name.is_some());
         if named {
             let mut seen = std::collections::HashSet::new();
@@ -90,8 +91,7 @@ impl Checker {
                         id.span.clone(),
                     ));
                 }
-                if !nominal
-                    .fields
+                if !nominal_fields
                     .iter()
                     .any(|(field_name, _)| field_name == name)
                 {
@@ -101,7 +101,7 @@ impl Checker {
                     ));
                 }
             }
-            if let Some((missing, _)) = nominal.fields.iter().find(|(name, _)| !seen.contains(name))
+            if let Some((missing, _)) = nominal_fields.iter().find(|(name, _)| !seen.contains(name))
             {
                 return Err(TypeError::new(
                     format!("Missing Record pattern field `{missing}`"),
@@ -109,21 +109,21 @@ impl Checker {
                 ));
             }
         }
-        if fields.len() != nominal.fields.len() {
+        if fields.len() != nominal_fields.len() {
             return Err(self.pattern_error(
                 TypeDiagnosticReason::PatternArityMismatch,
                 PatternKind::Constructor,
                 Some(id.name.clone()),
                 None,
                 Some(expected_ty),
-                Some(nominal.fields.len()),
+                Some(nominal_fields.len()),
                 Some(fields.len()),
                 Vec::new(),
                 &id.span,
             ));
         }
         let mut ordered = Vec::with_capacity(fields.len());
-        for (index, (field_name, field_ty)) in nominal.fields.iter().enumerate() {
+        for (index, (field_name, field_ty)) in nominal_fields.iter().enumerate() {
             let pattern = if named {
                 let Some((_, pattern)) = fields
                     .iter()

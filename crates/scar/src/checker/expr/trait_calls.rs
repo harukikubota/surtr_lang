@@ -1390,15 +1390,10 @@ impl Checker {
                 Ty::Tuple(items) | Ty::Enum(_, items) => items
                     .iter()
                     .any(|item| contains_trait_constructor_input(item, trait_args)),
-                Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
-                    nominal
-                        .arguments
-                        .iter()
-                        .any(|item| contains_trait_constructor_input(item, trait_args))
-                        || nominal
-                            .iter()
-                            .any(|(_, field)| contains_trait_constructor_input(field, trait_args))
-                }
+                Ty::Struct(_, nominal) | Ty::Record(_, nominal) => nominal
+                    .arguments
+                    .iter()
+                    .any(|item| contains_trait_constructor_input(item, trait_args)),
                 Ty::Func(inputs, output)
                 | Ty::BuiltinFunc {
                     params: inputs,

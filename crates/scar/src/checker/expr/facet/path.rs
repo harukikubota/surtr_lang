@@ -91,6 +91,7 @@ impl Checker {
                 update_focus_ty: self.resolve_ty(&slots.1),
                 path_kind: path.path_kind,
                 may_fail: path.may_fail,
+                segment_focus_tys: path.segment_focus_tys.iter().map(|ty| self.resolve_ty(ty)).collect(),
                 segments: path.segments,
             })),
             TypedInner::PendingFacetPath(path) => Ok(StoredFacetPath::Pending(path)),
@@ -421,6 +422,9 @@ impl Checker {
                     optional: false,
                 },
             ) => {
+                let fields = self
+                    .nominal_fields(owner, fields, &Span { start: 0, end: 0 })
+                    .expect("Facet dependency probes require completed nominal schemas");
                 let (field_name, field_ty) = if matches!(source, Ty::Record(..)) {
                     if let Some(index) = Self::parse_tuple_index_name(name) {
                         fields.get(index)?
@@ -684,6 +688,7 @@ impl Checker {
         }
         let mut may_fail = false;
         let mut segments = Vec::with_capacity(path.segments.len());
+        let mut segment_focus_tys = Vec::with_capacity(path.segments.len());
         for pending_segment in path.segments {
             if let Ty::Result(ok, _) = self.resolve_ty(&current_source) {
                 current_source = ok.as_ref().clone();
@@ -697,12 +702,14 @@ impl Checker {
             )?;
             segments.push(segment);
             current_source = self.resolve_ty(&focus_ty);
+            segment_focus_tys.push(current_source.clone());
             may_fail |= segment_may_fail;
         }
 
         Ok(TypedFacetPath {
             source_ty: source_ty.clone(),
             focus_ty: current_source,
+            segment_focus_tys,
             update_source_ty: Ty::Hole,
             update_focus_ty: Ty::Hole,
             path_kind: Self::facet_path_kind_for_segments(&segments),
@@ -741,6 +748,7 @@ impl Checker {
                 update_focus_ty: self.resolve_ty(&update_slots.1),
                 path_kind: path.path_kind,
                 may_fail: path.may_fail,
+                segment_focus_tys: path.segment_focus_tys.iter().map(|ty| self.resolve_ty(ty)).collect(),
                 segments: path.segments,
             }),
             TypedInner::PendingFacetPath(path) => {
@@ -799,9 +807,12 @@ impl Checker {
         let focus_ty = self.resolve_ty(&right_path.focus_ty);
         let mut segments = left_path.segments;
         segments.extend(right_path.segments);
+        let mut segment_focus_tys = left_path.segment_focus_tys;
+        segment_focus_tys.extend(right_path.segment_focus_tys);
         let path = TypedFacetPath {
             source_ty: source_ty.clone(),
             focus_ty: focus_ty.clone(),
+            segment_focus_tys,
             update_source_ty: Ty::Hole,
             update_focus_ty: Ty::Hole,
             path_kind: if left_path.path_kind == TypedFacetPathKind::VariantPath
@@ -1301,7 +1312,8 @@ impl Checker {
                     false,
                 ))
             }
-            Ty::Struct(name, fields) | Ty::Record(name, fields) => {
+            Ty::Struct(name, nominal) | Ty::Record(name, nominal) => {
+                let fields = self.nominal_fields(&name, &nominal, span)?;
                 let origin_index = if matches!(self.resolve_ty(source_ty), Ty::Record(..)) {
                     let numbered = field.strip_prefix('_').is_some_and(|digits| {
                         !digits.is_empty() && digits.bytes().all(|ch| ch.is_ascii_digit())
@@ -1560,6 +1572,7 @@ impl Checker {
         let path = TypedFacetPath {
             source_ty: source_ty.clone(),
             focus_ty: focus_ty.clone(),
+            segment_focus_tys: vec![focus_ty.clone()],
             update_source_ty: Ty::Hole,
             update_focus_ty: Ty::Hole,
             path_kind: TypedFacetPathKind::InfallibleStructural,
@@ -1645,6 +1658,7 @@ impl Checker {
         let path = TypedFacetPath {
             source_ty: source_ty.clone(),
             focus_ty: focus_ty.clone(),
+            segment_focus_tys: vec![focus_ty.clone()],
             update_source_ty: Ty::Hole,
             update_focus_ty: Ty::Hole,
             path_kind: Self::facet_path_kind_for_segments(std::slice::from_ref(&typed_segment)),
@@ -1746,6 +1760,7 @@ impl Checker {
         let path = TypedFacetPath {
             source_ty: source_ty.clone(),
             focus_ty: focus_ty.clone(),
+            segment_focus_tys: vec![focus_ty.clone()],
             update_source_ty: Ty::Hole,
             update_focus_ty: Ty::Hole,
             path_kind: Self::facet_path_kind_for_segments(std::slice::from_ref(&segment)),
@@ -1843,6 +1858,7 @@ impl Checker {
         Ok(TypedFacetPath {
             source_ty: Ty::Error,
             focus_ty: focus_ty.clone(),
+            segment_focus_tys: vec![focus_ty.clone()],
             update_source_ty: Ty::Hole,
             update_focus_ty: Ty::Hole,
             path_kind: TypedFacetPathKind::InfallibleStructural,
@@ -1901,6 +1917,7 @@ impl Checker {
                     let path = TypedFacetPath {
                         source_ty: Ty::Error,
                         focus_ty: focus_ty.clone(),
+                        segment_focus_tys: vec![focus_ty.clone()],
                         update_source_ty: Ty::Hole,
                         update_focus_ty: Ty::Hole,
                         path_kind: TypedFacetPathKind::InfallibleStructural,
@@ -2003,6 +2020,8 @@ impl Checker {
             let focus_ty = self.resolve_ty(&focus_ty);
             let mut segments = path.segments;
             segments.push(segment);
+            let mut segment_focus_tys = path.segment_focus_tys;
+            segment_focus_tys.push(focus_ty.clone());
             let combined = TypedFacetPath {
                 source_ty: source_ty.clone(),
                 focus_ty: focus_ty.clone(),
@@ -2010,6 +2029,7 @@ impl Checker {
                 update_focus_ty: Ty::Hole,
                 path_kind: Self::facet_path_kind_for_segments(&segments),
                 may_fail: path.may_fail || may_fail || result_transparent,
+                segment_focus_tys,
                 segments,
             };
             return Ok(TypedNode {
@@ -2033,6 +2053,7 @@ impl Checker {
         let path = TypedFacetPath {
             source_ty: source_focus_ty,
             focus_ty: focus_ty.clone(),
+            segment_focus_tys: vec![focus_ty.clone()],
             update_source_ty: Ty::Hole,
             update_focus_ty: Ty::Hole,
             path_kind: Self::facet_path_kind_for_segments(std::slice::from_ref(&segment)),

@@ -87,7 +87,7 @@ Read::read::<Int>(Box::new(1))
     };
     assert_eq!(*ret, Ty::Int);
     assert_eq!(body.ty, Ty::Int);
-    assert!(matches!(&params[0].ty, Ty::Struct(_, fields) if fields[0].1 == Ty::Int));
+    assert!(matches!(&params[0].ty, Ty::Struct(_, fields) if fields.arguments[0] == Ty::Int));
 }
 
 #[test]
@@ -305,10 +305,7 @@ Echo::echo(Box::new(1))
     };
     assert_eq!(
         params[0].ty,
-        Ty::Struct(
-            "Global::Box".into(),
-            NominalType::new(vec![Ty::Int], vec![("value".into(), Ty::Int)])
-        )
+        Ty::Struct("Global::Box".into(), NominalType::new(vec![Ty::Int]))
     );
     assert_eq!(*ret, params[0].ty);
     assert_eq!(body.ty, params[0].ty);
@@ -490,8 +487,9 @@ fn generated_boolean_eq_uses_canonical_builtin_dispatch() {
         spire::ParserContext::project(0),
     )
     .expect("parse");
-    let resolved = sigil::resolve_staged_program(&stages, ast, &index, None).expect("resolve");
-    let nodes = scar::typecheck_with_context(
+    let resolved =
+        sigil::resolve_staged_program_with_state(&stages, ast, &index, None).expect("resolve");
+    let nodes = scar::typecheck_staged_program_with_context(
         resolved,
         scar::TypecheckContext {
             runtime_policy: sindr::policy::RuntimeSourcePolicy::std_module(),
@@ -500,7 +498,8 @@ fn generated_boolean_eq_uses_canonical_builtin_dispatch() {
             test_script: false,
         },
     )
-    .expect("typecheck");
+    .expect("typecheck")
+    .nodes;
     for method in ["eq", "neq"] {
         let expected = sindr::builtin::builtin_function_metas()
             .iter()

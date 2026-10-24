@@ -638,6 +638,11 @@ impl Checker {
         TypedFacetPath {
             source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
             focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
+            segment_focus_tys: path
+                .segment_focus_tys
+                .iter()
+                .map(|ty| self.substitute_ty_with_mapping(ty, mapping))
+                .collect(),
             update_source_ty: self.substitute_ty_with_mapping(&path.update_source_ty, mapping),
             update_focus_ty: self.substitute_ty_with_mapping(&path.update_focus_ty, mapping),
             path_kind: path.path_kind,

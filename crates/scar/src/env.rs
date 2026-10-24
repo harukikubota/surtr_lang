@@ -17,21 +17,11 @@ fn canonical_type_key(name: &str) -> String {
 }
 
 fn type_lookup_candidates(name: &str) -> Vec<String> {
-    let mut out = vec![name.to_string(), canonical_type_key(name)];
-    let segments = name.split("::").collect::<Vec<_>>();
-    if segments.len() > 1 {
-        for start in 1..segments.len() {
-            let suffix = segments[start..].join("::");
-            if !out.iter().any(|candidate| candidate == &suffix) {
-                out.push(suffix.clone());
-            }
-            let canonical_suffix = canonical_type_key(&suffix);
-            if !out.iter().any(|candidate| candidate == &canonical_suffix) {
-                out.push(canonical_suffix);
-            }
-        }
+    // `Global::` denotes the implicit root, not an arbitrary namespace suffix.
+    match name.strip_prefix("Global::") {
+        Some(surface) => vec![name.to_string(), surface.to_string()],
+        None => vec![name.to_string(), format!("Global::{name}")],
     }
-    out
 }
 
 /// Kind of user-defined type.
@@ -867,7 +857,7 @@ mod tests {
     }
 
     #[test]
-    fn private_field_lookup_accepts_global_and_module_prefixed_names() {
+    fn private_field_lookup_normalizes_only_the_implicit_global_prefix() {
         let mut env = TypeEnv::new();
         env.predeclare_type_def("User".into(), TypeKind::Struct, Vec::new(), Vec::new());
         env.resolve_type_def_signature(
@@ -880,13 +870,14 @@ mod tests {
 
         assert!(env.is_private_field("User", "password"));
         assert!(env.is_private_field("Global::User", "password"));
-        assert!(env.is_private_field("Types::User", "password"));
+        assert!(!env.is_private_field("Types::User", "password"));
         assert!(env.is_type_signature_resolved("Global::User"));
-        assert!(env.is_type_signature_resolved("Types::User"));
+        assert!(!env.is_type_signature_resolved("Types::User"));
+        assert!(env.lookup_type_def_mut("Types::User").is_none());
     }
 
     #[test]
-    fn readonly_metadata_lookup_accepts_global_and_module_prefixed_names() {
+    fn readonly_metadata_lookup_normalizes_only_the_implicit_global_prefix() {
         let mut env = TypeEnv::new();
         env.predeclare_type_def("Profile".into(), TypeKind::Struct, Vec::new(), Vec::new());
         env.resolve_type_def_signature(
@@ -899,10 +890,11 @@ mod tests {
 
         assert!(env.is_readonly_field("Profile", "name"));
         assert!(env.is_readonly_field("Global::Profile", "name"));
-        assert!(env.is_readonly_field("Types::Profile", "name"));
+        assert!(!env.is_readonly_field("Types::Profile", "name"));
+        assert!(env.field_policy("Types::Profile", "name").is_none());
         let policy = env
-            .field_policy("Types::Profile", "name")
-            .expect("field policy should resolve through surface candidates");
+            .field_policy("Global::Profile", "name")
+            .expect("the implicit root denotes the same declaration");
         assert!(!policy.private);
         assert!(policy.readonly);
     }

@@ -197,3 +197,66 @@ fn test_command_include_repeated_file_uses_the_conflicting_occurrence() {
     assert!(human.contains("entry.srt:2:"), "{human}");
     fs::remove_dir_all(temp).unwrap();
 }
+
+#[test]
+fn test_command_include_group_resolves_all_three_file_orders() {
+    let temp = unique_temp_dir("include_same_stage_orders");
+    write_source(
+        &temp.join("a.srt"),
+        "import StageB::value_b;\ndefrecord StageAData(value: StageBData)\ndefmod StageA {\n  def value_a() -> Int { StageB::read_a(StageAData(StageBData(value_b()))) }\n  def read_b(value: StageBData) -> Int { value.value }\n}",
+    );
+    write_source(
+        &temp.join("b.srt"),
+        "import StageC::value_c;\ndefrecord StageBData(value: Int)\ndefmod StageB {\n  def value_b() -> Int { value_c() }\n  def read_a(value: StageAData) -> Int { value.value.value }\n}",
+    );
+    write_source(
+        &temp.join("c.srt"),
+        "defmod StageC { def value_c() -> Int { 42 } }",
+    );
+    for order in [
+        ["a", "b", "c"],
+        ["a", "c", "b"],
+        ["b", "a", "c"],
+        ["b", "c", "a"],
+        ["c", "a", "b"],
+        ["c", "b", "a"],
+    ] {
+        let mut source = order
+            .map(|name| format!("include './{name}.srt'\n"))
+            .join("");
+        source.push_str("print(to_string(StageA::value_a()))\n");
+        write_source(&temp.join("entry.srt"), &source);
+        let output = surtr_command()
+            .current_dir(&temp)
+            .args(["run", "entry.srt"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{order:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("42"));
+    }
+    for args in [
+        vec!["check", "entry.srt"],
+        vec!["build", "entry.srt", "entry.eldr"],
+        vec!["run", "entry.eldr"],
+        vec!["repl", "--quiet", "--script", "entry.srt"],
+    ] {
+        let output = surtr_command()
+            .current_dir(&temp)
+            .args(&args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if args[0] == "run" || args[0] == "repl" {
+            assert!(String::from_utf8_lossy(&output.stdout).contains("42"));
+        }
+    }
+    fs::remove_dir_all(temp).unwrap();
+}

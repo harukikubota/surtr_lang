@@ -1,6 +1,9 @@
 mod common;
 mod support;
 
+#[path = "include_diagnostics.rs"]
+mod include_diagnostics;
+
 #[path = "build_roundtrip.rs"]
 mod build_roundtrip;
 #[path = "error_source_locations.rs"]

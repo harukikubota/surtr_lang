@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use diagnostics::{SourceId, SourceRegistry};
 use sindr::policy::SourceKind;
-use spire::ast::{Ast, Span};
+use spire::ast::Span;
 
 pub(crate) use sindr::stdlib::stdlib_module_specs;
 pub use sindr::stdlib::StdlibVariant;
@@ -234,11 +234,7 @@ pub struct ModuleInput {
     pub module_path: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct ScriptIncludeDirective {
-    pub file_path: String,
-    pub span: Span,
-}
+pub use surtr_analysis::script_include::{ScriptIncludeDirective, ScriptIncludeOrigin};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScriptSourcePrepareError {
@@ -304,29 +300,8 @@ pub fn collect_script_include_directives(
     source: &str,
     source_kind: SourceKind,
 ) -> Result<(String, Vec<ScriptIncludeDirective>), ScriptSourcePrepareError> {
-    let ast = spire::parse_with_context(
-        source,
-        crate::derive_parser_context(0, source_kind, sindr::policy::CompileUnitKind::Script, None),
-    )
-    .map_err(|error| ScriptSourcePrepareError::Parse { error })?;
-
-    let mut chars = source.chars().collect::<Vec<_>>();
-    let mut directives = Vec::new();
-    for stmt in &ast {
-        if let Ast::Include(span, file_path) = stmt {
-            directives.push(ScriptIncludeDirective {
-                file_path: file_path.clone(),
-                span: span.clone(),
-            });
-            for ch in chars.iter_mut().take(span.end).skip(span.start) {
-                if *ch != '\n' {
-                    *ch = ' ';
-                }
-            }
-        }
-    }
-
-    Ok((chars.into_iter().collect::<String>(), directives))
+    surtr_analysis::script_include::collect_script_include_directives(source, source_kind)
+        .map_err(|error| ScriptSourcePrepareError::Parse { error })
 }
 
 pub fn prepare_script_sources(
@@ -353,7 +328,10 @@ fn resolve_script_include_module_input(
     _script_source: &str,
     directive: &ScriptIncludeDirective,
 ) -> Result<ModuleInput, ScriptSourcePrepareError> {
-    let resolved_path = resolve_script_include_file_path(script_file_path, &directive.file_path);
+    let resolved_path = surtr_analysis::script_include::resolve_script_include_file_path(
+        Path::new(script_file_path),
+        &directive.file_path,
+    );
     let display_path = display_path(&resolved_path);
     let module_source =
         fs::read_to_string(&resolved_path).map_err(|e| ScriptSourcePrepareError::IncludeRead {
@@ -371,19 +349,6 @@ fn resolve_script_include_module_input(
         source: module_source,
         module_path,
     })
-}
-
-fn resolve_script_include_file_path(script_file_path: &str, raw_path: &str) -> PathBuf {
-    let candidate = Path::new(raw_path);
-    if candidate.is_absolute() {
-        return candidate.to_path_buf();
-    }
-
-    let base_dir = Path::new(script_file_path)
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    base_dir.join(candidate)
 }
 
 fn lib_relative_path(path: &Path) -> String {
@@ -540,6 +505,7 @@ pub struct ModuleSources {
     pub builtin_module_path: Option<String>,
     pub module_source_ids: Vec<SourceId>,
     pub module_stages: Vec<Vec<StagedModule>>,
+    pub include_origins: Vec<ScriptIncludeOrigin>,
 }
 
 fn build_module_sources_from_stage_specs(
@@ -587,6 +553,7 @@ fn build_module_sources_from_stage_specs(
         builtin_module_path: builtin.module_path.clone(),
         module_source_ids,
         module_stages,
+        include_origins: Vec::new(),
     })
 }
 
@@ -599,6 +566,7 @@ pub struct CompileSources {
     pub builtin_module_path: Option<String>,
     pub module_source_ids: Vec<SourceId>,
     pub module_stages: Vec<Vec<StagedModule>>,
+    pub include_origins: Vec<ScriptIncludeOrigin>,
     pub stdlib_variant: StdlibVariant,
 }
 
@@ -756,6 +724,26 @@ pub fn extend_module_sources_with_module_stages(
     Ok(module_sources)
 }
 
+/// Append all script includes as one stage and retain exact directive occurrences.
+pub fn extend_module_sources_with_script_includes(
+    module_sources: ModuleSources,
+    modules: &[ModuleInput],
+    directives: &[ScriptIncludeDirective],
+) -> Result<ModuleSources, LoadError> {
+    assert_eq!(modules.len(), directives.len(), "each include has a source");
+    if modules.is_empty() {
+        return Ok(module_sources);
+    }
+    let origins = surtr_analysis::script_include::script_include_origins(
+        module_sources.module_stages.len(),
+        directives,
+    );
+    let mut extended =
+        extend_module_sources_with_module_stages(module_sources, &[modules.to_vec()])?;
+    extended.include_origins.extend(origins);
+    Ok(extended)
+}
+
 pub fn collect_module_sources_with_module_stages(
     module_input_stages: &[Vec<ModuleInput>],
 ) -> Result<ModuleSources, LoadError> {
@@ -782,6 +770,7 @@ pub fn compose_script_compile_sources(
         builtin_module_path: module_sources.builtin_module_path,
         module_source_ids: module_sources.module_source_ids,
         module_stages: module_sources.module_stages,
+        include_origins: module_sources.include_origins,
         stdlib_variant: StdlibVariant::Default,
     }
 }
@@ -801,6 +790,7 @@ pub fn compose_script_compile_sources_with_stdlib_variant(
         builtin_module_path: module_sources.builtin_module_path,
         module_source_ids: module_sources.module_source_ids,
         module_stages: module_sources.module_stages,
+        include_origins: module_sources.include_origins,
         stdlib_variant,
     }
 }
@@ -857,6 +847,7 @@ pub(crate) struct ReplSources {
     pub(crate) sources: SourceRegistry,
     pub(crate) builtin_source_id: SourceId,
     pub(crate) module_stages: Vec<Vec<StagedModule>>,
+    pub(crate) include_origins: Vec<ScriptIncludeOrigin>,
     pub(crate) repl_source_id: SourceId,
     pub(crate) repl_module_path: String,
 }
@@ -864,16 +855,23 @@ pub(crate) struct ReplSources {
 pub(crate) fn collect_repl_sources_with_module_stages(
     module_input_stages: &[Vec<ModuleInput>],
 ) -> Result<ReplSources, LoadError> {
-    let mut module_sources = collect_module_sources_with_module_stages(module_input_stages)?;
+    let module_sources = collect_module_sources_with_module_stages(module_input_stages)?;
+    Ok(collect_repl_sources_from_module_sources(module_sources))
+}
+
+pub(crate) fn collect_repl_sources_from_module_sources(
+    mut module_sources: ModuleSources,
+) -> ReplSources {
     let repl_source_id = module_sources.sources.register(REPL_MODULE_NAME, "");
 
-    Ok(ReplSources {
+    ReplSources {
         sources: module_sources.sources,
         builtin_source_id: module_sources.builtin_source_id,
         module_stages: module_sources.module_stages,
+        include_origins: module_sources.include_origins,
         repl_source_id,
         repl_module_path: REPL_PSEUDO_MODULE_PATH.to_string(),
-    })
+    }
 }
 
 #[cfg(test)]
@@ -1090,6 +1088,53 @@ mod tests {
                 "StyledDoc",
             ]
         );
+    }
+
+    #[test]
+    fn script_includes_share_one_stage_and_preserve_each_origin() {
+        let prefix = collect_module_sources_with_module_stages(&[]).unwrap();
+        let stage_index = prefix.module_stages.len();
+        let empty = extend_module_sources_with_script_includes(prefix.clone(), &[], &[]).unwrap();
+        assert_eq!(empty.module_stages, prefix.module_stages);
+        assert!(empty.include_origins.is_empty());
+        let module = ModuleInput {
+            file_name: "repeat.srt".into(),
+            source: "defmod Repeated {}".into(),
+            module_path: "Repeated".into(),
+        };
+        let directives = vec![
+            ScriptIncludeDirective {
+                file_path: "repeat.srt".into(),
+                span: Span { start: 0, end: 20 },
+            },
+            ScriptIncludeDirective {
+                file_path: "repeat.srt".into(),
+                span: Span { start: 21, end: 41 },
+            },
+            ScriptIncludeDirective {
+                file_path: "repeat.srt".into(),
+                span: Span { start: 42, end: 62 },
+            },
+        ];
+        let sources = extend_module_sources_with_script_includes(
+            prefix,
+            &[module.clone(), module.clone(), module],
+            &directives,
+        )
+        .unwrap();
+        assert_eq!(sources.module_stages.len(), stage_index + 1);
+        assert_eq!(sources.module_stages[stage_index].len(), 3);
+        assert_eq!(
+            sources.module_stages[stage_index][0].source_id,
+            sources.module_stages[stage_index][2].source_id
+        );
+        for (source_index, origin) in sources.include_origins.iter().enumerate() {
+            assert_eq!(
+                (origin.stage_index, origin.source_index),
+                (stage_index, source_index)
+            );
+            assert_eq!(origin.directive, directives[source_index]);
+        }
     }
 
     #[test]

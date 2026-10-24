@@ -1829,7 +1829,10 @@ fn safebind_top_ok_pattern_requires_nested_result_rhs() {
 Ok(num) =? value"#,
     );
     let err = typecheck(resolved).expect_err("typecheck should fail");
-    assert_eq!(err.reason(), Some(diagnostics::TypeDiagnosticReason::SafeBindWholeInputAfterExtraction));
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::SafeBindWholeInputAfterExtraction)
+    );
 }
 
 fn safebind_top_ok_pattern_accepts_nested_result_rhs() {
@@ -3810,11 +3813,11 @@ printable: Int = boxed.value"#,
         .expect("expected boxed binding");
     assert!(
         matches!(boxed_bind.0, Ty::Struct(name, fields) if name == "Global::Box"
-        && matches!(fields.as_slice(), [(field, Ty::Int)] if field == "value"))
+        && matches!(fields.arguments.as_slice(), [Ty::Int]))
     );
     assert!(
         matches!(boxed_bind.1.ty, Ty::Struct(ref name, ref fields) if name == "Global::Box"
-        && matches!(fields.as_slice(), [(field, Ty::Int)] if field == "value"))
+        && matches!(fields.arguments.as_slice(), [Ty::Int]))
     );
 }
 
@@ -3844,13 +3847,11 @@ text: String = pair.right"#,
         .expect("expected pair binding");
     assert!(
         matches!(pair_bind.0, Ty::Struct(name, fields) if name == "Global::Pair"
-        && matches!(fields.as_slice(),
-            [(left, Ty::Int), (right, Ty::Str)] if left == "left" && right == "right"))
+        && matches!(fields.arguments.as_slice(), [Ty::Int, Ty::Str]))
     );
     assert!(
         matches!(pair_bind.1.ty, Ty::Struct(ref name, ref fields) if name == "Global::Pair"
-        && matches!(fields.as_slice(),
-            [(left, Ty::Int), (right, Ty::Str)] if left == "left" && right == "right"))
+        && matches!(fields.arguments.as_slice(), [Ty::Int, Ty::Str]))
     );
 }
 
@@ -9573,13 +9574,13 @@ b = Box(10ms)"#,
         a.1,
         Ty::Struct(name, fields)
             if name == "Global::Box"
-                && matches!(fields.as_slice(), [(field, Ty::Int)] if field == "value")
+                && matches!(fields.arguments.as_slice(), [Ty::Int])
     ));
     assert!(matches!(
         a.2.ty,
         Ty::Struct(ref name, ref fields)
             if name == "Global::Box"
-                && matches!(fields.as_slice(), [(field, Ty::Int)] if field == "value")
+                && matches!(fields.arguments.as_slice(), [Ty::Int])
     ));
 
     assert_eq!(b.0, "b");
@@ -9587,17 +9588,13 @@ b = Box(10ms)"#,
         b.1,
         Ty::Struct(name, fields)
             if name == "Global::Box"
-                && matches!(fields.as_slice(), [(field, Ty::Struct(inner, _inner_fields))]
-                    if field == "value"
-                        && inner == "Duration")
+                && matches!(fields.arguments.as_slice(), [Ty::Struct(inner, _)] if inner == "Duration")
     ));
     assert!(matches!(
         b.2.ty,
         Ty::Struct(ref name, ref fields)
             if name == "Global::Box"
-                && matches!(fields.as_slice(), [(field, Ty::Struct(inner, _inner_fields))]
-                    if field == "value"
-                        && inner == "Duration")
+                && matches!(fields.arguments.as_slice(), [Ty::Struct(inner, _)] if inner == "Duration")
     ));
 }
 
@@ -9641,15 +9638,13 @@ fn generic_struct_constructor_calls_remain_polymorphic_within_closure_body() {
         raw.1,
         Ty::Struct(name, fields)
             if (name == "Range" || name == "Global::Range")
-                && matches!(fields.as_slice(), [(min, Ty::Int), (max, Ty::Int)]
-                    if min == "min" && max == "max")
+                && matches!(fields.arguments.as_slice(), [Ty::Int])
     ));
     assert!(matches!(
         raw.2.ty,
         Ty::Struct(ref name, ref fields)
             if (name == "Range" || name == "Global::Range")
-                && matches!(fields.as_slice(), [(min, Ty::Int), (max, Ty::Int)]
-                    if min == "min" && max == "max")
+                && matches!(fields.arguments.as_slice(), [Ty::Int])
     ));
 
     assert_eq!(dur.0, "dur");
@@ -9657,27 +9652,13 @@ fn generic_struct_constructor_calls_remain_polymorphic_within_closure_body() {
         dur.1,
         Ty::Struct(name, fields)
             if (name == "Range" || name == "Global::Range")
-                && matches!(
-                    fields.as_slice(),
-                    [(min, Ty::Struct(inner_min, _)), (max, Ty::Struct(inner_max, _))]
-                        if min == "min"
-                            && max == "max"
-                            && inner_min == "Duration"
-                            && inner_max == "Duration"
-                )
+                && matches!(fields.arguments.as_slice(), [Ty::Struct(inner, _)] if inner == "Duration")
     ));
     assert!(matches!(
         dur.2.ty,
         Ty::Struct(ref name, ref fields)
             if (name == "Range" || name == "Global::Range")
-                && matches!(
-                    fields.as_slice(),
-                    [(min, Ty::Struct(inner_min, _)), (max, Ty::Struct(inner_max, _))]
-                        if min == "min"
-                            && max == "max"
-                            && inner_min == "Duration"
-                            && inner_max == "Duration"
-                )
+                && matches!(fields.arguments.as_slice(), [Ty::Struct(inner, _)] if inner == "Duration")
     ));
 }
 
@@ -10608,7 +10589,11 @@ fn typecheck_staged_program_keeps_process_specs() {
     let typed: TypedProgram = typecheck_resolved_program_suffix_with_builtin_prelude(resolved)
         .expect("typecheck should succeed");
 
-    assert_eq!(typed.process_specs.len(), 2);
+    assert_eq!(
+        typed.process_specs.len(),
+        1,
+        "suffix exports its own process metadata"
+    );
     let spec = typed
         .process_specs
         .iter()

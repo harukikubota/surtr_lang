@@ -1,56 +1,33 @@
 use diagnostics::{
     DiagnosticData, DiagnosticLabel, DiagnosticReason, DiagnosticSpec, ParseDiagnosticReason,
-    SourceFact, SourceId, SourceRegistry, SourceRole,
+    SourceFact, SourceId, SourceRole,
 };
 
-use crate::{CompileSources, ModuleInput, ScriptIncludeDirective};
+use crate::{CompileSources, ScriptIncludeDirective};
 
 /// Attach include origins to producer-classified parser source restrictions.
 /// Other parser failures retain their original location.
 pub fn attach_include_diagnostic(
-    sources: &SourceRegistry,
-    script_source_id: SourceId,
-    source_id: SourceId,
+    compile_sources: &CompileSources,
+    error: &crate::ModuleStageParseError,
     spec: DiagnosticSpec,
-    directives: &[ScriptIncludeDirective],
-    modules: &[ModuleInput],
 ) -> (SourceId, DiagnosticSpec) {
-    let Some(cause) = spec.structured.as_ref() else {
-        return (source_id, spec);
-    };
-    let description = match cause.reason {
-        DiagnosticReason::Parse(ParseDiagnosticReason::UserBuiltinDeclaration) => "@builtin",
-        DiagnosticReason::Parse(ParseDiagnosticReason::UserStandardTypeDeclaration) => {
-            "@FacetPathKind Type"
-        }
-        DiagnosticReason::Parse(ParseDiagnosticReason::SourcePolicy) => {
-            let DiagnosticData::Parse(data) = &cause.data else {
-                unreachable!("parser policy data")
-            };
-            match data.guidance {
-                Some(diagnostics::ParseDiagnosticGuidance::TopLevelDeclaration) => {
-                    "this top-level declaration in a module compile unit"
-                }
-                Some(diagnostics::ParseDiagnosticGuidance::TopLevelExpression) => {
-                    "a top-level expression in a module compile unit"
-                }
-                _ => return (source_id, spec),
-            }
-        }
-        _ => return (source_id, spec),
-    };
-    let Some((directive, _)) = directives
-        .iter()
-        .zip(modules)
-        .find(|(_, module)| sources.file_name(source_id) == Some(module.file_name.as_str()))
+    let source_id = error.source_id;
+    let Some(description) = surtr_analysis::script_include::include_policy_description(&spec)
     else {
         return (source_id, spec);
     };
+    let Some(origin) = compile_sources.include_origins.iter().find(|origin| {
+        origin.stage_index == error.stage_index && origin.source_index == error.source_index
+    }) else {
+        return (source_id, spec);
+    };
+
     attach_at(
-        script_source_id,
+        compile_sources.user_source_id,
         source_id,
         spec,
-        directive,
+        &origin.directive,
         Some(description),
     )
 }
@@ -62,7 +39,6 @@ pub fn attach_resolve_include_diagnostic(
     error: &sigil::error::ResolveError,
     source_id: SourceId,
     spec: DiagnosticSpec,
-    directives: &[ScriptIncludeDirective],
 ) -> (SourceId, DiagnosticSpec) {
     if error.diagnostic.reason != sigil::error::ResolveErrorReason::DeclarationCollision {
         return (source_id, spec);
@@ -78,29 +54,22 @@ pub fn attach_resolve_include_diagnostic(
     let conflicting = error.related_labels[1]
         .source
         .expect("conflicting declaration provenance");
-    let include_start = compile_sources
-        .module_stages
-        .len()
-        .checked_sub(directives.len())
-        .expect("each include occupies a module stage");
-    if conflicting.stage_index < include_start
-        || conflicting.stage_index >= compile_sources.module_stages.len()
-    {
+    let Some(origin) = compile_sources.include_origins.iter().find(|origin| {
+        origin.stage_index == conflicting.stage_index
+            && origin.source_index == conflicting.source_index
+    }) else {
         return (source_id, spec);
-    }
-    let stage = &compile_sources.module_stages[conflicting.stage_index];
-    assert_eq!(stage.len(), 1, "each include stage has one source");
-    assert_eq!(conflicting.source_index, 0, "include source index");
+    };
     assert_eq!(
-        stage[0].source_id, source_id,
+        compile_sources.module_stages[origin.stage_index][origin.source_index].source_id, source_id,
         "conflicting source occurrence"
     );
-    let directive = &directives[conflicting.stage_index - include_start];
+
     attach_at(
         compile_sources.user_source_id,
         source_id,
         spec,
-        directive,
+        &origin.directive,
         None,
     )
 }

@@ -673,12 +673,26 @@ impl Checker {
                 name.clone(),
                 arguments.iter().map(recurse).collect::<Result<_, _>>()?,
             )),
-            Ty::Struct(name, fields) => {
-                Ok(Ty::Struct(name.clone(), fields.try_map_types(recurse)?))
-            }
-            Ty::Record(name, fields) => {
-                Ok(Ty::Record(name.clone(), fields.try_map_types(recurse)?))
-            }
+            Ty::Struct(name, fields) => Ok(Ty::Struct(
+                name.clone(),
+                NominalType::new(
+                    fields
+                        .arguments
+                        .iter()
+                        .map(recurse)
+                        .collect::<Result<_, _>>()?,
+                ),
+            )),
+            Ty::Record(name, fields) => Ok(Ty::Record(
+                name.clone(),
+                NominalType::new(
+                    fields
+                        .arguments
+                        .iter()
+                        .map(recurse)
+                        .collect::<Result<_, _>>()?,
+                ),
+            )),
             _ => Ok(ty.clone()),
         }
     }
@@ -991,6 +1005,43 @@ impl Checker {
         Ok(())
     }
 
+    /// Expand only finite value occurrences. Symbolic parameter/template projections
+    /// remain in the callable's stored call recipes and are substituted at use sites.
+    fn nominal_source_fields(
+        &self,
+        name: &str,
+        nominal: &NominalType,
+        source: &Source,
+        span: &Span,
+    ) -> Result<Vec<(Ty, Source)>, TypeError> {
+        match &source.0 {
+            Provenance::Fields(_) | Provenance::Variants(_) => Ok(self
+                .nominal_fields(name, nominal, span)?
+                .into_iter()
+                .enumerate()
+                .map(|(index, (_, ty))| {
+                    let projected = self.project_provenance(
+                        source,
+                        &Projection::Field { index, tag: None },
+                        &ty,
+                    );
+                    (ty, projected)
+                })
+                .collect()),
+            Provenance::Intersection(sources) => {
+                let mut fields = Vec::new();
+                for source in sources {
+                    fields.extend(self.nominal_source_fields(name, nominal, source, span)?);
+                }
+                Ok(fields)
+            }
+            Provenance::ConstrainedTemplate { source, .. } => {
+                self.nominal_source_fields(name, nominal, source, span)
+            }
+            _ => Ok(Vec::new()),
+        }
+    }
+
     fn check_parameter_constructor_source(
         &self,
         parameter: &Ty,
@@ -1067,18 +1118,27 @@ impl Checker {
                     )?;
                 }
             }
-            Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
-                for (index, (_, field)) in nominal.iter().enumerate() {
+            Ty::Struct(name, nominal) | Ty::Record(name, nominal) => {
+                for (index, argument) in nominal.arguments.iter().enumerate() {
                     self.check_parameter_constructor_source(
-                        field,
+                        argument,
                         &self.project_provenance(
                             source,
-                            &Projection::Field { index, tag: None },
-                            field,
+                            &Projection::TypeArgument(index),
+                            argument,
                         ),
                         span,
                         callable,
                     )?;
+                }
+                if self.provenance_type_has(parameter, false) {
+                    for (field, projected) in
+                        self.nominal_source_fields(name, nominal, source, span)?
+                    {
+                        self.check_parameter_constructor_source(
+                            &field, &projected, span, callable,
+                        )?;
+                    }
                 }
             }
             _ => {}
@@ -1196,23 +1256,53 @@ impl Checker {
         }
     }
 
-    fn has_callback_slot(template: &Ty) -> bool {
-        match template {
-            Ty::Func(..) | Ty::UserFunc { .. } | Ty::BuiltinFunc { .. } => true,
-            Ty::Tuple(items) | Ty::Enum(_, items) | Ty::SelfApp(items) => {
-                items.iter().any(Self::has_callback_slot)
+    /// Inspect the finite declaration graph; actual value occurrences are checked separately.
+    fn provenance_type_has(&self, template: &Ty, callback: bool) -> bool {
+        let mut pending = vec![template.clone()];
+        let mut expanded = HashSet::new();
+        while let Some(ty) = pending.pop() {
+            if callback
+                && matches!(
+                    ty,
+                    Ty::Func(..) | Ty::UserFunc { .. } | Ty::BuiltinFunc { .. }
+                )
+            {
+                return true;
             }
-            Ty::Struct(_, nominal) | Ty::Record(_, nominal) => nominal
-                .iter()
-                .any(|(_, field)| Self::has_callback_slot(field)),
-            Ty::List(item)
-            | Ty::Lazy(item)
-            | Ty::MatchResult(item)
-            | Ty::ExtractorClosure(item)
-            | Ty::Pid(item) => Self::has_callback_slot(item),
-            Ty::Result(ok, error) => Self::has_callback_slot(ok) || Self::has_callback_slot(error),
-            _ => false,
+            if !callback && self.constructor_capability_for_type(&ty).is_some() {
+                return true;
+            }
+            match ty {
+                Ty::Tuple(items) | Ty::Enum(_, items) | Ty::SelfApp(items) => pending.extend(items),
+                Ty::Struct(name, nominal) | Ty::Record(name, nominal) => {
+                    pending.extend(nominal.arguments);
+                    if expanded.insert(name.clone()) {
+                        let Some(definition) = self.env.lookup_type_def(&name) else {
+                            return true;
+                        };
+                        if definition.state != crate::env::TypeDefState::SignatureResolved {
+                            return true;
+                        }
+                        pending.extend(definition.fields.iter().map(|(_, ty)| ty.clone()));
+                    }
+                }
+                Ty::List(item)
+                | Ty::Lazy(item)
+                | Ty::MatchResult(item)
+                | Ty::ExtractorClosure(item)
+                | Ty::Pid(item) => pending.push(*item),
+                Ty::Result(ok, error) => {
+                    pending.push(*ok);
+                    pending.push(*error);
+                }
+                _ => {}
+            }
         }
+        false
+    }
+
+    fn has_callback_slot(&self, template: &Ty) -> bool {
+        self.provenance_type_has(template, true)
     }
 
     /// Check function-valued slots through the same structural projections used
@@ -1222,7 +1312,7 @@ impl Checker {
         parameters: &[Ty],
         arguments: &[TypedNode],
     ) -> Result<(), TypeError> {
-        if !parameters.iter().any(Self::has_callback_slot) {
+        if !parameters.iter().any(|ty| self.has_callback_slot(ty)) {
             return Ok(());
         }
         let sources = arguments
@@ -1242,7 +1332,7 @@ impl Checker {
         sources: &[Source],
         span: &Span,
     ) -> Result<(), TypeError> {
-        if !parameters.iter().any(Self::has_callback_slot) {
+        if !parameters.iter().any(|ty| self.has_callback_slot(ty)) {
             return Ok(());
         }
         let mut variables = HashMap::new();
@@ -1268,7 +1358,7 @@ impl Checker {
         variables: &Bindings,
         span: &Span,
     ) -> Result<(), TypeError> {
-        if !Self::has_callback_slot(template) {
+        if !self.has_callback_slot(template) {
             return Ok(());
         }
         match template {
@@ -1351,18 +1441,21 @@ impl Checker {
                 }
                 Ok(())
             }
-            Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
-                for (index, (_, item)) in nominal.iter().enumerate() {
+            Ty::Struct(name, nominal) | Ty::Record(name, nominal) => {
+                for (index, argument) in nominal.arguments.iter().enumerate() {
                     self.check_callback_slot_provenance(
-                        item,
+                        argument,
                         &self.project_provenance(
                             source,
-                            &Projection::Field { index, tag: None },
-                            item,
+                            &Projection::TypeArgument(index),
+                            argument,
                         ),
                         variables,
                         span,
                     )?;
+                }
+                for (item, projected) in self.nominal_source_fields(name, nominal, source, span)? {
+                    self.check_callback_slot_provenance(&item, &projected, variables, span)?;
                 }
                 Ok(())
             }
@@ -1868,6 +1961,68 @@ impl Checker {
             .unwrap_or_else(|| (Provenance::RequiresProof, self.resolve_ty(expected)))
     }
 
+    fn nominal_argument_provenance(
+        &self,
+        source: &Source,
+        fields: &[Source],
+        index: usize,
+        actual: &Ty,
+    ) -> Source {
+        let (Ty::Struct(name, nominal) | Ty::Record(name, nominal)) = &source.1 else {
+            return (Provenance::RequiresProof, actual.clone());
+        };
+        let schema = match self.nominal_fields(name, nominal, &Span { start: 0, end: 0 }) {
+            Ok(schema) => schema,
+            Err(error) => {
+                return (
+                    Provenance::ConstructorApplication(ConstructorApplicationOutcome::Rejected {
+                        failures: vec![ConstructorProjectionFailure::ProofError(Box::new(error))],
+                    }),
+                    actual.clone(),
+                )
+            }
+        };
+        if schema.len() != fields.len() {
+            return (
+                Provenance::ConstructorApplication(ConstructorApplicationOutcome::Rejected {
+                    failures: vec![ConstructorProjectionFailure::ProofError(Box::new(
+                        self.typecheck_invariant_error(
+                            "Nominal provenance has inconsistent field count",
+                            &Span { start: 0, end: 0 },
+                        ),
+                    ))],
+                }),
+                actual.clone(),
+            );
+        }
+        let Some(definition) = self.env.lookup_type_def(name) else {
+            return (
+                Provenance::ConstructorApplication(ConstructorApplicationOutcome::Rejected {
+                    failures: vec![ConstructorProjectionFailure::MissingImplTargetMetadata],
+                }),
+                actual.clone(),
+            );
+        };
+        let Some(variable) = definition.type_param_vars.get(index) else {
+            return (
+                Provenance::ConstructorApplication(ConstructorApplicationOutcome::Rejected {
+                    failures: vec![ConstructorProjectionFailure::MissingNominalArguments],
+                }),
+                actual.clone(),
+            );
+        };
+        let mut variables = HashMap::new();
+        for ((_, template), field) in definition.fields.iter().zip(fields) {
+            if let Some(outcome) =
+                self.collect_provenance_variables(template, field, &mut variables)
+            {
+                return (Provenance::ConstructorApplication(outcome), actual.clone());
+            }
+        }
+        let sources = variables.remove(variable).unwrap_or_default();
+        (self.common_constructor_provenance(&sources), actual.clone())
+    }
+
     fn project_provenance(
         &self,
         source: &Source,
@@ -1877,9 +2032,18 @@ impl Checker {
         if let Projection::ConstructorSlot { capability, index } = projection {
             return self.project_constructor_slot(source, capability, *index, expected);
         }
-        let actual = self
-            .projection_type(&source.1, projection)
-            .unwrap_or_else(|| expected.clone());
+        let actual = match self.projection_type(&source.1, projection) {
+            Ok(Some(ty)) => ty,
+            Ok(None) => expected.clone(),
+            Err(error) => {
+                return (
+                    Provenance::ConstructorApplication(ConstructorApplicationOutcome::Rejected {
+                        failures: vec![ConstructorProjectionFailure::ProofError(Box::new(error))],
+                    }),
+                    expected.clone(),
+                )
+            }
+        };
         match &source.0 {
             Provenance::ConstrainedTemplate {
                 source: projected, ..
@@ -1896,6 +2060,9 @@ impl Checker {
                     .get(*index)
                     .cloned()
                     .unwrap_or((Provenance::RequiresProof, actual)),
+                Projection::TypeArgument(index) => {
+                    self.nominal_argument_provenance(source, fields, *index, &actual)
+                }
                 _ => (Provenance::RequiresProof, actual),
             },
             Provenance::Variants(variants) => match projection {
@@ -1912,6 +2079,15 @@ impl Checker {
                     }
                 }
                 Projection::TypeArgument(index) => {
+                    if matches!(&source.1, Ty::Struct(..) | Ty::Record(..)) {
+                        let sources = variants
+                            .iter()
+                            .map(|(_, fields)| {
+                                self.nominal_argument_provenance(source, fields, *index, &actual)
+                            })
+                            .collect::<Vec<_>>();
+                        return (self.common_constructor_provenance(&sources), actual);
+                    }
                     let Ty::Enum(name, _) = &source.1 else {
                         return (Provenance::RequiresProof, actual);
                     };
@@ -1975,10 +2151,19 @@ impl Checker {
                     }
                     _ => ty.clone(),
                 };
-                if let Some(template) = self.projection_type(&concrete, projection) {
-                    self.template_provenance(&template, &actual, variables)
-                } else {
-                    (Provenance::RequiresProof, actual)
+                match self.projection_type(&concrete, projection) {
+                    Ok(Some(template)) => self.template_provenance(&template, &actual, variables),
+                    Ok(None) => (Provenance::RequiresProof, actual),
+                    Err(error) => (
+                        Provenance::ConstructorApplication(
+                            ConstructorApplicationOutcome::Rejected {
+                                failures: vec![ConstructorProjectionFailure::ProofError(Box::new(
+                                    error,
+                                ))],
+                            },
+                        ),
+                        actual,
+                    ),
                 }
             }
             Provenance::Parameter(_) | Provenance::Projection { .. } => (
@@ -1992,12 +2177,19 @@ impl Checker {
         }
     }
 
-    fn projection_type(&self, ty: &Ty, projection: &Projection) -> Option<Ty> {
-        match (ty, projection) {
+    fn projection_type(&self, ty: &Ty, projection: &Projection) -> Result<Option<Ty>, TypeError> {
+        if let (
+            Ty::Struct(name, nominal) | Ty::Record(name, nominal),
+            Projection::Field { index, .. },
+        ) = (ty, projection)
+        {
+            return Ok(self
+                .nominal_fields(name, nominal, &Span { start: 0, end: 0 })?
+                .get(*index)
+                .map(|(_, ty)| ty.clone()));
+        }
+        Ok((|| match (ty, projection) {
             (Ty::Tuple(items), Projection::Field { index, .. }) => items.get(*index).cloned(),
-            (Ty::Struct(_, fields) | Ty::Record(_, fields), Projection::Field { index, .. }) => {
-                fields.get(*index).map(|(_, ty)| ty.clone())
-            }
             (Ty::Struct(_, nominal) | Ty::Record(_, nominal), Projection::TypeArgument(index)) => {
                 nominal.arguments.get(*index).cloned()
             }
@@ -2065,7 +2257,7 @@ impl Checker {
                     .map(|payload| self.substitute_ty_with_mapping(payload, &mapping))
             }
             _ => None,
-        }
+        })())
     }
 
     fn concrete_template(&self, template: &Ty, actual: &Ty) -> ConstructorApplicationOutcome {
@@ -2239,19 +2431,6 @@ impl Checker {
                             source,
                             &Projection::TypeArgument(index),
                             argument,
-                        ),
-                        variables,
-                    ) {
-                        return Some(outcome);
-                    }
-                }
-                for (index, (_, item)) in nominal.iter().enumerate() {
-                    if let Some(outcome) = self.collect_provenance_variables(
-                        item,
-                        &self.project_provenance(
-                            source,
-                            &Projection::Field { index, tag: None },
-                            item,
                         ),
                         variables,
                     ) {
@@ -2634,6 +2813,174 @@ impl Checker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nested_nominal_callback_sources_keep_finite_projection_proofs() {
+        const DEFINITIONS: &str = r#"
+defstruct ProvenanceBox<$T> { value: $T }
+impl ProvenanceBox {
+  def new(value: $T) -> ProvenanceBox<$T> { ProvenanceBox { value } }
+}
+def retain(value: $F<Int>) -> $F<Int> where $F: Functor {
+  Functor::fmap(value, {|item| item})
+}
+def stronger(value: Monad<Int>) -> Int { 1 }
+def apply_box(boxed: ProvenanceBox<ProvenanceBox<($A -> Int)>>, value: $A) -> Int {
+  callback = boxed.value.value
+  callback(value)
+}
+"#;
+        for (producer, accepted) in [
+            ("Identity::new(7)", true),
+            ("retain(Identity::new(7))", false),
+        ] {
+            let source = format!("{DEFINITIONS}value = {producer}\napply_box(ProvenanceBox::new(ProvenanceBox::new(&stronger)), value)");
+            let ast = spire::parse_with_context(&source, spire::ParserContext::project(0)).unwrap();
+            let resolved = crate::test_support::resolve_ast_with_builtin_prelude(ast).unwrap();
+            let result = crate::test_support::typecheck(resolved);
+            if accepted {
+                result.expect("deep callable keeps sufficient capability");
+            } else {
+                let error = result.expect_err("deep callable cannot strengthen its input view");
+                assert_eq!(
+                    error.reason(),
+                    Some(TypeDiagnosticReason::MissingTypeConstructorCapability),
+                    "{error:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn nominal_type_argument_joins_every_occurrence_of_its_formal_variable() {
+        let source = r#"
+defstruct RepeatedProvenance<$T> { first: $T, second: $T }
+impl RepeatedProvenance {
+  def new(first: $T, second: $T) -> RepeatedProvenance<$T> {
+    RepeatedProvenance { first, second }
+  }
+}
+defstruct SeparateProvenance<$A, $B> { first: $A, second: $B }
+impl SeparateProvenance {
+  def new(first: $A, second: $B) -> SeparateProvenance<$A, $B> {
+    SeparateProvenance { first, second }
+  }
+}
+"#;
+        let ast = spire::parse_with_context(source, spire::ParserContext::project(0)).unwrap();
+        let resolved = crate::test_support::resolve_ast_with_builtin_prelude(ast).unwrap();
+        let mut checker = Checker::with_persistent_state(
+            crate::test_support::session_from_cached_std_prelude().state,
+            TypecheckContext::default(),
+        );
+        checker.check_program(resolved).unwrap();
+        let functor = checker.trait_key_by_short_name("Functor").unwrap();
+        let monad = checker.trait_key_by_short_name("Monad").unwrap();
+        let actual = Ty::Enum("Identity".into(), vec![Ty::Int]);
+        let fields = vec![
+            (Provenance::constrained(monad.clone()), actual.clone()),
+            (Provenance::constrained(functor.clone()), actual.clone()),
+        ];
+        let repeated = (
+            Provenance::Fields(fields.clone()),
+            Ty::Struct(
+                "RepeatedProvenance".into(),
+                NominalType::new(vec![actual.clone()]),
+            ),
+        );
+        let projected =
+            checker.project_provenance(&repeated, &Projection::TypeArgument(0), &actual);
+        assert!(matches!(&projected.0, Provenance::Intersection(sources) if sources.len() == 2));
+        assert!(checker
+            .constructor_provenance_allows(&projected.0, &functor, &actual)
+            .unwrap());
+        assert!(
+            !checker
+                .constructor_provenance_allows(&projected.0, &monad, &actual)
+                .unwrap(),
+            "a repeated formal variable must retain the weaker source occurrence"
+        );
+
+        // Equal concrete argument types must not merge distinct declaration binders.
+        let separate = (
+            Provenance::Fields(fields),
+            Ty::Struct(
+                "SeparateProvenance".into(),
+                NominalType::new(vec![actual.clone(), actual.clone()]),
+            ),
+        );
+        let first = checker.project_provenance(&separate, &Projection::TypeArgument(0), &actual);
+        let second = checker.project_provenance(&separate, &Projection::TypeArgument(1), &actual);
+        assert!(checker
+            .constructor_provenance_allows(&first.0, &monad, &actual)
+            .unwrap());
+        assert!(!checker
+            .constructor_provenance_allows(&second.0, &monad, &actual)
+            .unwrap());
+    }
+
+    #[test]
+    fn captured_symbolic_nominal_projection_checks_factory_input_sources() {
+        const DEFINITIONS: &str = r#"
+defstruct CapturedProvenanceBox<$T> { value: $T }
+impl CapturedProvenanceBox {
+  def new(value: $T) -> CapturedProvenanceBox<$T> { CapturedProvenanceBox { value } }
+}
+def retain_captured(value: $F<Int>) -> $F<Int> where $F: Functor {
+  Functor::fmap(value, {|item| item})
+}
+def stronger_captured(value: Monad<Int>) -> Int { 1 }
+def apply_captured_box(boxed: CapturedProvenanceBox<CapturedProvenanceBox<($A -> Int)>>, value: $A) -> Int {
+  callback = boxed.value.value
+  callback(value)
+}
+def capture_box_projection(boxed: CapturedProvenanceBox<CapturedProvenanceBox<($A -> Int)>>, witness: $A) -> ($A -> Int) {
+  _ = witness
+  &apply_captured_box(boxed, &1)
+}
+def unanchored_box_projection(boxed: CapturedProvenanceBox<CapturedProvenanceBox<($A -> Int)>>) -> ($A -> Int) {
+  &apply_captured_box(boxed, &1)
+}
+"#;
+        for (producer, accepted) in [
+            ("Identity::new(7)", true),
+            ("retain_captured(Identity::new(7))", false),
+        ] {
+            let source = format!("{DEFINITIONS}value = {producer}\ncallback = capture_box_projection(CapturedProvenanceBox::new(CapturedProvenanceBox::new(&stronger_captured)), value)\ncallback(value)");
+            let ast = spire::parse_with_context(&source, spire::ParserContext::project(0)).unwrap();
+            let resolved = crate::test_support::resolve_ast_with_builtin_prelude(ast).unwrap();
+            let result = crate::test_support::typecheck(resolved);
+            if accepted {
+                let typed = result.expect("a symbolic two-level field capture can use the source provided in the same factory call");
+                let call_start = source.rfind("callback(value)").unwrap();
+                let call = typed
+                    .iter()
+                    .find(|node| node.span.start == call_start)
+                    .expect("the authored final callback call must retain its source span");
+                assert_eq!(call.ty, Ty::Int);
+            } else {
+                let error = result
+                    .expect_err("the factory call cannot strengthen the visible input capability");
+                assert_eq!(
+                    error.reason(),
+                    Some(TypeDiagnosticReason::MissingTypeConstructorCapability),
+                    "{error:?}"
+                );
+            }
+        }
+        // A callback type alone does not supply a value source for its generic
+        // input. This existing inference boundary also applies without nominals.
+        let source = format!("{DEFINITIONS}callback = unanchored_box_projection(CapturedProvenanceBox::new(CapturedProvenanceBox::new(&stronger_captured)))");
+        let ast = spire::parse_with_context(&source, spire::ParserContext::project(0)).unwrap();
+        let resolved = crate::test_support::resolve_ast_with_builtin_prelude(ast).unwrap();
+        let error = crate::test_support::typecheck(resolved).expect_err(
+            "a factory without an input value cannot prove the callback's Monad requirement",
+        );
+        assert_eq!(
+            error.reason(),
+            Some(TypeDiagnosticReason::MissingTypeConstructorCapability)
+        );
+    }
 
     #[test]
     fn or_binding_joins_constructor_provenance_from_all_alternatives() {

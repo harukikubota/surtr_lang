@@ -1211,8 +1211,8 @@ fn test_resolve_staged_program_keeps_process_specs() {
         resolve_staged_program_with_state(&module_stages, Vec::new(), &declaration_index, None)
             .expect("resolve should succeed");
 
-    assert_eq!(resolved.process_specs.len(), 1);
-    let spec = &resolved.process_specs[0];
+    assert_eq!(resolved.process_specs().count(), 1);
+    let spec = resolved.process_specs().next().unwrap();
     assert_eq!(spec.module_path, "Global::Counter");
     assert_eq!(spec.process_name, "Global::Counter");
 }
@@ -2141,6 +2141,30 @@ def use_value() -> Int {
     )
     .expect_err("future-stage import should still be rejected");
     assert!(err.message.contains("Provider::value"));
+}
+
+#[test]
+fn staged_qualified_references_only_see_current_and_prior_stages() {
+    let consumer = staged_module(
+        "Consumer",
+        parse_module_ast("def use_value() -> Int { Provider::value() }", "Consumer"),
+    );
+    let provider = staged_module(
+        "Provider",
+        parse_module_ast("def value() -> Int { 41 }", "Provider"),
+    );
+    for stages in [
+        vec![vec![consumer.clone(), provider.clone()]],
+        vec![vec![provider.clone(), consumer.clone()]],
+        vec![vec![provider.clone()], vec![consumer.clone()]],
+    ] {
+        resolve_user_with_modules("Consumer::use_value()", &stages)
+            .expect("same-stage and preceding-stage qualified calls resolve");
+    }
+    let error =
+        resolve_user_with_modules("Consumer::use_value()", &[vec![consumer], vec![provider]])
+            .expect_err("qualified calls cannot see a future stage");
+    assert!(error.message.contains("Provider::value"), "{error:?}");
 }
 
 #[test]

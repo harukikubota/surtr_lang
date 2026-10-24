@@ -5,6 +5,11 @@ impl Checker {
         TypedFacetPath {
             source_ty: self.resolve_ty(&path.source_ty),
             focus_ty: self.resolve_ty(&path.focus_ty),
+            segment_focus_tys: path
+                .segment_focus_tys
+                .iter()
+                .map(|ty| self.resolve_ty(ty))
+                .collect(),
             update_source_ty: self.resolve_ty(&path.update_source_ty),
             update_focus_ty: self.resolve_ty(&path.update_focus_ty),
             path_kind: path.path_kind,

@@ -405,7 +405,7 @@ Default::default::<Wrapped>()
         );
         let receiver = Ty::Struct(
             implementation.target_name.clone(),
-            NominalType::monomorphic(vec![("value".into(), Ty::Int)]),
+            NominalType::monomorphic(),
         );
         for _ in 0..2 {
             let CandidateApplicability::Applicable(instantiation) = checker
@@ -802,13 +802,7 @@ impl Context for Box<$A> {}
             vec![PendingTraitObligation {
                 trait_id: trait_key.clone(),
                 args: vec![Ty::List(Box::new(Ty::Var(source)))],
-                receiver: Ty::Struct(
-                    name.clone(),
-                    NominalType::new(
-                        vec![Ty::Var(source)],
-                        vec![("value".into(), Ty::Var(source))],
-                    ),
-                ),
+                receiver: Ty::Struct(name.clone(), NominalType::new(vec![Ty::Var(source)])),
             }],
         );
         assert!(checker.bind_tyvar(source, &Ty::Var(alias)).unwrap());
@@ -818,10 +812,7 @@ impl Context for Box<$A> {}
             vec![PendingTraitObligation {
                 trait_id: trait_key,
                 args: vec![Ty::List(Box::new(Ty::Var(alias)))],
-                receiver: Ty::Struct(
-                    name,
-                    NominalType::new(vec![Ty::Var(alias)], vec![("value".into(), Ty::Var(alias))],),
-                ),
+                receiver: Ty::Struct(name, NominalType::new(vec![Ty::Var(alias)]),),
             }]
         );
         assert!(
@@ -864,10 +855,7 @@ impl Rel<String,Int> for Box<$T> { def apply(self: Self, a: String, b: Int) -> I
         let b = checker.env.fresh_tyvar();
         let trait_key = checker.trait_key_by_short_name("Rel").unwrap();
         let def = checker.env.lookup_type_def("Box").unwrap();
-        let receiver = Ty::Struct(
-            def.name.clone(),
-            NominalType::new(vec![Ty::Bool], vec![("value".into(), Ty::Bool)]),
-        );
+        let receiver = Ty::Struct(def.name.clone(), NominalType::new(vec![Ty::Bool]));
         let substitutions = checker.substitutions.clone();
         let pending = checker.pending_trait_obligations.clone();
         let witnesses = checker.constructor_witness_traits.clone();

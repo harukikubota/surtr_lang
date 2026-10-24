@@ -554,9 +554,6 @@ impl Checker {
                 for argument in &nominal.arguments {
                     Self::collect_ty_vars(argument, out);
                 }
-                for (_, field_ty) in nominal {
-                    Self::collect_ty_vars(field_ty, out);
-                }
             }
             Ty::Int
             | Ty::Float
@@ -1265,20 +1262,6 @@ impl Checker {
                             self.expand_trait_self_apps(argument, target_ty, constructor_slot_vars)
                         })
                         .collect::<Result<_, TypeError>>()?,
-                    fields
-                        .fields
-                        .into_iter()
-                        .map(|(name, field)| {
-                            Ok((
-                                name,
-                                self.expand_trait_self_apps(
-                                    field,
-                                    target_ty,
-                                    constructor_slot_vars,
-                                )?,
-                            ))
-                        })
-                        .collect::<Result<_, TypeError>>()?,
                 ),
             ),
             Ty::Record(name, fields) => Ty::Record(
@@ -1289,20 +1272,6 @@ impl Checker {
                         .into_iter()
                         .map(|argument| {
                             self.expand_trait_self_apps(argument, target_ty, constructor_slot_vars)
-                        })
-                        .collect::<Result<_, TypeError>>()?,
-                    fields
-                        .fields
-                        .into_iter()
-                        .map(|(name, field)| {
-                            Ok((
-                                name,
-                                self.expand_trait_self_apps(
-                                    field,
-                                    target_ty,
-                                    constructor_slot_vars,
-                                )?,
-                            ))
                         })
                         .collect::<Result<_, TypeError>>()?,
                 ),
@@ -1554,16 +1523,11 @@ impl Checker {
         result
     }
 
-    fn predeclare_traits_with_work(
+    pub(in crate::checker) fn predeclare_trait_headers(
         &mut self,
         stmts: &[Resolved],
-        work: &mut PredeclareTraitWork,
     ) -> Result<(), TypeError> {
-        let phase_start = self.profiler.start();
         let mut declared_trait = false;
-        // Keep suffix declaration lookup local to this compile. Retained impl
-        // metadata and the checkpoint representation need no additional index.
-        let mut declared_impl_keys = HashMap::new();
         for stmt in stmts {
             let Resolved::TraitDef(span, id, type_params, where_clause, methods, _) = stmt else {
                 continue;
@@ -1702,7 +1666,18 @@ impl Checker {
                     }
                 }
             }
+        }
+        Ok(())
+    }
 
+    fn predeclare_traits_with_work(
+        &mut self,
+        stmts: &[Resolved],
+        work: &mut PredeclareTraitWork,
+    ) -> Result<(), TypeError> {
+        let phase_start = self.profiler.start();
+        let mut declared_impl_keys = HashMap::new();
+        {
             // Trait helpers participate in the same canonical callable
             // registry as user functions and non-intrinsic builtins. Resolve
             // their signatures only after inherited constructor slots are

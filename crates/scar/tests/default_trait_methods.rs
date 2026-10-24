@@ -322,7 +322,7 @@ value = Box(1)"#,
             value_ty,
             Some(scar::types::Ty::Struct(name, fields))
                 if name == "Global::Box"
-                    && matches!(fields.as_slice(), [(field, scar::types::Ty::Int)] if field == "value")
+                    && matches!(fields.arguments.as_slice(), [scar::types::Ty::Int])
         ),
         "generic constructor result must retain its concrete argument, got {value_ty:?}"
     );

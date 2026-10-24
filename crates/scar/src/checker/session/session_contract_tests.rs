@@ -102,9 +102,6 @@ fn resolve_program(
         prefix.resolved.resume_state,
     )
     .unwrap();
-    let mut specs = prefix.resolved.process_specs.clone();
-    specs.append(&mut suffix.process_specs);
-    suffix.process_specs = specs;
     let mut boot = prefix.resolved.boot_plan.clone();
     boot.entries.append(&mut suffix.boot_plan.entries);
     boot.singletons.append(&mut suffix.boot_plan.singletons);
@@ -151,9 +148,9 @@ impl SessionApi {
 #[test]
 fn failed_suffix_preserves_transactional_state_and_explicit_rollback_allows_retry() {
     let good = "defenum SessionBox<$T> { Box($T), }\ndeferror SessionError(detail: Int) { |value: Int| Self(message: \"session\", detail: value) }\ndef identity(value: $T) -> $T { value }\nSessionError(7);\nidentity(1);\nidentity(\"ok\")";
-    let good_resolved = resolved_suffix(good, None).resolved;
+    let good_resolved = resolved_suffix(good, None).into_resolved();
     let bad = format!("{good};\nbad: Int = \"wrong\"");
-    let bad_resolved = resolved_suffix(&bad, None).resolved;
+    let bad_resolved = resolved_suffix(&bad, None).into_resolved();
     for api in [SessionApi::Transactional, SessionApi::InPlace] {
         let mut failed = prefix_session();
         let checkpoint = failed.checkpoint();
@@ -514,7 +511,7 @@ fn full_standard_compile_and_checkpoint_resume_preserve_user_contracts() {
         .unwrap();
     let mut resumed_session = prefix_session();
     let resumed = resumed_session.typecheck_staged_program(suffix).unwrap();
-    assert_eq!(full.process_specs, resumed.process_specs);
+    assert_eq!(full_session.process_specs, resumed_session.process_specs);
     assert_eq!(full.boot_plan, resumed.boot_plan);
     // Predeclaring the suffix together with stdlib can legitimately allocate
     // different raw tags, type variables, and function indices. Compare the
@@ -611,12 +608,86 @@ fn test_script_checks_unit_result_and_rejects_top_level_propagation() {
 }
 
 #[test]
+fn staged_nominal_annotations_do_not_see_future_definitions() {
+    const EARLY: &str = "defmod Early { def identity(value: Later) -> Later { value } }";
+    const LATER: &str = "defrecord Later(value: Int)";
+    for stages in [
+        vec![format!("{EARLY}\n{LATER}")],
+        vec![LATER.into(), EARLY.into()],
+    ] {
+        let sources = stages.iter().map(String::as_str).collect::<Vec<_>>();
+        prefix_session()
+            .typecheck_staged_program(custom_staged_program(&sources, ""))
+            .expect("visible nominal");
+    }
+    let error = prefix_session()
+        .typecheck_staged_program(custom_staged_program(&[EARLY, LATER], ""))
+        .expect_err("a future nominal must not satisfy an earlier annotation");
+    assert!(error.message.contains("Later"), "{error:?}");
+}
+
+fn custom_staged_program(sources: &[&str], entry: &str) -> ResolvedStagedProgram {
+    let mut stages = standard_prefix().stages.clone();
+    stages.extend(sources.iter().map(|source| {
+        let ast = spire::parse_with_context(source, spire::ParserContext::module(0, None)).unwrap();
+        sigil::staged_modules_from_source_ast(ast, None)
+    }));
+    let declarations = sigil::precollect_declaration_index(&stages).unwrap();
+    let ast = spire::parse_with_context(entry, spire::ParserContext::project(0)).unwrap();
+    sigil::resolve_staged_program_from_state(
+        &stages,
+        ast,
+        &declarations,
+        None,
+        standard_prefix().stages.len(),
+        standard_prefix().resolved.resume_state,
+    )
+    .unwrap()
+}
+
+#[test]
+fn staged_concrete_dispatch_cannot_borrow_a_future_impl() {
+    const TRAIT: &str = "deftrait StageMetric { def metric(value: Self) -> Int }";
+    const CALL: &str = "defmod Early { def call() -> Int { StageMetric::metric(7) } }";
+    const IMPL: &str = "impl StageMetric for Int { def metric(value: Int) -> Int { value } }";
+    let combined = format!("{TRAIT}\n{CALL}\n{IMPL}");
+    let mut session = prefix_session();
+    session
+        .typecheck_staged_program(custom_staged_program(&[&combined], "Early::call()"))
+        .expect("same-stage impl is visible before bodies");
+    let program = custom_staged_program(&[&format!("{TRAIT}\n{CALL}"), IMPL], "");
+    let mut session = prefix_session();
+    let before = bincode::serialize(&session.checkpoint()).unwrap();
+    let error = session
+        .typecheck_staged_program(program)
+        .expect_err("concrete call cannot use a future-stage impl");
+    assert!(error.message.contains("StageMetric"), "{error:?}");
+    assert_eq!(bincode::serialize(&session.checkpoint()).unwrap(), before);
+}
+
+#[test]
+fn staged_generic_contract_can_instantiate_with_a_later_visible_impl() {
+    const GENERIC: &str = "deftrait StageMetric { def metric(value: Self) -> Int }\ndefmod Early { def call(value: $T) -> Int where $T: StageMetric { StageMetric::metric(value) } }";
+    const IMPL: &str = "impl StageMetric for Int { def metric(value: Int) -> Int { value } }";
+    let program = custom_staged_program(&[GENERIC, IMPL], "Early::call(7)");
+    let typed = prefix_session()
+        .typecheck_staged_program(program)
+        .expect("a checked generic is instantiated in its caller's visible environment");
+    let call = typed
+        .nodes
+        .iter()
+        .find(|node| matches!(node.node, TypedInner::App(..)))
+        .expect("the entry call is retained alongside generated specializations");
+    assert_eq!(call.ty, Ty::Int);
+}
+
+#[test]
 fn const_dependency_failure_preserves_saved_prefix_and_allows_retry() {
     let prefix_source =
         "defrecord ConstSessionItem(value: Int)\nconst STABLE = ConstSessionItem.value";
     let mut prefix = prefix_session();
     prefix
-        .typecheck(resolved_suffix(prefix_source, None).resolved)
+        .typecheck(resolved_suffix(prefix_source, None).into_resolved())
         .unwrap();
     let checkpoint = prefix.checkpoint();
     let saved = bincode::serialize(&checkpoint).unwrap();
@@ -624,7 +695,7 @@ fn const_dependency_failure_preserves_saved_prefix_and_allows_retry() {
         // Keep resolution identities for the retained declarations while only
         // passing the new stage to the persistent typechecking environment.
         resolved_suffix(&format!("{prefix_source}\n{source}"), None)
-            .resolved
+            .into_resolved()
             .into_iter()
             .skip(2)
             .collect::<Vec<_>>()
@@ -698,6 +769,76 @@ fn const_dependency_failure_preserves_saved_prefix_and_allows_retry() {
         assert_eq!(
             api.check(&mut restored_session, good.clone()).unwrap(),
             expected
+        );
+    }
+}
+
+#[test]
+fn staged_suffix_exports_only_its_own_process_metadata() {
+    for api in [SessionApi::Transactional, SessionApi::InPlace] {
+        let mut session = prefix_session();
+        let saved = session.process_specs.clone();
+        assert!(
+            !saved.is_empty(),
+            "standard prefix must exercise process metadata"
+        );
+        let empty = api
+            .check_staged(&mut session, resolved_suffix("", None))
+            .unwrap();
+        assert!(empty.process_specs.is_empty());
+        assert_eq!(session.process_specs, saved);
+        let added = api
+            .check_staged(&mut session, resolved_suffix("", Some(COUNTER)))
+            .unwrap();
+        assert_eq!(added.process_specs.len(), 1);
+        assert!(added.process_specs[0]
+            .process_name
+            .ends_with("SessionCounter"));
+        assert_eq!(session.process_specs.len(), saved.len() + 1);
+        assert!(session.process_specs.starts_with(&saved));
+    }
+}
+
+#[test]
+fn future_qualified_nominal_does_not_resolve_to_an_unrelated_visible_suffix() {
+    let program = custom_staged_program(
+        &[
+            "defrecord Shared(value: Int)",
+            "defmod Early { def identity(value: Future::Shared) -> Future::Shared { value } }",
+            "namespace Future { defrecord Shared(value: String) }",
+        ],
+        "",
+    );
+    let error = prefix_session()
+        .typecheck_staged_program(program)
+        .expect_err("a future qualified type cannot be replaced with a visible short-name match");
+    assert!(error.message.contains("Future::Shared"), "{error:?}");
+}
+
+#[test]
+fn bootstrap_source_does_not_see_standard_nominals_from_native_inventory() {
+    for metadata in sindr::builtin::NATIVE_SIGNATURE_NOMINAL_METAS {
+        let mut stages = standard_prefix().stages.clone();
+        let source = format!(
+            "defmod Early {{ def identity(value: {0}) -> {0} {{ value }} }}",
+            metadata.name
+        );
+        let early =
+            spire::parse_with_context(&source, spire::ParserContext::module(0, None)).unwrap();
+        stages[0].extend(sigil::staged_modules_from_source_ast(early, None));
+        let declarations = sigil::precollect_declaration_index(&stages).unwrap();
+        let resolved =
+            sigil::resolve_staged_program_with_state(&stages, Vec::new(), &declarations, None)
+                .unwrap();
+        let error = ScarSession::new()
+            .typecheck_staged_program_with_context(resolved, standard_context())
+            .err()
+            .expect("native signature inventory must not expose a future source nominal");
+        assert!(
+            error
+                .message
+                .contains(&format!("Unknown type: {}", metadata.name)),
+            "{error:?}"
         );
     }
 }

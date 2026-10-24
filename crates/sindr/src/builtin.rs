@@ -445,6 +445,43 @@ pub const STANDARD_OWNER_IDENTITY_METAS: &[StandardOwnerIdentityMeta] =
         identity: TypeIdentity::TypeConstructor,
     }];
 
+/// Source-defined nominal identities mentioned by native signatures before
+/// their standard source stage is checked. This inventory neither declares a
+/// source-visible type nor permits an `@builtin type` declaration.
+pub const NATIVE_SIGNATURE_NOMINAL_METAS: &[StandardOwnerIdentityMeta] = &[
+    StandardOwnerIdentityMeta {
+        name: "Duration",
+        identity: TypeIdentity::Struct,
+    },
+    StandardOwnerIdentityMeta {
+        name: "SupervisorStatus",
+        identity: TypeIdentity::Struct,
+    },
+    StandardOwnerIdentityMeta {
+        name: "FilePath",
+        identity: TypeIdentity::Struct,
+    },
+    StandardOwnerIdentityMeta {
+        name: "FileSystemEntry",
+        identity: TypeIdentity::Struct,
+    },
+    StandardOwnerIdentityMeta {
+        name: "FileSystemSnapshot",
+        identity: TypeIdentity::Struct,
+    },
+    StandardOwnerIdentityMeta {
+        name: "CommandResult",
+        identity: TypeIdentity::Struct,
+    },
+];
+
+pub fn native_signature_nominal_identity_by_name(name: &str) -> Option<TypeIdentity> {
+    NATIVE_SIGNATURE_NOMINAL_METAS
+        .iter()
+        .find(|meta| meta.name == name)
+        .map(|meta| meta.identity)
+}
+
 pub const PATTERN_CONTRACT_VIOLATION_BUILTIN: &str = "__pattern_contract_violation";
 
 /// Canonical registry for runtime builtin functions and their source surfaces.

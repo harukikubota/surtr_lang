@@ -36,15 +36,10 @@ impl Checker {
             ]
             .into_iter()
             .any(Self::type_contains_constructor_application),
-            Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
-                nominal
-                    .arguments
-                    .iter()
-                    .any(Self::type_contains_constructor_application)
-                    || nominal
-                        .iter()
-                        .any(|(_, field)| Self::type_contains_constructor_application(field))
-            }
+            Ty::Struct(_, nominal) | Ty::Record(_, nominal) => nominal
+                .arguments
+                .iter()
+                .any(Self::type_contains_constructor_application),
             Ty::Enum(_, arguments) => arguments
                 .iter()
                 .any(Self::type_contains_constructor_application),
@@ -115,12 +110,7 @@ impl Checker {
             Ty::Struct(_, nominal) | Ty::Record(_, nominal) => nominal
                 .arguments
                 .iter()
-                .find_map(|argument| self.unresolved_constructor_application_in_type(argument))
-                .or_else(|| {
-                    nominal.iter().find_map(|(_, field)| {
-                        self.unresolved_constructor_application_in_type(field)
-                    })
-                }),
+                .find_map(|argument| self.unresolved_constructor_application_in_type(argument)),
             Ty::Enum(_, arguments) => arguments
                 .iter()
                 .find_map(|argument| self.unresolved_constructor_application_in_type(argument)),

@@ -3,6 +3,7 @@ pub mod document;
 mod parse_cache;
 pub mod project_runner;
 pub mod query;
+pub mod script_include;
 pub mod semantic;
 pub mod service;
 

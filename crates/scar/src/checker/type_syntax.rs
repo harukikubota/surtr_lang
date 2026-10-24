@@ -262,20 +262,14 @@ impl Checker {
                     };
                     *argument = slot.clone();
                 }
-                let Some(def) = self.env.lookup_type_def(name) else {
-                    return ConstructorApplicationOutcome::Rejected {
-                        failures: vec![ConstructorProjectionFailure::MissingNominalArguments],
-                    };
-                };
-                let fields = self.instantiate_type_def_fields(def, &args);
                 match witness {
                     Ty::Struct(_, _) => ConstructorApplicationOutcome::Applied(Ty::Struct(
                         name.clone(),
-                        NominalType::new(args, fields),
+                        NominalType::new(args),
                     )),
                     Ty::Record(_, _) => ConstructorApplicationOutcome::Applied(Ty::Record(
                         name.clone(),
-                        NominalType::new(args, fields),
+                        NominalType::new(args),
                     )),
                     _ => unreachable!("matched nominal record kind"),
                 }
@@ -518,9 +512,7 @@ impl Checker {
                 | Ty::BuiltinFunc { params, ret, .. } => {
                     params.iter().any(contains) || contains(ret)
                 }
-                Ty::Struct(_, n) | Ty::Record(_, n) => {
-                    n.arguments.iter().any(contains) || n.iter().any(|(_, ty)| contains(ty))
-                }
+                Ty::Struct(_, n) | Ty::Record(_, n) => n.arguments.iter().any(contains),
                 Ty::Facet(_, a, b, c, d) => [a, b, c, d].iter().any(|ty| contains(ty)),
                 _ => false,
             }
@@ -927,13 +919,13 @@ impl Checker {
                                     }
                                     return Ok(Ty::Struct(
                                         def.name.clone(),
-                                        NominalType::monomorphic(def.fields.clone()),
+                                        NominalType::monomorphic(),
                                     ));
                                 }
                                 crate::env::TypeKind::Record => {
                                     return Ok(Ty::Record(
                                         def.name.clone(),
-                                        NominalType::monomorphic(def.fields.clone()),
+                                        NominalType::monomorphic(),
                                     ));
                                 }
                                 crate::env::TypeKind::ConcreteError => {
@@ -1257,9 +1249,7 @@ impl Checker {
                         crate::env::TypeKind::Struct => Ok(Ty::Struct(
                             def.name.clone(),
                             NominalType::new(
-                                resolved_args.clone(),
-                                self.instantiate_type_def_fields(&def, &resolved_args),
-                            ),
+                                resolved_args.clone()),
                         )),
                         crate::env::TypeKind::Enum => {
                             if let Some(ty) =
@@ -1503,23 +1493,11 @@ impl Checker {
                         match definition.kind {
                             crate::env::TypeKind::Struct => Ok(Ty::Struct(
                                 definition.name.clone(),
-                                NominalType::new(
-                                    resolved_arguments.clone(),
-                                    self.instantiate_type_def_fields(
-                                        &definition,
-                                        &resolved_arguments,
-                                    ),
-                                ),
+                                NominalType::new(resolved_arguments.clone()),
                             )),
                             crate::env::TypeKind::Record => Ok(Ty::Record(
                                 definition.name.clone(),
-                                NominalType::new(
-                                    resolved_arguments.clone(),
-                                    self.instantiate_type_def_fields(
-                                        &definition,
-                                        &resolved_arguments,
-                                    ),
-                                ),
+                                NominalType::new(resolved_arguments.clone()),
                             )),
                             crate::env::TypeKind::Enum => Ok(Self::builtin_special_enum_ty(
                                 &definition.name,
@@ -1615,14 +1593,12 @@ impl Checker {
             .collect::<Vec<_>>();
         self.constrain_rta_nominal_arguments(&def, &args, span)?;
         let ty = match def.kind {
-            crate::env::TypeKind::Struct => Ty::Struct(
-                def.name.clone(),
-                NominalType::new(args.clone(), self.instantiate_type_def_fields(&def, &args)),
-            ),
-            crate::env::TypeKind::Record => Ty::Record(
-                def.name.clone(),
-                NominalType::new(args.clone(), self.instantiate_type_def_fields(&def, &args)),
-            ),
+            crate::env::TypeKind::Struct => {
+                Ty::Struct(def.name.clone(), NominalType::new(args.clone()))
+            }
+            crate::env::TypeKind::Record => {
+                Ty::Record(def.name.clone(), NominalType::new(args.clone()))
+            }
             crate::env::TypeKind::Enum => Self::builtin_special_enum_ty(&def.name, &args)
                 .unwrap_or_else(|| Ty::Enum(def.name.clone(), args)),
             crate::env::TypeKind::ConcreteError => {
@@ -2528,9 +2504,7 @@ impl Checker {
                         crate::env::TypeKind::Struct => Ok(Ty::Struct(
                             def.name.clone(),
                             NominalType::new(
-                                resolved_args.clone(),
-                                self.instantiate_type_def_fields(&def, &resolved_args),
-                            ),
+                                resolved_args.clone()),
                         )),
                         crate::env::TypeKind::Enum => {
                             if let Some(ty) =

@@ -40,15 +40,10 @@ pub fn typecheck_staged_program_with_context_with_warnings(
     program: sigil::ResolvedStagedProgram,
     context: TypecheckContext,
 ) -> Result<PhaseOutput<TypedProgram>, TypeError> {
-    let process_specs = program
-        .process_specs
-        .into_iter()
-        .map(Into::into)
-        .collect::<Vec<TypedProcessSpec>>();
+    let process_specs = program.process_specs().cloned().map(Into::into).collect();
     let mut checker = Checker::new(context);
-    checker.set_process_handler_dependencies(&process_specs);
     checker.boot_plan = program.boot_plan.clone();
-    let nodes = checker.check_program(program.resolved)?;
+    let nodes = checker.check_stages(program.stages)?;
     let warnings = checker.warnings.take();
     Ok(PhaseOutput::new(
         TypedProgram {
@@ -106,9 +101,6 @@ pub fn type_contains_unresolved_vars(ty: &Ty) -> bool {
         }
         Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
             nominal.arguments.iter().any(type_contains_unresolved_vars)
-                || nominal
-                    .iter()
-                    .any(|(_, field_ty)| type_contains_unresolved_vars(field_ty))
         }
         Ty::Int
         | Ty::Float
@@ -359,16 +351,12 @@ impl ScarSession {
         program: sigil::ResolvedStagedProgram,
         context: TypecheckContext,
     ) -> Result<TypedProgram, TypeError> {
-        let process_specs = program
-            .process_specs
-            .into_iter()
-            .map(Into::into)
-            .collect::<Vec<TypedProcessSpec>>();
+        let process_specs = program.process_specs().cloned().map(Into::into).collect();
         let state = std::mem::replace(&mut self.state, PersistentCheckerState::new());
         let mut checker = Checker::with_persistent_state(state, context);
-        checker.set_process_handler_dependencies(&process_specs);
+        checker.set_process_handler_dependencies(&self.process_specs);
         checker.boot_plan = program.boot_plan.clone();
-        let nodes = match checker.check_program(program.resolved) {
+        let nodes = match checker.check_stages(program.stages) {
             Ok(nodes) => nodes,
             Err(error) => {
                 self.process_specs = checker.process_specs.clone();
@@ -395,15 +383,11 @@ impl ScarSession {
         program: sigil::ResolvedStagedProgram,
         context: TypecheckContext,
     ) -> Result<PhaseOutput<TypedProgram>, TypeError> {
-        let process_specs = program
-            .process_specs
-            .into_iter()
-            .map(Into::into)
-            .collect::<Vec<TypedProcessSpec>>();
+        let process_specs = program.process_specs().cloned().map(Into::into).collect();
         let mut checker = Checker::with_persistent_state(self.state.clone(), context);
-        checker.set_process_handler_dependencies(&process_specs);
+        checker.set_process_handler_dependencies(&self.process_specs);
         checker.boot_plan = program.boot_plan.clone();
-        let nodes = checker.check_program(program.resolved)?;
+        let nodes = checker.check_stages(program.stages)?;
         let persisted_process_specs = checker.process_specs.clone();
         let warnings = checker.warnings.take();
         let enum_definitions = checker.env.typed_enum_definitions();

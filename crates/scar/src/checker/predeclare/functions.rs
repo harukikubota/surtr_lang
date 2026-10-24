@@ -155,10 +155,7 @@ impl Checker {
         match def.kind {
             TypeKind::Struct => Some(Ty::Struct(
                 def.name.clone(),
-                NominalType::new(
-                    def.type_param_vars.iter().copied().map(Ty::Var).collect(),
-                    def.fields.clone(),
-                ),
+                NominalType::new(def.type_param_vars.iter().copied().map(Ty::Var).collect()),
             )),
             TypeKind::Enum => Some(Ty::Enum(def.name.clone(), Vec::new())),
             TypeKind::Record | TypeKind::ConcreteError => None,
@@ -280,7 +277,7 @@ impl Checker {
         let mut structs_with_new: HashSet<String> = HashSet::new();
 
         for stmt in stmts {
-            if let Resolved::StructDef(_, id, type_params, fields, _attrs) = stmt {
+            if let Resolved::StructDef(_, id, type_params, _fields, _attrs) = stmt {
                 let mut tyvars = HashMap::new();
                 self.seed_signature_type_params(type_params, &mut tyvars);
                 let expected_self_ty = Ty::Struct(
@@ -295,19 +292,6 @@ impl Checker {
                                     .expect("seeded struct type parameter")
                             })
                             .collect(),
-                        fields
-                            .iter()
-                            .map(|field| {
-                                Ok((
-                                    field.name.clone(),
-                                    self.resolve_signature_ast_ty_in_context(
-                                        &field.ty,
-                                        TypeSyntaxContext::General,
-                                        &mut tyvars,
-                                    )?,
-                                ))
-                            })
-                            .collect::<Result<Vec<_>, TypeError>>()?,
                     ),
                 );
                 struct_defs.insert(id.name.clone(), (id.span.clone(), expected_self_ty.clone()));

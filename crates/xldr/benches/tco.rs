@@ -102,14 +102,14 @@ fn compile_script(source_name: &str, source: &str) -> Result<Bytecode, String> {
     );
     let declaration_index = sigil::precollect_declaration_index(&module_stages)
         .map_err(|e| format!("phase=resolve; message={}", e))?;
-    let resolved = sigil::resolve_staged_program(
+    let resolved = sigil::resolve_staged_program_with_state(
         &module_stages,
         user_ast,
         &declaration_index,
         Some(compile_sources.user_module_path.clone()),
     )
     .map_err(|e| format!("phase=resolve; message={}", e))?;
-    let typed = scar::typecheck_with_context(
+    let typed = scar::typecheck_staged_program_with_context(
         resolved,
         scar::TypecheckContext {
             runtime_policy: xldr::derive_runtime_policy(
@@ -124,7 +124,7 @@ fn compile_script(source_name: &str, source: &str) -> Result<Bytecode, String> {
     )
     .map_err(|e| format!("phase=typecheck; message={}", e))?;
     let mut bytecode =
-        forge::codegen(typed).map_err(|e| format!("phase=codegen; message={}", e))?;
+        forge::codegen_typed_program(typed).map_err(|e| format!("phase=codegen; message={}", e))?;
     bytecode.docs = docs;
     Ok(bytecode)
 }

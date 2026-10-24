@@ -54,7 +54,7 @@ impl Prepared {
             sigil::ResolveResumeState::default(),
         )
         .map_err(|e| e.to_string())?;
-        prefix_metadata.resolved.clear();
+        prefix_metadata.stages.clear();
         Ok(Self {
             snapshot,
             environment,
@@ -71,7 +71,11 @@ impl Prepared {
     }
     fn program(&self, resolved: Vec<sigil::resolved::Resolved>) -> ResolvedStagedProgram {
         let mut program = self.prefix_metadata.clone();
-        program.resolved = resolved;
+        program.stages = vec![sigil::ResolvedStage {
+            stage_index: self.snapshot.module_stages.len(),
+            resolved,
+            process_specs: Vec::new(),
+        }];
         program.resume_state = self.snapshot.resolve_state(); // Scar does not consume this field.
         program
     }
@@ -288,10 +292,7 @@ fn samples_with_setup(options: &Options) -> Result<(Value, Vec<Value>), String> 
                 prepared.snapshot.resolve_state(),
             )
             .map_err(|e| format!("resolve: {e}"))?;
-            // Keep stdlib process dependencies and source boot metadata in the staged API input.
-            let mut process_specs = prepared.prefix_metadata.process_specs.clone();
-            process_specs.extend(program.process_specs);
-            program.process_specs = process_specs;
+            // The restored Scar checkpoint owns prefix process dependencies.
             let mut boot = prepared.prefix_metadata.boot_plan.clone();
             boot.entries.extend(program.boot_plan.entries);
             boot.singletons.extend(program.boot_plan.singletons);

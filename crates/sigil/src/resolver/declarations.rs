@@ -982,6 +982,23 @@ pub struct OwnerRegistry {
 }
 
 impl OwnerRegistry {
+    pub(super) fn visible_through(&self, stage_index: usize) -> Self {
+        let mut visible = self.clone();
+        visible
+            .entries
+            .retain(|_, entry| entry.stage_index <= stage_index);
+        visible
+            .enum_type_parameter_arities
+            .retain(|name, _| visible.entries.contains_key(name));
+        visible
+            .constructor_trait_seeds
+            .retain(|name| visible.entries.contains_key(name));
+        visible.trait_parent_edges.retain(|(child, parent)| {
+            visible.entries.contains_key(child) && visible.entries.contains_key(parent)
+        });
+        visible
+    }
+
     pub fn register(&mut self, entry: OwnerEntry) -> Result<(), ResolveError> {
         if let Some(first) = self.entries.get(&entry.canonical_key) {
             return Err(ResolveError {

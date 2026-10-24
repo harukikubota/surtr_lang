@@ -464,12 +464,10 @@ enum CanonicalTyKey {
     Struct {
         name: String,
         args: Vec<CanonicalTyKey>,
-        fields: Vec<(String, CanonicalTyKey)>,
     },
     Record {
         name: String,
         args: Vec<CanonicalTyKey>,
-        fields: Vec<(String, CanonicalTyKey)>,
     },
     Enum {
         name: String,

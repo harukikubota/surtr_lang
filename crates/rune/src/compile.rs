@@ -184,7 +184,6 @@ fn map_resolve_reason(
 fn resolve_spec_for_error(
     compile_sources: &xldr::CompileSources,
     error: &sigil::error::ResolveError,
-    compile_plan: &ScriptCompilePlan,
 ) -> (SourceId, &'static str, diagnostics::DiagnosticSpec) {
     let (source_id, span) = diagnostic_location_for_span(compile_sources, &error.span);
     let reason = match map_resolve_reason(&error.diagnostic.reason) {
@@ -221,13 +220,8 @@ fn resolve_spec_for_error(
         error.diagnostic.subject.clone(),
         &labels,
     );
-    let (source_id, spec) = xldr::attach_resolve_include_diagnostic(
-        compile_sources,
-        error,
-        source_id,
-        spec,
-        &compile_plan.include_directives,
-    );
+    let (source_id, spec) =
+        xldr::attach_resolve_include_diagnostic(compile_sources, error, source_id, spec);
     (source_id, "resolve", spec)
 }
 
@@ -236,6 +230,7 @@ pub(crate) fn collect_default_script_compile_sources(
     file_path: &str,
     source: &str,
     include_modules: &[xldr::ModuleInput],
+    include_directives: &[xldr::ScriptIncludeDirective],
     stdlib_variant: xldr::StdlibVariant,
 ) -> RuneResult<xldr::CompileSources> {
     let base_sources = xldr::cached_default_script_module_sources(stdlib_variant).map_err(|e| {
@@ -250,14 +245,10 @@ pub(crate) fn collect_default_script_compile_sources(
         )
     })?;
 
-    let module_input_stages = include_modules
-        .iter()
-        .map(|module| vec![module.clone()])
-        .collect::<Vec<_>>();
-
-    let module_sources = xldr::extend_module_sources_with_module_stages(
+    let module_sources = xldr::extend_module_sources_with_script_includes(
         (*base_sources).clone(),
-        &module_input_stages,
+        include_modules,
+        include_directives,
     )
     .map_err(|e| {
         module_source_collection_error_as_rune_error(
@@ -325,7 +316,6 @@ fn build_cached_script_compile_prefix(
     std_snapshot: &xldr::DefaultStdlibSnapshot,
     module_stages: &[Vec<sigil::StagedModuleAst>],
     sources: &SourceRegistry,
-    compile_plan: &ScriptCompilePlan,
 ) -> RuneResult<SharedScriptCompilePrefix> {
     let cache_key = xldr::test_semantic_prefix_cache_key(env.compile_unit_kind(), compile_sources)
         .map_err(|e| {
@@ -352,8 +342,7 @@ fn build_cached_script_compile_prefix(
 
     let rebuilt_declaration_index =
         sigil::precollect_declaration_index(module_stages).map_err(|e| {
-            let (source_id, phase, spec) =
-                resolve_spec_for_error(compile_sources, &e, compile_plan);
+            let (source_id, phase, spec) = resolve_spec_for_error(compile_sources, &e);
             RuneError::diagnostic(1, sources, source_id, phase, spec)
         })?;
     let mut cached_payload = xldr::load_cached_test_semantic_prefix(&cache_path, &cache_key);
@@ -383,8 +372,7 @@ fn build_cached_script_compile_prefix(
             std_snapshot.resolve_state(),
         )
         .map_err(|e| {
-            let (source_id, phase, spec) =
-                resolve_spec_for_error(compile_sources, &e, compile_plan);
+            let (source_id, phase, spec) = resolve_spec_for_error(compile_sources, &e);
             RuneError::diagnostic(1, sources, source_id, phase, spec)
         })?;
         let resume_state = resolved.resume_state;
@@ -501,7 +489,12 @@ fn parse_program_with_module_sources<'a>(
     let expanded =
         xldr::expand_snapshot_module_stages(compile_sources, std_snapshot, compile_unit_kind)
             .map_err(|e| {
-                RuneError::diagnostic(1, sources, e.source_id, "parse", e.diagnostic_spec(sources))
+                let (source_id, spec) = xldr::attach_include_diagnostic(
+                    compile_sources,
+                    &e,
+                    e.diagnostic_spec(sources),
+                );
+                RuneError::diagnostic(1, sources, source_id, "parse", spec)
             })?;
     if let Some(measurement) = measurement.as_deref_mut() {
         measurement.parse_modules = elapsed(parse_modules_start);
@@ -554,16 +547,6 @@ pub(crate) fn compile_source_with_measurement(
                     compile_sources.user_source_id,
                     compile_plan.original_source.clone(),
                 );
-                let (source_id, spec) = xldr::attach_include_diagnostic(
-                    &diagnostic.sources,
-                    compile_sources.user_source_id,
-                    diagnostic.source_id,
-                    diagnostic.spec.clone(),
-                    &compile_plan.include_directives,
-                    &compile_plan.include_modules,
-                );
-                diagnostic.source_id = source_id;
-                diagnostic.spec = spec;
             }
             error
         },
@@ -651,7 +634,6 @@ fn compile_source_with_measurement_inner(
             &std_snapshot,
             &module_stages,
             sources,
-            compile_plan,
         )?);
         let Some(prefix) = cached_prefix.as_ref() else {
             return Err(RuneError::usage("test prefix cache was not built"));
@@ -660,8 +642,7 @@ fn compile_source_with_measurement_inner(
     } else {
         rebuilt_declaration_index =
             sigil::precollect_declaration_index(&module_stages).map_err(|e| {
-                let (source_id, phase, spec) =
-                    resolve_spec_for_error(compile_sources, &e, compile_plan);
+                let (source_id, phase, spec) = resolve_spec_for_error(compile_sources, &e);
                 RuneError::diagnostic(1, sources, source_id, phase, spec)
             })?;
         &rebuilt_declaration_index
@@ -686,7 +667,7 @@ fn compile_source_with_measurement_inner(
         resume_state,
     )
     .map_err(|e| {
-        let (source_id, phase, spec) = resolve_spec_for_error(compile_sources, &e, compile_plan);
+        let (source_id, phase, spec) = resolve_spec_for_error(compile_sources, &e);
         RuneError::diagnostic(1, sources, source_id, phase, spec)
     })?;
     if let Some(measurement) = measurement.as_deref_mut() {
@@ -1129,6 +1110,7 @@ mod tests {
                 &path,
                 source,
                 &[],
+                &[],
                 xldr::StdlibVariant::Default,
             )
             .unwrap();
@@ -1189,6 +1171,7 @@ mod tests {
             ExecutionEnv::Check,
             path,
             source,
+            &[],
             &[],
             xldr::StdlibVariant::Default,
         )
@@ -1377,6 +1360,7 @@ print(to_string(1))
                 module_path: Some("MahjongCli".into()),
                 source_kind: SourceKind::DefinitionSource,
             }]],
+            include_origins: Vec::new(),
             stdlib_variant: xldr::StdlibVariant::Default,
         };
         let base = xldr::module_span_base_for_source(module_source_id);
@@ -1413,6 +1397,7 @@ print(to_string(1))
                 module_path: Some("MahjongCli".into()),
                 source_kind: SourceKind::DefinitionSource,
             }]],
+            include_origins: Vec::new(),
             stdlib_variant: xldr::StdlibVariant::Default,
         };
         let span = Span { start: 50, end: 51 };
@@ -1477,6 +1462,7 @@ pid: PID<MyWorker> =? MySup::spawn(MyWorker::init(1))
             "process_pid_annotation.srt",
             &plan.source_for_parse,
             &plan.include_modules,
+            &plan.include_directives,
             xldr::StdlibVariant::Default,
         )
         .unwrap();

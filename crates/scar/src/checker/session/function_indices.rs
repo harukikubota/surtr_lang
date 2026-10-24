@@ -235,9 +235,6 @@ impl ScarSession {
                 for argument in &mut nominal.arguments {
                     Self::rewrite_fun_indices_in_ty(argument, rewrites);
                 }
-                for (_, field_ty) in nominal {
-                    Self::rewrite_fun_indices_in_ty(field_ty, rewrites);
-                }
             }
             Ty::Enum(_, args) => {
                 for arg in args {
@@ -288,6 +285,9 @@ impl ScarSession {
     fn rewrite_fun_indices_in_facet_path(path: &mut TypedFacetPath, rewrites: &HashMap<u32, u32>) {
         Self::rewrite_fun_indices_in_ty(&mut path.source_ty, rewrites);
         Self::rewrite_fun_indices_in_ty(&mut path.focus_ty, rewrites);
+        for ty in &mut path.segment_focus_tys {
+            Self::rewrite_fun_indices_in_ty(ty, rewrites);
+        }
         Self::rewrite_fun_indices_in_ty(&mut path.update_source_ty, rewrites);
         Self::rewrite_fun_indices_in_ty(&mut path.update_focus_ty, rewrites);
         for segment in &mut path.segments {

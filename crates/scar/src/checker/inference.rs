@@ -262,15 +262,6 @@ impl Checker {
                             &fields1.arguments,
                             &fields2.arguments,
                         )?
-                        && (fields1.is_empty()
-                            || fields2.is_empty()
-                            || (fields1.len() == fields2.len()
-                                && try_all(
-                                    fields1.iter().zip(fields2),
-                                    |((name1, ty1), (name2, ty2))| {
-                                        Ok(name1 == name2 && self.types_compatible(ty1, ty2)?)
-                                    },
-                                )?))
                 }
                 (Ty::Record(n1, fields1), Ty::Record(n2, fields2)) => {
                     Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
@@ -279,15 +270,6 @@ impl Checker {
                             &fields1.arguments,
                             &fields2.arguments,
                         )?
-                        && (fields1.is_empty()
-                            || fields2.is_empty()
-                            || (fields1.len() == fields2.len()
-                                && try_all(
-                                    fields1.iter().zip(fields2),
-                                    |((name1, ty1), (name2, ty2))| {
-                                        Ok(name1 == name2 && self.types_compatible(ty1, ty2)?)
-                                    },
-                                )?))
                 }
                 (Ty::Enum(n1, args1), Ty::Enum(n2, args2)) => {
                     Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
@@ -536,6 +518,16 @@ impl Checker {
             });
         }
 
+        if let Some(pending) = self.pending_nominal_arguments.as_mut() {
+            pending.push((
+                def.name.clone(),
+                arguments.to_vec(),
+                span.clone(),
+                defer_unresolved,
+            ));
+            return Ok(());
+        }
+
         for ((parameter, bound), argument) in def
             .type_params
             .iter()
@@ -620,9 +612,6 @@ impl Checker {
                 )?;
                 for argument in &nominal.arguments {
                     self.validate_nominal_type_well_formed(argument, span, defer_unresolved)?;
-                }
-                for (_, field_ty) in nominal.iter() {
-                    self.validate_nominal_type_well_formed(field_ty, span, defer_unresolved)?;
                 }
             }
             Ty::Enum(name, arguments) => {
@@ -711,9 +700,6 @@ impl Checker {
                     || nominal.arguments.iter().any(|argument| {
                         self.nominal_type_uses_capability(argument, &subject, capability)
                     })
-                    || nominal.iter().any(|(_, field_ty)| {
-                        self.nominal_type_uses_capability(field_ty, &subject, capability)
-                    })
             }
             Ty::Enum(name, arguments) => {
                 argument_uses(self, name, arguments)
@@ -796,15 +782,10 @@ impl Checker {
             Ty::Result(ok, err) => {
                 self.ty_contains_var(&ok, needle) || self.ty_contains_var(&err, needle)
             }
-            Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
-                nominal
-                    .arguments
-                    .iter()
-                    .any(|argument| self.ty_contains_var(argument, needle))
-                    || nominal
-                        .iter()
-                        .any(|(_, field_ty)| self.ty_contains_var(field_ty, needle))
-            }
+            Ty::Struct(_, nominal) | Ty::Record(_, nominal) => nominal
+                .arguments
+                .iter()
+                .any(|argument| self.ty_contains_var(argument, needle)),
             Ty::Enum(_, args) => args.iter().any(|arg| self.ty_contains_var(arg, needle)),
             _ => false,
         }
@@ -898,10 +879,6 @@ impl Checker {
                         .iter()
                         .map(|argument| self.resolve_ty(argument))
                         .collect(),
-                    fields
-                        .iter()
-                        .map(|(field, field_ty)| (field.clone(), self.resolve_ty(field_ty)))
-                        .collect(),
                 ),
             ),
             Ty::Record(name, fields) => Ty::Record(
@@ -911,10 +888,6 @@ impl Checker {
                         .arguments
                         .iter()
                         .map(|argument| self.resolve_ty(argument))
-                        .collect(),
-                    fields
-                        .iter()
-                        .map(|(field, field_ty)| (field.clone(), self.resolve_ty(field_ty)))
                         .collect(),
                 ),
             ),
@@ -1027,15 +1000,6 @@ impl Checker {
                         .iter()
                         .map(|argument| self.instantiate_ty_with_fresh(argument, fresh))
                         .collect(),
-                    fields
-                        .iter()
-                        .map(|(field, field_ty)| {
-                            (
-                                field.clone(),
-                                self.instantiate_ty_with_fresh(field_ty, fresh),
-                            )
-                        })
-                        .collect(),
                 ),
             ),
             Ty::Record(name, fields) => Ty::Record(
@@ -1045,15 +1009,6 @@ impl Checker {
                         .arguments
                         .iter()
                         .map(|argument| self.instantiate_ty_with_fresh(argument, fresh))
-                        .collect(),
-                    fields
-                        .iter()
-                        .map(|(field, field_ty)| {
-                            (
-                                field.clone(),
-                                self.instantiate_ty_with_fresh(field_ty, fresh),
-                            )
-                        })
                         .collect(),
                 ),
             ),
@@ -1168,15 +1123,6 @@ impl Checker {
                         .iter()
                         .map(|argument| self.substitute_type_def_ty(argument, bindings))
                         .collect(),
-                    fields
-                        .iter()
-                        .map(|(field, field_ty)| {
-                            (
-                                field.clone(),
-                                self.substitute_type_def_ty(field_ty, bindings),
-                            )
-                        })
-                        .collect(),
                 ),
             ),
             Ty::Record(name, fields) => Ty::Record(
@@ -1186,15 +1132,6 @@ impl Checker {
                         .arguments
                         .iter()
                         .map(|argument| self.substitute_type_def_ty(argument, bindings))
-                        .collect(),
-                    fields
-                        .iter()
-                        .map(|(field, field_ty)| {
-                            (
-                                field.clone(),
-                                self.substitute_type_def_ty(field_ty, bindings),
-                            )
-                        })
                         .collect(),
                 ),
             ),
@@ -1212,7 +1149,31 @@ impl Checker {
         }
     }
 
-    pub(super) fn instantiate_type_def_fields(
+    pub(super) fn nominal_fields(
+        &self,
+        name: &str,
+        nominal: &NominalType,
+        span: &Span,
+    ) -> Result<Vec<(String, Ty)>, TypeError> {
+        let definition = self.env.lookup_type_def(name).ok_or_else(|| {
+            self.typecheck_invariant_error("nominal application has no declaration", span)
+        })?;
+        if definition.state != crate::env::TypeDefState::SignatureResolved {
+            return Err(self.typecheck_invariant_error(
+                "nominal field access requires a resolved declaration schema",
+                span,
+            ));
+        }
+        if definition.type_param_vars.len() != nominal.arguments.len() {
+            return Err(self.typecheck_invariant_error(
+                "nominal application has inconsistent type argument arity",
+                span,
+            ));
+        }
+        Ok(self.instantiate_type_def_fields(definition, &nominal.arguments))
+    }
+
+    fn instantiate_type_def_fields(
         &self,
         def: &crate::env::TypeDefInfo,
         args: &[Ty],
@@ -1279,15 +1240,10 @@ impl Checker {
                 params.iter().any(|param| self.ty_contains_facet(param))
                     || self.ty_contains_facet(ret.as_ref())
             }
-            Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
-                nominal
-                    .arguments
-                    .iter()
-                    .any(|argument| self.ty_contains_facet(argument))
-                    || nominal
-                        .iter()
-                        .any(|(_, field_ty)| self.ty_contains_facet(field_ty))
-            }
+            Ty::Struct(_, nominal) | Ty::Record(_, nominal) => nominal
+                .arguments
+                .iter()
+                .any(|argument| self.ty_contains_facet(argument)),
             Ty::Enum(_, args) => args.iter().any(|arg| self.ty_contains_facet(arg)),
             Ty::Result(ok, err) => {
                 self.ty_contains_facet(ok.as_ref()) || self.ty_contains_facet(err.as_ref())

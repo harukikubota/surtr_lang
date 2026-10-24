@@ -209,10 +209,9 @@ impl Checker {
             ResolvedPattern::BoolLit(_, _) => Some(Ty::Bool),
             ResolvedPattern::IntLit(_, _) => Some(Ty::Int),
             ResolvedPattern::StrLit(_, _) => Some(Ty::Str),
-            ResolvedPattern::DurationLit(_, _) => Some(Ty::Struct(
-                "Duration".into(),
-                NominalType::monomorphic(Vec::new()),
-            )),
+            ResolvedPattern::DurationLit(_, _) => {
+                Some(Ty::Struct("Duration".into(), NominalType::monomorphic()))
+            }
             ResolvedPattern::HashMap(_, _) => {
                 Some(Ty::Enum("HashMap".into(), vec![self.env.fresh_tyvar()]))
             }
@@ -239,10 +238,7 @@ impl Checker {
                 if def.kind == crate::env::TypeKind::ConcreteError {
                     return Ty::Error;
                 }
-                Ty::Record(
-                    def.name.clone(),
-                    crate::types::NominalType::monomorphic(def.fields.clone()),
-                )
+                Ty::Record(def.name.clone(), crate::types::NominalType::monomorphic())
             }),
             // Extractor patterns need the scrutinee type supplied by the
             // extractor contract; they remain checked by the normal path.

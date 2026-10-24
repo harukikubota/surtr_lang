@@ -47,8 +47,8 @@ impl WarningUsage {
     }
 }
 
-pub(super) fn collect_resolution_warnings(
-    resolved: &[Resolved],
+pub(super) fn collect_resolution_warnings<'a>(
+    resolved: impl IntoIterator<Item = &'a Resolved>,
     explicit_function_imports: &[ExplicitFunctionImport],
 ) -> Vec<CompilerWarning> {
     let mut usage = WarningUsage::default();

@@ -330,6 +330,7 @@ fn error_observation_facet_has_no_owner_update_exception() {
     let path = TypedFacetPath {
         source_ty: Ty::Error,
         focus_ty: Ty::Str,
+        segment_focus_tys: vec![Ty::Str],
         update_source_ty: Ty::Hole,
         update_focus_ty: Ty::Hole,
         path_kind: TypedFacetPathKind::InfallibleStructural,
@@ -354,27 +355,19 @@ fn mutating_facet_rejects_deep_traversal_through_readonly_field_even_for_owner()
         "User",
         vec![(
             "profile",
-            Ty::Struct(
-                "Profile".into(),
-                NominalType::monomorphic(vec![("name".into(), Ty::Str)]),
-            ),
+            Ty::Struct("Profile".into(), NominalType::monomorphic()),
         )],
         &["profile"],
     );
     checker.current_impl_struct_target = Some("User".into());
 
     let path = TypedFacetPath {
-        source_ty: Ty::Struct(
-            "User".into(),
-            NominalType::monomorphic(vec![(
-                "profile".into(),
-                Ty::Struct(
-                    "Profile".into(),
-                    NominalType::monomorphic(vec![("name".into(), Ty::Str)]),
-                ),
-            )]),
-        ),
+        source_ty: Ty::Struct("User".into(), NominalType::monomorphic()),
         focus_ty: Ty::Str,
+        segment_focus_tys: vec![
+            Ty::Struct("Profile".into(), NominalType::monomorphic()),
+            Ty::Str,
+        ],
         update_source_ty: Ty::Hole,
         update_focus_ty: Ty::Hole,
         path_kind: TypedFacetPathKind::InfallibleStructural,
@@ -401,30 +394,16 @@ fn mutating_facet_allows_owner_to_replace_readonly_field_itself() {
         "User",
         vec![(
             "profile",
-            Ty::Struct(
-                "Profile".into(),
-                NominalType::monomorphic(vec![("name".into(), Ty::Str)]),
-            ),
+            Ty::Struct("Profile".into(), NominalType::monomorphic()),
         )],
         &["profile"],
     );
     checker.current_impl_struct_target = Some("User".into());
 
     let path = TypedFacetPath {
-        source_ty: Ty::Struct(
-            "User".into(),
-            NominalType::monomorphic(vec![(
-                "profile".into(),
-                Ty::Struct(
-                    "Profile".into(),
-                    NominalType::monomorphic(vec![("name".into(), Ty::Str)]),
-                ),
-            )]),
-        ),
-        focus_ty: Ty::Struct(
-            "Profile".into(),
-            NominalType::monomorphic(vec![("name".into(), Ty::Str)]),
-        ),
+        source_ty: Ty::Struct("User".into(), NominalType::monomorphic()),
+        focus_ty: Ty::Struct("Profile".into(), NominalType::monomorphic()),
+        segment_focus_tys: vec![Ty::Struct("Profile".into(), NominalType::monomorphic())],
         update_source_ty: Ty::Hole,
         update_focus_ty: Ty::Hole,
         path_kind: TypedFacetPathKind::InfallibleStructural,

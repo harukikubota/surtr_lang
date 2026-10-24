@@ -2,35 +2,6 @@ use super::*;
 
 pub(super) fn initialize_env() -> TypeEnv {
     let mut env = TypeEnv::new();
-    // `Duration` is a stdlib-defined struct, but builtin signatures mention it
-    // before stdlib declarations are typechecked. Reserve its type head here so
-    // builtin signature parsing can treat it as the same struct identity.
-    env.predeclare_type_def(
-        "Global::Duration".into(),
-        crate::env::TypeKind::Struct,
-        Vec::new(),
-        Vec::new(),
-    );
-    env.predeclare_type_def(
-        "Global::SupervisorStatus".into(),
-        crate::env::TypeKind::Struct,
-        Vec::new(),
-        Vec::new(),
-    );
-    for name in [
-        "Global::FilePath",
-        "Global::FileSystemEntry",
-        "Global::FileSystemSnapshot",
-        "Global::CommandResult",
-    ] {
-        env.predeclare_type_def(
-            name.into(),
-            crate::env::TypeKind::Struct,
-            Vec::new(),
-            Vec::new(),
-        );
-    }
-
     // Only compiler-generated runtime helpers are bound before standard declarations.
     // Public builtin functions get their UID and type from the standard source.
     for (uid, meta) in sigil::resolver::compiler_builtin_bindings() {
@@ -176,21 +147,31 @@ impl<'a, 'env> BuiltinSignatureParser<'a, 'env> {
     }
 
     fn build_named_type(&mut self, ident: &str) -> Result<Ty, String> {
+        // Native signature identity is inventory metadata, independent of the
+        // declarations currently visible to ordinary source type syntax.
+        if let Some(identity) = sindr::builtin::native_signature_nominal_identity_by_name(ident) {
+            let name = format!("Global::{ident}");
+            return match identity {
+                sindr::names::TypeIdentity::Struct => {
+                    Ok(Ty::Struct(name, NominalType::monomorphic()))
+                }
+                sindr::names::TypeIdentity::Record => {
+                    Ok(Ty::Record(name, NominalType::monomorphic()))
+                }
+                other => Err(format!(
+                    "invalid native nominal type identity for {ident}: {other:?}"
+                )),
+            };
+        }
         if let Some(def) = self.env.lookup_type_def(ident) {
             return Ok(match &def.kind {
                 crate::env::TypeKind::Struct => Ty::Struct(
                     def.name.clone(),
-                    NominalType::new(
-                        def.type_param_vars.iter().copied().map(Ty::Var).collect(),
-                        def.fields.clone(),
-                    ),
+                    NominalType::new(def.type_param_vars.iter().copied().map(Ty::Var).collect()),
                 ),
                 crate::env::TypeKind::Record => Ty::Record(
                     def.name.clone(),
-                    NominalType::new(
-                        def.type_param_vars.iter().copied().map(Ty::Var).collect(),
-                        def.fields.clone(),
-                    ),
+                    NominalType::new(def.type_param_vars.iter().copied().map(Ty::Var).collect()),
                 ),
                 crate::env::TypeKind::ConcreteError => Ty::Error,
                 crate::env::TypeKind::Enum => Self::builtin_special_enum_ty_for_query(
@@ -218,6 +199,11 @@ impl<'a, 'env> BuiltinSignatureParser<'a, 'env> {
     }
 
     fn build_generic_type(&mut self, ident: &str, args: Vec<Ty>) -> Result<Ty, String> {
+        if sindr::builtin::native_signature_nominal_identity_by_name(ident).is_some() {
+            return Err(format!(
+                "native nominal type {ident} does not accept type arguments"
+            ));
+        }
         Ok(match ident {
             "List" => {
                 let [inner] = args.as_slice() else {
@@ -349,6 +335,31 @@ mod builtin_signature_tests {
     use super::{builtin_ty_from_meta, TypeEnv};
     use crate::types::Ty;
     use sindr::builtin::builtin_function_metas;
+
+    #[test]
+    fn native_nominal_signatures_do_not_declare_source_types() {
+        let mut env = TypeEnv::new();
+        for metadata in sindr::builtin::NATIVE_SIGNATURE_NOMINAL_METAS {
+            assert!(
+                sindr::builtin::builtin_type_head_meta_by_name(metadata.name).is_none(),
+                "native inventory must not permit @builtin type {}",
+                metadata.name
+            );
+            let mut parser = super::BuiltinSignatureParser::new(metadata.name, &mut env);
+            let ty = parser.parse_type().unwrap();
+            assert_eq!(
+                ty,
+                Ty::Struct(
+                    format!("Global::{}", metadata.name),
+                    crate::types::NominalType::monomorphic()
+                )
+            );
+            assert!(
+                env.lookup_type_def(metadata.name).is_none(),
+                "native parsing must not publish a source declaration"
+            );
+        }
+    }
 
     #[test]
     fn builtin_meta_signatures_bootstrap_into_type_env() {
