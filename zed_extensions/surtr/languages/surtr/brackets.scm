@@ -1,0 +1,7 @@
+(parenthesized "(" @open ")" @close)
+(bracketed "[" @open "]" @close)
+(block "{" @open "}" @close)
+(interpolation "#{" @open "}" @close)
+((double_string open: "\"" @open close: "\"" @close) (#set! rainbow.exclude))
+((single_string open: "'" @open close: "'" @close) (#set! rainbow.exclude))
+((raw_string open: "\"\"\"" @open close: "\"\"\"" @close) (#set! rainbow.exclude))

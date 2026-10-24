@@ -8,9 +8,8 @@ const path = require('node:path');
 const root = path.resolve(__dirname, '..');
 const cli = path.join(root, 'node_modules/.bin/tree-sitter');
 const grammar = path.join(root, 'tree-sitter-surtr');
-const query = path.join(root, 'surtr/languages/surtr/highlights.scm');
-
-function inspect(source) {
+function inspect(source, queryName = 'highlights.scm') {
+  const query = path.join(root, 'surtr/languages/surtr', queryName);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'surtr-highlight-'));
   const file = path.join(dir, 'input.srt');
   try {
@@ -109,4 +108,11 @@ test('every standard library source parses without losing string or group bounda
   execFileSync(cli, ['parse', '--quiet', ...sources], {
     cwd: grammar, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe']
   });
+});
+
+test('matching brackets exclude literal and commented brackets, including escaped interpolation', () => {
+  const source = 'f(["#{1}"]) # {} ignored\n"literal [ ] \\#{text}"';
+  const { captures } = inspect(source, 'brackets.scm');
+  assert.equal((captures.match(/ - open,/g) || []).length, 5, captures);
+  assert.equal((captures.match(/ - close,/g) || []).length, 5, captures);
 });

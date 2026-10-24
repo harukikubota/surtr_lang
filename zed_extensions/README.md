@@ -32,6 +32,7 @@ Zed の拡張画面で開発用拡張を Rebuild してください。
 - 行コメントと行頭のアノテーション
 - 両引用符の文字列、Unicode を含むエスケープ、三重引用符の raw 文字列
 - `#{...}` の埋め込み式と、その内部の文字列・コメント・括弧
+- 括弧・引用符・文字列補間の開始と終了の対応表示
 - `def`・`defmod`・`match`・`do`・`doc`のスニペット
 - `Test`モジュールの`test`・`describe`・`it`・`xit`・`pend`、
   `assert_eq`・`assert_true`・`assert_false`のスニペット

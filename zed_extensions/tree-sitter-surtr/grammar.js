@@ -38,9 +38,9 @@ module.exports = grammar({
     newline: _ => '\n',
     comment: _ => token(seq('#', /[^\n]*/)),
     function_literal: _ => token(seq('`', /[^`\n]+/, '`')),
-    double_string: $ => seq('"', repeat(choice($.double_content, $.escape, $.interpolation)), '"'),
-    single_string: $ => seq("'", repeat(choice($.single_content, $.escape, $.interpolation)), "'"),
-    raw_string: $ => seq('"""', repeat(choice($.raw_content, $.interpolation)), '"""'),
+    double_string: $ => seq(field('open', '"'), repeat(choice($.double_content, $.escape, $.interpolation)), field('close', '"')),
+    single_string: $ => seq(field('open', "'"), repeat(choice($.single_content, $.escape, $.interpolation)), field('close', "'")),
+    raw_string: $ => seq(field('open', '"""'), repeat(choice($.raw_content, $.interpolation)), field('close', '"""')),
     escape: _ => token.immediate(/\\(?:[nt\\"']|u\{[0-9a-fA-F]{1,6}\}|#\{)/),
     interpolation: $ => seq(token(prec(1, '#{')), repeat($._expression), '}'),
   }
