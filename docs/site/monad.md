@@ -271,6 +271,9 @@ where
 Extractor／ExtractorClosure 本文では自身の MatchResult の失敗にし、元 Error を保持します。
 do 内は do-local な MonadFail を優先し、なければ Alternative の empty で Error を捨てます。
 どちらもない場合は型エラーです。内側の callable や do は外側の失敗返却先を借りません。
+失敗返却先は現在の context から決まり、SafeBind の RHS や carrier の payload に含まれる Result からは選びません。
+`List<Result<Unit>>` でも carrier は List なので、その do の失敗処理は Alternative を使います。
+Error の保持と値としての収集の使い分けは [do](./do.md#alternative実装型) を参照してください。
 
 ```surtr
 def my_failure_target(target: Option<Int>) -> MyEither<Error, Int> {

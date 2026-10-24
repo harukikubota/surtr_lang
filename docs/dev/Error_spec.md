@@ -144,19 +144,21 @@ Error の主キャプションは生成位置を指す。明示的な構築で�
 
 コンストラクタ実行には生成元の source ID / span を渡し、`deferror` 宣言や内部 `Self` の位置で上書きしない。Source map の確定位置を使い、表示文、Error 名、carrier 名から位置を推測しない。module と REPL でも同じ規則を使い、REPL の後続入力から呼び出した定義は元入力の位置を保持する。
 
-引数渡し、`Err` / `MatchResult::Err` への再格納、返却、SafeBind、MonadFail context の partial `<-` は、元の kind・message・Payload・location・cause・diagnostic・stack trace を再生成しない。Extractor の Err や既存 Error を親の汎用 Pattern Error で上書きしない。Extractor 成功後の子 Pattern が失敗した場合は、その子自身の失敗を使う。
+引数渡し、`Err` / `MatchResult::Err` への再格納、返却、および Error を保持する失敗先への SafeBind・partial `<-`・文末 `?` は、元の kind・message・Payload・location・cause・diagnostic・stack trace を再生成しない。Extractor の Err や既存 Error を親の汎用 Pattern Error で上書きしない。Extractor 成功後の子 Pattern が失敗した場合は、その子自身の失敗を使う。
 
 SafeBind は canonical MonadExtractor の通常呼出しが返した Result を外側一段だけ処理する。RHS が Result でも標準 impl を迂回しない。成功値に含まれる失敗や子 Pattern に自動分解を再適用しない。
 
 文末 `?` は、異なる MonadExtractor 実装型の入れ子も含め、成功値が Unit に至るまで各層の extract を一度ずつ呼ぶ。どの層でも返却 Result が Err なら、その元 Error を同じ現在の失敗先へ渡し、内側の分解と後続を実行しない。全層が Ok で Unit に到達した場合だけ後続へ進む。各層の分解能力と有限段で Unit に至ることは静的に確認する。
 
-標準の Result / Either<Error, A> の extract と、文末 `?` の各層からの伝播は、既存 Error の kind・message・Payload・location・cause・diagnostic・stack trace を保持する。Option の None は `NoneError()` を通常どおり生成し、その後の伝播で生成位置を上書きしない。
+標準の Result / Either<Error, A> の extract は、既存 Error の kind・message・Payload・location・cause・diagnostic・stack trace を保持する。文末 `?` の各層から失敗先へ渡す際も元 Error を再生成しない。失敗先が Alternative の場合は、下記の規則に従って破棄する。Option の None は `NoneError()` を通常どおり生成し、その後の伝播で生成位置を上書きしない。
 
 MonadExtractor は値から Result への分解、MonadFail は Error を受け取る失敗返却先であり、相互に能力を付与しない。ユーザー型は Error 以外の値から具体 Error を生成する extract を明示実装できるが、既存 Error を受け取る fail の保持契約とは区別する。入力分解の不足と失敗返却先の不足は別の診断にする。
 
 新しい Error で wrap する場合は、新しい構築位置を使い、元 Error を cause に保持する。cause は線形 chain とし、各操作の連結・置換は標準 API の規則に従う。stack trace は呼出し経路を示し、先頭 frame で生成位置を代用しない。
 
 非保持 Pattern consumer と Alternative route は既存規則で Error を破棄する。不要な Error の表示・記録・再生成を追加しない。どの consumer が保持または破棄するかは [Pattern spec](Pattern_spec.md) と [do intrinsic](Do_intrinsic_spec.md) に従う。
+
+do の Alternative route は、その do が所有する失敗処理に限って適用する。Error の発生場所による区別ではなく、呼出し先から返された Err も、その do の SafeBind や文末 `?` で処理すれば対象となる。失敗先は carrier の能力で決まり、`List<Result<Unit>>` の payload に Result があることを理由に Error の保持経路を選ばない。通常の値として保持した Error / Result や、別 callable・nested do 自身の失敗処理先には、この route を適用しない。
 
 ## 8. フェーズの責務と検証先
 

@@ -19,12 +19,27 @@ xldr(3)> match require_true(False) { Err(error) => Error::kind(error), Ok(_) => 
 "BooleanLiteralPatternMismatch"
 
 ## Failure in do
-SafeBind and partial Patterns in `<-` use the do block's carrier as their
-failure target. When it implements MonadFail, the failure Error is passed to
+SafeBind, partial Patterns in `<-`, and statement-final `?` use the do block's
+carrier as their failure target. When it implements MonadFail, the failure Error is passed to
 `MonadFail::fail` to construct the do block's result. Otherwise Alternative
 supplies `empty()` and discards the Error. If neither capability is available,
 these potentially failing statements are rejected. Total `<-` Patterns only
 require Monad.
+
+The carrier determines this choice, independently of its payload type.
+For `List<Result<Unit>>`, the carrier is List: these failures produce an empty
+List for the failing branch, rather than an Err element. Other branches remain.
+Use ordinary List construction or map to collect Results as values.
+This rule applies to failure handling owned by this do block, including Err
+values returned by calls and handled by its SafeBind or statement-final `?`.
+Nested callables and do blocks have their own failure targets; stored Result
+values are not searched for failures.
+
+A called function can handle Pattern failures itself and return a value of
+the same do carrier. Sequencing that value with a total `<-` or a bare Monad
+expression uses ordinary bind; do does not replace it with empty. This
+connection requires only Monad, even without MonadFail or Alternative.
+A new partial Pattern match in do still requires the do failure target.
 
 In this Result do block, `<-` matches the payload of `Ok(value)` against `True`.
 When it fails, the block returns `Err(error)` without reaching `Ok(1)`.

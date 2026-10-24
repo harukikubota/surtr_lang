@@ -444,10 +444,17 @@ def require_port(text: String) -> Result<Int> {
 ## 使い分けの目安
 
 複数のMonad値を順に扱う場合は[do](./do.md)を使います。MonadFail を実装した型ではErrorを保持し、
-MonadFailのないAlternative carrierではfailure matcher / SafeBindのErrorを破棄してそのcarrierのemptyになります。
+MonadFail のない Alternative carrier では、partial `<-`、SafeBind、文末 `?` の Error を破棄して、その carrier の empty になります。
+この失敗処理先は carrier から一意に決まり、payload の型では切り替わりません。
+たとえば `List<Result<Unit>>` でも、これらの失敗は要素の Err にはならず、その経路の空 List になります。
+Result を値として List に集める用途では、通常の List 構築や map などを使えます。
+
+Pattern の失敗を呼び出し先で処理し、同じ do-carrier 型の値として返すなら、
+total `<-` や bare Monad 式でそのまま接続できます。do はその値を empty に上書きしません。
+この接続自体に Alternative や MonadFail は不要で、Monad だけを要求します。
 
 - 分岐を明示したいときは `match`
-- 失敗をそのまま流したいときは `=?`
+- 現在の失敗処理先に従って短絡したいときは `=?`。元 Error を保持したい場合は、Result などの MonadFail を持つ型を失敗処理先にする
 - 直線的な pipeline は `|*>`, `|*|`, `|>=`, `>*`, `>=>`
 - recover したいときは `Err(...)` branch を明示的に書く
 

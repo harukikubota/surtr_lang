@@ -497,7 +497,7 @@ pipeline = &parse >=> &validate
 
 #### `=?` SafeBind
 
-`=?` は「失敗したらそのまま伝播する束縛」です。
+`=?` は、失敗したら現在の失敗処理先に従って短絡する束縛です。
 
 ```surtr
 value: Int =? parse_int("1")
@@ -535,8 +535,9 @@ result: Option<Int> = do::<Option> {
 
 - total patternの`<-`は`Monad`だけを要求する
 - literal、constructor、list/string、Extractor等のpartial patternを使う`<-`はfailure matcherになる
-- failure targetは`MonadFail > Alternative > Monad`の順で選び、`Monad`単独ではfailure targetを提供しない
+- failure target は carrier の `MonadFail`、次に `Alternative` の順で選び、`Monad` 単独では failure target を提供しない
 - SafeBind `=?` もdo-local failure targetを使うが、RHSだけからdo carrierを推論しない
+- 文末 `?` も同じ failure target を使う。`List<Result<Unit>>` の carrier は List であり、payload の Result に失敗を格納する解釈には切り替えない。適用境界と使い分けは [do](./do.md#alternative実装型) を参照
 - `guard`は通常の`Alternative`関数であり、MonadFailを参照しない
 - base Monad値をTransformerへ暗黙liftせず、`MonadT::lift`を明示する
 - nested `do` はそれぞれ自身のcarrierだけでfailure targetを決める

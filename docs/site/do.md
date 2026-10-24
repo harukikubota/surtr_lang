@@ -91,11 +91,25 @@ selected # [1]
 
 ## Alternative実装型
 
-通常sequenceには`Monad`が必要です。failure matcherとSafeBindのfailure targetは、
-`MonadFail > Alternative > Monad`の順で決まります。Monadだけではfailure targetを提供できません。
+通常の逐次処理には `Monad` が必要です。partial `<-`、SafeBind、文末 `?` の失敗処理先は、
+carrier の `MonadFail`、次に `Alternative` の順で決まります。Monad だけでは失敗処理先を提供できません。
 
-MonadFailを実装しないcarrierでは`Alternative`が必要で、failureのError/messageを破棄して
+これらの失敗処理を使い、carrier が MonadFail を実装しない場合は `Alternative` が必要で、failure の Error/message を破棄して
 そのcarrierの`Alternative::empty`へ接続します。Optionなら`None`、Listなら空Listです。
+
+この処理は、その do が所有する失敗処理に適用されます。呼び出した関数が返した Err も、
+SafeBind や文末 `?` で処理すれば同じ規則に従います。通常の値として保持した Result の中身を do が探索することはありません。
+
+Pattern の失敗を呼び出し先の関数で処理し、同じ do-carrier 型の値として返すこともできます。
+その値を total `<-` や途中の bare Monad 式で接続すれば、do は通常の `Monad::bind` を使います。
+呼び出し先で処理済みの失敗を do が再処理して empty に上書きすることはありません。
+この接続には Monad だけが必要で、carrier が Alternative や MonadFail を実装していなくても使えます。
+do 側で改めて partial Pattern を照合する場合などは、その do の失敗処理先が必要です。
+
+たとえば、結果型が `List<Result<Unit>>` でも carrier は List です。SafeBind、partial `<-`、文末 `?` の失敗は、
+内側の Result の Err にはならず、その経路の空 List になります。他の経路の結果は残ります。
+do は carrier に従って一意に解釈され、payload が Result であることを理由に失敗処理先を切り替えません。
+Result を成功・失敗の値として List に集めたい場合は、通常の List 構築や map などを使えます。
 
 ```surtr
 absent: Option<Int> = do::<Option> {
@@ -111,7 +125,7 @@ checked: Option<Int> = do::<Option> {
 checked # Option::None
 ```
 
-MonadFailもAlternativeも持たないcarrierではcompile errorになります。
+MonadFail も Alternative も持たない carrier で、do 自身の失敗処理先が必要になる構文を使うと compile error になります。
 Identity/Reader/Stateのtotal `<-`は使えますが、partial `<-`やSafeBindは使えません。
 user-defined Monad/Alternativeでも同じ規則を使い、標準型だけの特例ではありません。
 
@@ -174,6 +188,7 @@ run時にbaseの`fail`を返します。
 
 - `guard`、`pure`、`return`は通常callです。引数式の評価をdoが特別に遅延化しません。
 - nested doはそれぞれ自身のcarrierでfailure targetを決め、外側のMonadFailを継承しません。
+- do 内の関数・Closure・Extractor 本文は、それぞれ自身の失敗処理先を使います。そこから返された値を外側の SafeBind 等で処理した場合は、その構文が属する do の規則に従います。
 - do外のSafeBindは最も近いcallable自身のfailure targetを使います。通常の関数・ClosureではMonadFailを実装する返り型、Extractor・ExtractorClosure本文ではMatchResult return targetへ元Errorを保持して返します。
 - `DoBlock`はcompiler専用signature markerで、利用者が値、field、annotation、implに使う型ではありません。
 

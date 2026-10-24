@@ -61,11 +61,29 @@ impl数・順序・表示名・field探索による逆推論、暗黙lift、runt
 
 Monadは常に要求する。total `<-`はMonadだけでsequenceする。
 partial `<-`と合法なSafeBindのfailure targetは共通FailureEffectで、
-`MonadFail > Alternative > Monad`の順に選択する。
+carrier の能力に従って `MonadFail`、次に `Alternative` を選択する。
 
 - canonical `MonadFail` を実装する carrier: 通常の `MonadFail::fail(error)` 呼出しで元の Error を保持する。
 - MonadFailなし、Alternativeあり: resolved `Alternative::empty`へ接続する。
 - どちらもなし: capability error。Monad単独ではfailure targetを構築しない。
+
+この選択は do が所有する SafeBind、partial `<-`、文末 `?` の失敗処理に適用する。
+Error の発生場所ではなく、失敗を処理する構文の context で決まる。呼び出した関数が返した Err も、
+その do の SafeBind や文末 `?` で処理すれば同じ失敗先へ渡す。
+通常の値として保持した Error や Result を探索して、この規則を適用しない。
+
+Pattern の失敗を呼出し先関数で処理し、同じ do-carrier 型の値として返す場合は、
+total `<-` または bare Monad 式を通じて通常の `Monad::bind` で接続する。
+do は呼出し先で処理済みの失敗を再処理せず、`empty` で上書きしない。
+この接続自体は Monad だけを要求し、carrier に Alternative や MonadFail がなくても使える。
+ただし、返された payload を do 側で partial Pattern に照合するなど、新たな失敗処理を行う場合は、
+その do の失敗先に必要な能力を要求する。
+
+`List<Result<Unit>>` の carrier は List であり、標準 List は MonadFail を持たないため、
+これらの失敗は `Alternative::empty` に接続する。payload が Result でも、失敗を要素の Err に格納する経路は選ばない。
+List の empty は失敗した経路の結果を空にし、他の経路の結果は残す。
+これは carrier が定める一意の解釈であり、内側の型に応じて失敗先を切り替えない。
+Result を値として収集する用途では、通常の List 構築や map など、目的に合う処理を使う。
 
 `MonadFail` の constructor shape と payload slot は親 `Monad` から引き継ぐ。失敗先は返り型・期待型・宣言した generic bound から決定し、SafeBind の RHS は推論元にしない。通常 callable では `MonadFail` のみを使い、do 内だけで `Alternative::empty` を次の候補とする。metadata の不正や曖昧な dispatch を Alternative への切替えで隠さない。
 標準 MonadFail 宣言の欠落・同名の非標準宣言も契約エラーとし、carrier の能力不足とは区別する。
@@ -126,7 +144,7 @@ List等の分岐carrierでは、後続continuationを各payloadについて実�
 
 ### Error Pattern と Payload の保持
 
-SafeBind と do partial `<-` では Error 定義 Pattern による直接ダウンキャストを拒否する。`Err(error)` など Error 全体の運搬と通常 Extractor は既存規則に従う。局所具象束縛・readonly・Payload の保持は [Error spec](Error_spec.md) を参照する。RHS は本書の MonadExtractor による一段分解に従う。MonadFail > Alternative > Monad と ResultT の内側 Result 失敗層は維持する。
+SafeBind と do partial `<-` では Error 定義 Pattern による直接ダウンキャストを拒否する。`Err(error)` など Error 全体の運搬と通常 Extractor は既存規則に従う。局所具象束縛・readonly・Payload の保持は [Error spec](Error_spec.md) を参照する。RHS は本書の MonadExtractor による一段分解に従う。失敗先は MonadFail、次に Alternative を選び、どちらもなければ拒否する。ResultT の内側 Result 失敗層は維持する。
 
 ## Phase ownershipとlowering
 

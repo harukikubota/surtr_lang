@@ -403,6 +403,8 @@ ReaderT / StateT に限る。Either / EitherT の任意 Left を覆うユーザ�
 ResultT / EitherT は内側の失敗を base の pure で保持し、ReaderT / StateT は run 時に base の fail を返す。
 Option / List / OptionT は標準 MonadFail を持たない。guard は常に Alternative の通常呼出しである。
 
+do の失敗先は carrier 自身の能力で選ぶ。`List<Result<Unit>>` では carrier は List であり、payload の Result の MonadFail を使わず Alternative に接続する。payload の内部を探索して失敗先を選び直さない。適用する構文と context の境界は [do intrinsic](Do_intrinsic_spec.md#patternとfailure-target) に従う。
+
 旧 `@result_effect` annotation は未定義として拒否し、専用 metadata・構築・互換読取り経路を保持しない。
 
 ## 1. パイプラインと phase ownership

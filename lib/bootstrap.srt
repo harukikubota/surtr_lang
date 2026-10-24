@@ -292,15 +292,30 @@ defmod Bootstrap {
   functions. It processes one Result layer returned by extract. Unsupported
   inputs may be inspected whole by partial Patterns; total whole-value
   bindings use `=`. The RHS does not determine the do carrier.
-  Statement-final `?` checks a canonical Result chain until reaching Err or
-  Unit. An Err at any layer uses the same do-local failure target; continuation
-  runs only when every layer is Ok and the terminal value is Unit. Non-Result
-  inputs still require a direct Unit payload.
-  Failure contexts resolve as MonadFail, then Alternative, then Monad.
+  Statement-final `?` calls each layer's MonadExtractor until the successful
+  payload is Unit, including chains of different MonadExtractor types.
+  An Err returned by any extract call uses the same do-local failure target;
+  continuation runs only when every extraction succeeds and reaches Unit.
+  Failure contexts resolve as MonadFail, then Alternative.
   MonadFail carriers preserve SafeBind and
   failure-matcher errors. Carriers without MonadFail use Alternative::empty;
   Monad alone cannot provide a failure target. `guard` remains an ordinary
   Alternative call.
+
+  The carrier determines failure handling independently of its payload type.
+  For `List<Result<Unit>>`, SafeBind, partial `<-`, and statement-final `?`
+  failures produce an empty List for that branch, rather than an Err element.
+  Use ordinary List construction or map to collect Results as values.
+  This applies to failure handling owned by this do block, including Err
+  values returned by calls and handled by its SafeBind or statement-final `?`.
+  Nested callables and do blocks use their own failure targets. Stored Results
+  are not searched for failures.
+
+  A called function may handle Pattern failures and return the same carrier.
+  A total `<-` or bare Monad expression sequences this value using ordinary
+  bind, without replacing it with empty. This requires only Monad, even if
+  the carrier has neither Alternative nor MonadFail. Matching the returned
+  payload with a partial Pattern in do requires a do-local failure target.
 
   ## REPL
   xldr(1)> result: Option<Int> = do::<Option> { value <- Option::Some(1); Option::Some(value + 1) }
